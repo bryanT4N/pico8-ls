@@ -8,7 +8,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import Parser from './parser/parser';
 import { Bounds, boundsToString } from './parser/types';
-import { CodeSymbolType, CodeSymbol } from './parser/symbols';
+import { CodeSymbolType, CodeSymbol, withoutFunctionLocals } from './parser/symbols';
 import {
   DefinitionsUsages, DefinitionsUsagesLookup, DefUsageScope, findDefinitionsUsages,
 } from './parser/definitions-usages';
@@ -484,7 +484,7 @@ function parseTextDocument(textDocument: TextDocument): ProjectDocument | undefi
     const { errors, symbols, includes } = chunk;
 
     // Set document info in caches
-    const symbolInfo: DocumentSymbol[] = symbols.map(sym => toDocumentSymbol(textDocument, sym));
+    const symbolInfo: DocumentSymbol[] = withoutFunctionLocals(symbols).map(sym => toDocumentSymbol(textDocument, sym));
     const foldingRegions = getFoldingRegions(textDocument, chunk.comments || []);
     const rootSymbols: DocumentSymbol[] = [];
     const regionSymbols: DocumentSymbol[] = foldingRegions.map(region => {

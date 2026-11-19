@@ -1,5 +1,5 @@
 import { AnonymousFunctionName } from '../statements';
-import { CodeSymbolType } from '../symbols';
+import { CodeSymbolType, withoutFunctionLocals } from '../symbols';
 import { locationOfToken, parse, deepEquals, bounds, MockFileResolver } from './test-utils';
 
 describe('SymbolFinder', () => {
@@ -570,5 +570,64 @@ end`;
         ] },
       ]);
     });
+  });
+});
+
+describe('withoutFunctionLocals', () => {
+  it('hides parameters, loop variables, locals and labels of a function', () => {
+    const { symbols } = parse(`
+    function f(a)
+      local t = { x = 1 }
+      t.y = 2
+      for i=1,2 do end
+      for k,v in pairs(t) do end
+      add(t, { z = 3 })
+      ::top::
+    end
+    `);
+    deepEquals(withoutFunctionLocals(symbols), [
+      { name: 'f', type: CodeSymbolType.Function, children: [] },
+    ]);
+  });
+
+  it('keeps functions declared inside a function', () => {
+    const { symbols } = parse(`
+    function new_enemy()
+      function nested(a) end
+      local function inner(b) local c end
+      local g = function(d) end
+      local e = { update = function(self) end }
+      function e:draw() end
+      foo(function() end)
+    end
+    `);
+    deepEquals(withoutFunctionLocals(symbols), [
+      { name: 'new_enemy', children: [
+        { name: 'nested', type: CodeSymbolType.Function, children: [] },
+        { name: 'inner', type: CodeSymbolType.Function, children: [] },
+        { name: 'g', type: CodeSymbolType.Function, children: [] },
+        { name: 'e.update', type: CodeSymbolType.Function, children: [] },
+        { name: 'e.draw', type: CodeSymbolType.Function, children: [] },
+        { name: AnonymousFunctionName, type: CodeSymbolType.Function, children: [] },
+      ] },
+    ]);
+  });
+
+  it('keeps everything outside function bodies', () => {
+    const { symbols } = parse(`
+    local count = 0
+    ::top::
+    function _init()
+      p1 = { hp = 3 }
+    end
+    `);
+    deepEquals(withoutFunctionLocals(symbols), [
+      { name: 'count', type: CodeSymbolType.LocalVariable },
+      { name: 'top', type: CodeSymbolType.Label },
+      { name: '_init', children: [] },
+      { name: 'p1', type: CodeSymbolType.GlobalVariable, children: [
+        { name: 'hp', type: CodeSymbolType.LocalVariable },
+      ] },
+    ]);
   });
 });

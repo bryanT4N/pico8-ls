@@ -34,6 +34,23 @@ export function findSymbols(chunk: Chunk): CodeSymbol[] {
   return new SymbolFinder(chunk).findSymbols();
 }
 
+export function withoutFunctionLocals(symbols: CodeSymbol[]): CodeSymbol[] {
+  return symbols.map(symbol => {
+    const children = symbol.type === CodeSymbolType.Function
+      ? symbol.children.flatMap(child => functionsIn(child, ''))
+      : symbol.children;
+    return { ...symbol, children: withoutFunctionLocals(children) };
+  });
+}
+
+function functionsIn(symbol: CodeSymbol, prefix: string): CodeSymbol[] {
+  const name = prefix + symbol.name;
+  if (symbol.type === CodeSymbolType.Function) {
+    return [{ ...symbol, name }];
+  }
+  return symbol.children.flatMap(child => functionsIn(child, name + '.'));
+}
+
 class SymbolScope {
   symbols: Map<string, CodeSymbol> = new Map<string, CodeSymbol>();
   parent: CodeSymbol | undefined;
