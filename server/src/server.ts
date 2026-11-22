@@ -63,8 +63,8 @@ connection.onInitialize((params: InitializeParams) => {
       foldingRangeProvider: true,
       executeCommandProvider: {
         commands: [
-          'pico8formatFile',
-          'pico8formatFileSeparateLines',
+          'pico-8-ls.server.formatFile',
+          'pico-8-ls.server.formatFileSeparateLines',
         ],
       },
     },
@@ -386,7 +386,7 @@ connection.onDidChangeConfiguration(change => {
     // reset all cached document settings
     documentSettings.clear();
   } else {
-    globalSettings = change.settings['pico8-ls'] || defaultSettings;
+    globalSettings = change.settings['pico-8-ls'] || defaultSettings;
   }
 
   rescanEverything();
@@ -402,7 +402,7 @@ function getDocumentSettings(resource: string): Thenable<DocumentSettings> {
   if (!result) {
     result = connection.workspace.getConfiguration({
       scopeUri: resource,
-      section: 'pico8-ls',
+      section: 'pico-8-ls',
     });
     documentSettings.set(resource, result);
   }
@@ -454,7 +454,7 @@ function toDiagnostic(err: ParseError | Warning): Diagnostic {
       end: { line: err.bounds.end.line - 1, character: err.bounds.end.column },
     },
     severity: err.type === 'ParseError' ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
-    source: 'PICO-8 LS',
+    source: 'PICO-8-LS',
   };
 }
 
@@ -885,8 +885,8 @@ connection.onFoldingRanges((params: FoldingRangeParams): FoldingRange[] => {
 connection.onExecuteCommand((params: ExecuteCommandParams) => {
   switch (params.command) {
   // Both these commands trigger a format operation -- the difference should be expressed in the FormatterOptions.
-  case 'pico8formatFile':
-  case 'pico8formatFileSeparateLines':
+  case 'pico-8-ls.server.formatFile':
+  case 'pico-8-ls.server.formatFileSeparateLines':
     return executeCommand_formatDocument(params.arguments![0] as string, params.arguments![1] as FormatterOptions);
   default:
     console.error(`onExecuteCommand received unexpected command: ${params.command}`);

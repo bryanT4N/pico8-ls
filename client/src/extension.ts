@@ -27,15 +27,15 @@ export function activate(context: ExtensionContext): void {
   );
 
   const client = new LanguageClient(
-    'pico8-ls',
-    'PICO-8 LS',
+    'pico-8-ls',
+    'PICO-8-LS',
     getServerOptions(context),
     getClientOptions(),
   );
 
   // register commands
-  registerFormattingCommand(client, context, 'pico8formatFile', false);
-  registerFormattingCommand(client, context, 'pico8formatFileSeparateLines', true);
+  registerFormattingCommand(client, context, 'formatFile', false);
+  registerFormattingCommand(client, context, 'formatFileSeparateLines', true);
 
   // starts both client and server
   const disposable = client.start();
@@ -91,7 +91,7 @@ function getClientOptions(): LanguageClientOptions {
 }
 
 function registerFormattingCommand(client: LanguageClient, context: ExtensionContext, commandName: string, forceSeparateLines: boolean): void {
-  const disposable = commands.registerCommand('extension.' + commandName, async () => {
+  const disposable = commands.registerCommand('pico-8-ls.' + commandName, async () => {
     const editor = window.activeTextEditor;
     if (!editor) {
       return;
@@ -106,7 +106,7 @@ function registerFormattingCommand(client: LanguageClient, context: ExtensionCon
     };
 
     const params: ExecuteCommandParams = {
-      command: commandName,
+      command: 'pico-8-ls.server.' + commandName,
       arguments: [
         uri.toString(),
         opts,

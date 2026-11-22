@@ -1,7 +1,6 @@
-# PICO-8 Language Server
+# PICO-8-LS
 
-[![VS Marketplace installs](https://badgen.net/vs-marketplace/i/PollywogGames.pico8-ls?label=VS%20Marketplace%20installs)](https://marketplace.visualstudio.com/items?itemName=PollywogGames.pico8-ls)
-[![VS Marketplace downloads](https://badgen.net/vs-marketplace/d/PollywogGames.pico8-ls?label=VS%20Marketplace%20downloads)](https://marketplace.visualstudio.com/items?itemName=PollywogGames.pico8-ls)
+A personal fork of [PICO-8 LS](https://github.com/japhib/pico8-ls) by JanPaul Bergeson. It keeps the original features and changes how the outline is built: it lists definitions instead of every assignment, groups table members under their table, and leaves out function parameters and loop variables. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 Full language support for the [PICO-8](https://www.lexaloffle.com/pico-8.php)
 dialect of Lua. 
