@@ -295,7 +295,12 @@ export default class Parser {
     chunk.includes = this.includes;
     chunk.comments = this.lexer.comments;
 
-    chunk.symbols = findSymbols(chunk);
+    try {
+      chunk.symbols = findSymbols(chunk, this.filename);
+    } catch (e) {
+      console.error('Failed to build the outline', e);
+      chunk.symbols = [];
+    }
 
     return chunk;
   }

@@ -7,11 +7,13 @@ import { CodeSymbolType, CodeSymbol } from './parser/symbols';
 import { Chunk } from './parser/statements';
 import { getFoldingRegions } from './parser/folding-regions';
 
-const symbolTypeLookup = {
+const symbolTypeLookup: Record<CodeSymbolType, SymbolKind> = {
   [CodeSymbolType.Function]: SymbolKind.Function,
-  [CodeSymbolType.LocalVariable]: SymbolKind.Variable,
-  // Obviously a global variable is not a class, but we use it since it has a nicer icon
-  [CodeSymbolType.GlobalVariable]: SymbolKind.Class,
+  [CodeSymbolType.Method]: SymbolKind.Method,
+  [CodeSymbolType.Table]: SymbolKind.Object,
+  [CodeSymbolType.Array]: SymbolKind.Array,
+  [CodeSymbolType.Field]: SymbolKind.Property,
+  [CodeSymbolType.Variable]: SymbolKind.Variable,
   // Obviously a label is not null but there's no Label thing and the Null has a cool icon
   [CodeSymbolType.Label]: SymbolKind.Null,
 };
@@ -31,7 +33,7 @@ export function toDocumentSymbol(textDocument: TextDocument, symbol: CodeSymbol)
   return {
     name: symbol.name,
     detail: symbol.detail,
-    kind: symbolTypeLookup[symbol.type],
+    kind: symbolKindFor(symbol.type),
     range: boundsToRange(textDocument, symbol.loc),
     selectionRange: boundsToRange(textDocument, symbol.selectionLoc),
     children: symbol.children.map(child => toDocumentSymbol(textDocument, child)),
