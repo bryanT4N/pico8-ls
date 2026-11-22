@@ -2,13 +2,12 @@ import {
   CompletionItem, CompletionItemTag, createConnection, DefinitionParams, Diagnostic, DiagnosticSeverity,
   DidChangeConfigurationNotification, DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams,
   ExecuteCommandParams, FoldingRange, FoldingRangeParams, HoverParams, InitializeParams, InitializeResult, Location, Position, ProposedFeatures,
-  Range, ReferenceParams, SignatureHelpParams, SignatureInformation, SymbolKind, TextDocumentPositionParams,
+  ReferenceParams, SignatureHelpParams, SignatureInformation, TextDocumentPositionParams,
   TextDocuments, TextDocumentSyncKind, TextEdit, WorkspaceFolder,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import Parser from './parser/parser';
 import { Bounds, boundsToString } from './parser/types';
-import { CodeSymbolType, CodeSymbol } from './parser/symbols';
 import {
   DefinitionsUsages, DefinitionsUsagesLookup, DefUsageScope, findDefinitionsUsages,
 } from './parser/definitions-usages';
@@ -21,12 +20,11 @@ import Formatter, { FormatterOptions } from './parser/formatter';
 import {
   findProjects, getProjectFiles, iterateProject, ParsedDocumentsMap, Project, ProjectDocument, ProjectDocumentNode,
 } from './projects';
-import { Comment_ } from './parser/expressions';
-import { FoldingRangeVisitor } from './parser/folding-range-visitor';
 import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getFoldingRegions, getSectionFoldingRegions } from './parser/folding-regions';
+import { buildDocumentSymbols } from './document-symbols';
+import { computeFoldingRanges } from './folding-ranges';
 
 console.log('PICO-8 Language Server starting.');
 
@@ -409,33 +407,6 @@ function getDocumentSettings(resource: string): Thenable<DocumentSettings> {
   return result;
 }
 
-const symbolTypeLookup = {
-  [CodeSymbolType.Function]: SymbolKind.Function,
-  [CodeSymbolType.LocalVariable]: SymbolKind.Variable,
-  // Obviously a global variable is not a class, but we use it since it has a nicer icon
-  [CodeSymbolType.GlobalVariable]: SymbolKind.Class,
-  // Obviously a label is not null but there's no Label thing and the Null has a cool icon
-  [CodeSymbolType.Label]: SymbolKind.Null,
-};
-
-function boundsToRange(textDocument: TextDocument, bounds: Bounds): Range {
-  return {
-    start: textDocument.positionAt(bounds?.start?.index ?? 0),
-    end: textDocument.positionAt(bounds?.end?.index ?? 0),
-  };
-}
-
-function toDocumentSymbol(textDocument: TextDocument, symbol: CodeSymbol): DocumentSymbol {
-  return {
-    name: symbol.name,
-    detail: symbol.detail,
-    kind: symbolTypeLookup[symbol.type],
-    range: boundsToRange(textDocument, symbol.loc),
-    selectionRange: boundsToRange(textDocument, symbol.selectionLoc),
-    children: symbol.children.map(child => toDocumentSymbol(textDocument, child)),
-  };
-}
-
 function inThisFile(documentUri: string, err: ParseError | Warning): boolean {
   const fileURI = err.bounds.start.filename.fileURL;
   if (documentUri === fileURI) {
@@ -481,42 +452,10 @@ function parseTextDocument(textDocument: TextDocument): ProjectDocument | undefi
     documentTextCache.set(textDocument.uri, textDocument);
     const parser = new Parser(ResolvedFile.fromFileURL(textDocument.uri), text, { includeFileResolver: fileResolver });
     const chunk = parser.parse();
-    const { errors, symbols, includes } = chunk;
+    const { errors, includes } = chunk;
 
     // Set document info in caches
-    const symbolInfo: DocumentSymbol[] = symbols.map(sym => toDocumentSymbol(textDocument, sym));
-    const foldingRegions = getFoldingRegions(textDocument, chunk.comments || []);
-    const rootSymbols: DocumentSymbol[] = [];
-    const regionSymbols: DocumentSymbol[] = foldingRegions.map(region => {
-      const range = Range.create(region.startLine, 0, region.endLine, 0);
-      const regionSymbol = DocumentSymbol.create(
-        region.name,
-        '',
-        SymbolKind.Namespace,
-        range,
-        range,
-      );
-      regionSymbol.children = [];
-      return regionSymbol;
-    });
-
-    for (const symbol of symbolInfo) {
-      let parent: DocumentSymbol | undefined;
-      for (const regionSymbol of regionSymbols) {
-        if (regionSymbol.range.start.line <= symbol.range.start.line && regionSymbol.range.end.line >= symbol.range.end.line) {
-          parent = regionSymbol;
-          break;
-        }
-      }
-
-      if (parent) {
-        parent.children!.push(symbol);
-      } else {
-        rootSymbols.push(symbol);
-      }
-    }
-
-    documentSymbols.set(textDocument.uri, rootSymbols.concat(regionSymbols));
+    documentSymbols.set(textDocument.uri, buildDocumentSymbols(textDocument, chunk));
     documentIncludes.set(textDocument.uri, includes!);
 
     // send errors back to client immediately
@@ -815,40 +754,6 @@ connection.onDocumentFormatting((params: DocumentFormattingParams) => {
   return formatResult ? [ formatResult ] : null;
 });
 
-function getFoldingRangesFromSymbols(symbols: DocumentSymbol[]): FoldingRange[] {
-  const ranges: FoldingRange[] = [];
-
-  for (const symbol of symbols) {
-    if (symbol.range.start.line < symbol.range.end.line) {
-      ranges.push({
-        startLine: symbol.range.start.line,
-        endLine: symbol.range.end.line,
-        kind: symbol.kind === SymbolKind.Namespace ? 'region' : undefined,
-      });
-    }
-
-    if (symbol.children) {
-      ranges.push(...getFoldingRangesFromSymbols(symbol.children));
-    }
-  }
-
-  return ranges;
-}
-
-function getCommentFoldingRanges(comments: Comment_[]): FoldingRange[] {
-  const ranges: FoldingRange[] = [];
-  for (const comment of comments) {
-    if (comment.loc && comment.loc.start.line < comment.loc.end.line) {
-      ranges.push({
-        startLine: comment.loc.start.line - 1,
-        endLine: comment.loc.end.line - 1,
-        kind: 'comment',
-      });
-    }
-  }
-  return ranges;
-}
-
 connection.onFoldingRanges((params: FoldingRangeParams): FoldingRange[] => {
   const uri = params.textDocument.uri;
   const parsedDocument = parsedDocuments.get(uri);
@@ -856,30 +761,7 @@ connection.onFoldingRanges((params: FoldingRangeParams): FoldingRange[] => {
     return [];
   }
 
-  // 1. Get ranges for the cartridge sections themselves (__lua__, __gfx__, etc)
-  const sectionRanges: FoldingRange[] = getSectionFoldingRegions(parsedDocument.textDocument).map(section => ({
-    startLine: section.startLine,
-    endLine: section.endLine,
-    kind: 'region',
-  }));
-
-  // 2. Get ranges from symbols (for PICO-8 regions and functions/vars)
-  const symbols = documentSymbols.get(uri) || [];
-  const symbolRanges = getFoldingRangesFromSymbols(symbols);
-
-  // 3. Get ranges from AST blocks (if, for, while, etc.)
-  const visitor = new FoldingRangeVisitor();
-  visitor.visit(parsedDocument.chunk);
-  const blockRanges = visitor.ranges;
-
-  // 4. Get ranges from multi-line comments
-  const commentRanges = getCommentFoldingRanges(parsedDocument.chunk.comments || []);
-
-  // 5. Combine and deduplicate
-  const allRanges = [ ...sectionRanges, ...symbolRanges, ...blockRanges, ...commentRanges ];
-  const uniqueRanges = Array.from(new Map(allRanges.map(r => [ `${r.startLine}-${r.endLine}`, r ])).values());
-
-  return uniqueRanges;
+  return computeFoldingRanges(parsedDocument.textDocument, parsedDocument.chunk, documentSymbols.get(uri) || []);
 });
 
 connection.onExecuteCommand((params: ExecuteCommandParams) => {
