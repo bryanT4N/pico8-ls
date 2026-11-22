@@ -761,7 +761,7 @@ connection.onFoldingRanges((params: FoldingRangeParams): FoldingRange[] => {
     return [];
   }
 
-  return computeFoldingRanges(parsedDocument.textDocument, parsedDocument.chunk, documentSymbols.get(uri) || []);
+  return computeFoldingRanges(parsedDocument.textDocument, parsedDocument.chunk);
 });
 
 connection.onExecuteCommand((params: ExecuteCommandParams) => {

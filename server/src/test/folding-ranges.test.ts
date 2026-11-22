@@ -4,7 +4,6 @@ import * as path from 'path';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import Parser from '../parser/parser';
 import ResolvedFile from '../parser/file-resolver';
-import { buildDocumentSymbols } from '../document-symbols';
 import { computeFoldingRanges } from '../folding-ranges';
 
 const TESTFILES = path.join(__dirname, '../../../testfiles');
@@ -23,7 +22,7 @@ function rangesFor(name: string): string[] {
   const file = ResolvedFile.fromPath(filepath);
   const doc = TextDocument.create(file.fileURL, name.endsWith('.p8') ? 'pico-8' : 'pico-8-lua', 1, text);
   const chunk = new Parser(file, text).parseChunk();
-  return computeFoldingRanges(doc, chunk, buildDocumentSymbols(doc, chunk))
+  return computeFoldingRanges(doc, chunk)
     .map(r => `${r.startLine}-${r.endLine}${r.kind ? ' ' + r.kind : ''}`)
     .sort();
 }
