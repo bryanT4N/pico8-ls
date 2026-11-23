@@ -58,5 +58,8 @@ describe('outline on the test carts', () => {
     assert.strictEqual(inPlace.length, 13);
     assert.deepStrictEqual([ ...new Set(inPlace.map(s => s.name.split(/[:.]/)[0])) ],
       [ 'water', 'slash', 'title', 'item', 'bench' ]);
+    const g = symbols.filter(s => s.children.some(c => c.type === CodeSymbolType.Method));
+    assert.strictEqual(g.length, 31);
+    assert.strictEqual(g.flatMap(s => s.children).filter(c => c.type === CodeSymbolType.Method).length, 91);
   });
 });

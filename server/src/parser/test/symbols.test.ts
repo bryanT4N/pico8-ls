@@ -104,6 +104,11 @@ describe('outline', () => {
       assert.strictEqual(outlineOf('local x = 1\nlocal x = function()\n  x = function() end\nend'),
         lines('x [Variable]', 'x() [Function]', '  x() [Function]'));
     });
+
+    it('lets a local shadow a parameter', () => {
+      assert.strictEqual(outlineOf('function f(p)\n  local p = {}\n  p.x = 1\nend'),
+        lines('f(p) [Function]', '  p [Table]', '    x [Field]'));
+    });
   });
 
   describe('table members', () => {
@@ -150,6 +155,13 @@ describe('outline', () => {
 
     it('treats setmetatable(table, mt) as the table', () => {
       assert.strictEqual(outlineOf('obj = setmetatable({ x = 0 }, mt)'), lines('obj [Table]', '  x [Field]'));
+      assert.strictEqual(outlineOf('function new()\n  local e = setmetatable({ x = 0 }, mt)\n  e.hp = 1\nend'),
+        lines('new() [Function]', '  e [Table]', '    x [Field]', '    hp [Field]'));
+    });
+
+    it('puts fields set through a local alias under the alias', () => {
+      assert.strictEqual(outlineOf('player = {}\nfunction f()\n  local p = player\n  p.hp = 3\nend'),
+        lines('player [Table]', 'f() [Function]', '  p [Table]', '    hp [Field]'));
     });
 
     it('lists a global table first assigned inside a function at the top level', () => {
@@ -197,6 +209,11 @@ describe('outline', () => {
       lines('vector [Table]', '  len() [Method]', '  add(a,b) [Method]', '  zero [Field]', '  norm() [Method]'));
     });
 
+    it('groups methods of a table created by a call', () => {
+      assert.strictEqual(outlineOf('cls = object:extend()\nfunction cls:init() end\nfunction cls:draw() end'),
+        lines('cls [Table]', '  init() [Method]', '  draw() [Method]'));
+    });
+
     it('stretches the table range over its grouped methods', () => {
       const [ vector ] = parse('vector = {}\nfunction vector:len() return 0 end\nfunction vector:add(b) return b end').symbols;
       assert.deepStrictEqual([ vector.loc.start.line, vector.loc.end.line, vector.selectionLoc.start.line ], [ 1, 3, 1 ]);
@@ -233,6 +250,11 @@ describe('outline', () => {
     it('keeps methods in place when the table was first defined somewhere else', () => {
       assert.strictEqual(outlineOf('function _init()\n  t = {}\nend\nt = {}\nfunction t:a() end'),
         lines('_init() [Function]', 't [Table]', 't:a() [Method]'));
+    });
+
+    it('keeps methods in place when one comes before the table is assigned', () => {
+      assert.strictEqual(outlineOf('t.x = 1\nfunction t:a() end\nt = {}\nfunction t:b() end'),
+        lines('t:a() [Method]', 't [Table]', '  x [Field]', 't:b() [Method]'));
     });
 
     it('lists methods of a table that is not defined in this file', () => {
@@ -308,6 +330,16 @@ describe('outline', () => {
 
     it('does not list self fields outside methods', () => {
       assert.strictEqual(outlineOf('function f()\n  self.x = 1\nend'), 'f() [Function]');
+    });
+
+    it('lists a function assigned to a self field under the method, by its path', () => {
+      assert.strictEqual(outlineOf('T = {}\nfunction T:m()\n  self.cb = function() end\nend'),
+        lines('T [Table]', '  m() [Method]', '    self.cb() [Method]'));
+    });
+
+    it('lists only the functions of a table assigned to self outside methods', () => {
+      assert.strictEqual(outlineOf('function f()\n  self.h = { on = function() end, n = 1 }\nend'),
+        lines('f() [Function]', '  self.h.on() [Method]'));
     });
   });
 
@@ -395,11 +427,29 @@ describe('outline', () => {
       assert.strictEqual(symbols[0].loc.start.line, 2);
     });
 
+    it('nests the entries for members added to a table from another file', () => {
+      const resolver = new MockFileResolver();
+      resolver.loadFileContents = () => 'T = { a = {} }';
+      const code = '#include other.lua\nT.y = 1\nT.a.b = 2';
+      assert.strictEqual(outlineOf(code, { includeFileResolver: resolver }),
+        lines('T [Table]', '  y [Field]', '  a [Table]', '    b [Field]'));
+      assert.strictEqual(parse(code, { includeFileResolver: resolver }).symbols[0].loc.start.line, 2);
+    });
+
     it('keeps the main file outline when an included file has a broken #include', () => {
       const resolver = new MockFileResolver();
       resolver.loadFileContents = () => '#include other.lua\nfunction a_fn() end';
       assert.strictEqual(outlineOf('#include other.lua\nfunction main_fn() end', { includeFileResolver: resolver }),
         'main_fn() [Function]');
+    });
+
+    it('keeps the main file comments and outline when an included file includes a missing file', () => {
+      const resolver = new MockFileResolver();
+      resolver.doesFileExist = p => !p.endsWith('missing.lua');
+      resolver.loadFileContents = () => '#include missing.lua\n-- a comment\nfunction a_fn() end';
+      const code = '#include a.lua\nfunction main_fn() end\n-- main comment';
+      assert.deepStrictEqual(parse(code, { includeFileResolver: resolver }).comments!.map(c => c.value.trim()), [ 'main comment' ]);
+      assert.strictEqual(outlineOf(code, { includeFileResolver: resolver }), 'main_fn() [Function]');
     });
 
     it('does not group methods with a table defined in another file', () => {
