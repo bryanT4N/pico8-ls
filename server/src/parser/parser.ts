@@ -973,7 +973,7 @@ export default class Parser {
   getIncludeStatementError(statement: IncludeStatement, errorMessage: string) {
     const baseIncludeStatement = this.lexerStack.length >= 2 ? this.lexerStack[1].includeStatement! : statement;
 
-    const fromPath: string = this.lexerStack.reverse().map(l => path.basename(l.lexer.filename.path)).join(', which is #included from ');
+    const fromPath: string = [ ...this.lexerStack ].reverse().map(l => path.basename(l.lexer.filename.path)).join(', which is #included from ');
 
     return new errors.ParseError(`Can't #include ${statement.filename} from ${fromPath}: ${errorMessage}`, baseIncludeStatement.loc!);
   }

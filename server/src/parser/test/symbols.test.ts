@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { outlineOf } from './outline-utils';
-import { parse, deepEquals, bounds } from './test-utils';
+import { parse, deepEquals, bounds, MockFileResolver } from './test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
 
@@ -376,6 +376,42 @@ describe('outline', () => {
     it('does not see a local self inside its own initializer', () => {
       assert.strictEqual(outlineOf('T = {}\nfunction T:m()\n  local self = { cb = function() self.x = 1 end }\nend'),
         lines('T [Table]', '  m() [Method]', '    self [Table]', '      cb() [Method]', '  x [Field]'));
+    });
+  });
+
+  describe('#include and odd input', () => {
+    it('lists only definitions from the current file', () => {
+      const resolver = new MockFileResolver();
+      resolver.loadFileContents = () => 'helper = 1\nfunction lib_fn() end';
+      assert.strictEqual(outlineOf('#include other.lua\nfunction main_fn() end', { includeFileResolver: resolver }),
+        'main_fn() [Function]');
+    });
+
+    it('groups members added to a table from another file under a table entry in this file', () => {
+      const resolver = new MockFileResolver();
+      resolver.loadFileContents = () => 'player = { x = 1 }';
+      const { symbols } = parse('#include other.lua\nplayer.hp = 3', { includeFileResolver: resolver });
+      assert.deepStrictEqual(symbols.map(s => [ s.name, s.type, s.children.map(c => c.name) ]), [[ 'player', 'Table', [ 'hp' ]]]);
+      assert.strictEqual(symbols[0].loc.start.line, 2);
+    });
+
+    it('keeps the main file outline when an included file has a broken #include', () => {
+      const resolver = new MockFileResolver();
+      resolver.loadFileContents = () => '#include other.lua\nfunction a_fn() end';
+      assert.strictEqual(outlineOf('#include other.lua\nfunction main_fn() end', { includeFileResolver: resolver }),
+        'main_fn() [Function]');
+    });
+
+    it('does not group methods with a table defined in another file', () => {
+      const resolver = new MockFileResolver();
+      resolver.loadFileContents = () => 'vector = {}';
+      assert.strictEqual(outlineOf('#include other.lua\nfunction vector:len() end', { includeFileResolver: resolver }),
+        'vector:len() [Method]');
+    });
+
+    it('handles assignments with missing or extra values', () => {
+      assert.strictEqual(outlineOf('a, b = 1\nlocal x, y\nt = {}\nt.a, t.b = function() end'),
+        lines('a [Variable]', 'b [Variable]', 'x [Variable]', 'y [Variable]', 't [Table]', '  a() [Method]', '  b [Field]'));
     });
   });
 });

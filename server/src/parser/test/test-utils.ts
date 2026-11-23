@@ -15,6 +15,14 @@ export function getTestFileContents(filename: string): string {
   return fs.readFileSync(filepath).toString();
 }
 
+export const TEST_CARTS = [
+  'beetrootpaul-dart-07/game.lua', 'beetrootpaul-dart-07/hud.lua', 'beetrootpaul-dart-07/mission_1.lua',
+  'beetrootpaul-dart-07/movement_fixed_factory.lua', 'beetrootpaul-dart-07/multicart.lua',
+  'beetrootpaul-dart-07/player_bullet.lua', 'beetrootpaul-dart-07/screen_title.lua',
+  'code-region.lua', 'code-region.p8', 'low.lua', 'low.p8', 'simple-and-short.lua', 'tabs.p8',
+  'tweettweetjam-fly.p8', 'tweettweetjam-hop.p8', 'tweettweetjam-tet.p8',
+];
+
 export function getLexedTokens(input: string): Token[] {
   const lexer = new Lexer(input, new ResolvedFile('main_test_file', 'main_test_file'));
 
