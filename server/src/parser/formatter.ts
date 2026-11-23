@@ -82,8 +82,11 @@ export default class Formatter {
     this.tab = this.options.insertSpaces ? ' '.repeat(this.options.tabSize) : '\t';
   }
 
-  formatChunk(chunk: Chunk, originalText: string, isPlainLuaFile: boolean): FormatResult | undefined {
-    if (chunk.errors.length > 0) {
+  formatChunk(chunk: Chunk, originalText: string, isPlainLuaFile: boolean, ownFileUri?: string): FormatResult | undefined {
+    const ownErrors = ownFileUri
+      ? chunk.errors.filter(e => e.bounds.start.filename.fileURL === ownFileUri)
+      : chunk.errors;
+    if (ownErrors.length > 0) {
       console.error('can\'t format - errors are present!');
       return undefined;
     }

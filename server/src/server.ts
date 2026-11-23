@@ -334,12 +334,16 @@ async function reparseProjectFiles(project: Project, alreadyParsed: { [filename:
       return;
     }
 
-    const textDocument = await createTextDocument(url.fileURLToPath(file));
-    const parsed = parseTextDocument(textDocument);
-    if (parsed) {
-      parsedDocuments.set(textDocument.uri, parsed);
-    } else {
-      console.error('error parsing', textDocument.uri);
+    try {
+      const textDocument = await createTextDocument(url.fileURLToPath(file));
+      const parsed = parseTextDocument(textDocument);
+      if (parsed) {
+        parsedDocuments.set(textDocument.uri, parsed);
+      } else {
+        console.error('error parsing', textDocument.uri);
+      }
+    } catch (e) {
+      console.error('error reading', file, e);
     }
   }));
 
@@ -770,6 +774,7 @@ function executeCommand_formatDocument(documentUri: string, opts: FormatterOptio
     parsedDocument.chunk,
     textDocument.getText(),
     textDocument.languageId === 'pico-8-lua',
+    documentUri,
   );
 
   if (!formatResult) {

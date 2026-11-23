@@ -33,6 +33,15 @@ describe('Formatter', () => {
     eq(formatter.formatChunk(chunk, text, true), undefined);
   });
 
+  it('formats a file whose only errors are in an included file', () => {
+    const fileResolver = new TestFilesResolver({ 'b.lua': 'return 2 +\n' });
+    const input = '#include b.lua\nfunction f()\n  x = 1\nend';
+    const chunk = parse(input, { includeFileResolver: fileResolver });
+    const formatter = new Formatter();
+    eq(formatter.formatChunk(chunk, input, true, 'main_test_file') !== undefined, true);
+    eq(formatter.formatChunk(chunk, input, true), undefined);
+  });
+
   describe('Formats entire files', () => {
     // TODO: write proper tests for these
     it('formats low.p8', () => {
