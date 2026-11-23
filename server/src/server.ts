@@ -1,5 +1,5 @@
 import {
-  CompletionItem, CompletionItemTag, createConnection, DefinitionParams, Diagnostic, DiagnosticSeverity,
+  CompletionItem, CompletionItemTag, createConnection, DefinitionParams,
   DidChangeConfigurationNotification, DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams,
   ExecuteCommandParams, FoldingRange, FoldingRangeParams, HoverParams, InitializeParams, InitializeResult, Location, Position, ProposedFeatures,
   ReferenceParams, SignatureHelpParams, SignatureInformation, TextDocumentPositionParams,
@@ -25,6 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { buildDocumentSymbols } from './document-symbols';
 import { computeFoldingRanges } from './folding-ranges';
+import { errorsInFile, mergeDiagnostics, toDiagnostic } from './diagnostics';
 
 console.log('PICO-8-LS language server starting.');
 
@@ -201,55 +202,32 @@ function findDefUsagesForProject(project: Project) {
 
   const rootDefUsages = processDefUsages(project.root.document);
   const rootScope = rootDefUsages?.scopes;
-  if (!rootScope) {
-    return;
+  if (rootDefUsages?.warnings) {
+    warnings.push(...rootDefUsages.warnings);
   }
-  warnings.push(...rootDefUsages.warnings);
 
-  // recursive stepping through includes in case the includes have includes
-  const iterateNode = (projNode: ProjectDocumentNode) => {
-    const result = processDefUsages(projNode.document, rootScope);
-    if (result && result.warnings) {
-      warnings.push(...result.warnings);
-    }
+  if (rootScope) {
+    // recursive stepping through includes in case the includes have includes
+    const iterateNode = (projNode: ProjectDocumentNode) => {
+      const result = processDefUsages(projNode.document, rootScope);
+      if (result && result.warnings) {
+        warnings.push(...result.warnings);
+      }
 
-    // recurse into children
-    for (const child of projNode.included) {
+      // recurse into children
+      for (const child of projNode.included) {
+        iterateNode(child);
+      }
+    };
+
+    // actually iterate over the children of the root
+    for (const child of project.root.included) {
       iterateNode(child);
     }
-  };
-
-  // actually iterate over the children of the root
-  for (const child of project.root.included) {
-    iterateNode(child);
   }
 
-  type DiagnosticsByURI = { [key: string]: Diagnostic[] };
-  let diagnosticsByURI: DiagnosticsByURI = {};
-
-  // Group all warnings by URI and send as diagnostics
-  diagnosticsByURI =
-    warnings.map(w => {
-      return {
-        uri: w.bounds.start.filename.fileURL,
-        diagnostic: toDiagnostic(w),
-      };
-    })
-      .reduce((d, { uri, diagnostic }) => {
-        let list = d[uri];
-        if (list === undefined) {
-          list = [];
-          d[uri] = list;
-        }
-        list.push(diagnostic);
-        return d;
-      }, diagnosticsByURI);
-
-  for (const uri in diagnosticsByURI) {
-    connection.sendDiagnostics({
-      uri: uri,
-      diagnostics: diagnosticsByURI[uri],
-    });
+  for (const { uri, diagnostics } of mergeDiagnostics(getProjectFiles(project), parseErrorsByUri, warnings)) {
+    connection.sendDiagnostics({ uri, diagnostics });
   }
 }
 
@@ -333,9 +311,14 @@ documents.onDidChangeContent(change => {
   } else {
     // Otherwise, only re-scan the project that has changed
     const projectOfChangedFile = projectsByFilename.get(document.uri);
-    projectOfChangedFile && reparseProjectFiles(projectOfChangedFile, alreadyParsed).catch(e => {
-      console.error('error reparsing project files: ', e);
-    });
+    if (projectOfChangedFile) {
+      reparseProjectFiles(projectOfChangedFile, alreadyParsed).catch(e => {
+        console.error('error reparsing project files: ', e);
+      });
+    } else {
+      const errors = parseErrorsByUri.get(document.uri) ?? [];
+      connection.sendDiagnostics({ uri: document.uri, diagnostics: errors.map(toDiagnostic) });
+    }
   }
 });
 
@@ -367,6 +350,9 @@ async function reparseProjectFiles(project: Project, alreadyParsed: { [filename:
 const documentSettings: Map<string, Thenable<DocumentSettings>> = new Map<string, Thenable<DocumentSettings>>();
 // When a document is closed, purge its entry from the cache
 documents.onDidClose(e => documentSettings.delete(e.document.uri));
+
+// Parse errors keyed by URI, written by parseTextDocument and read by findDefUsagesForProject
+const parseErrorsByUri = new Map<string, ParseError[]>();
 
 // Text for open documents
 const documentTextCache: Map<string, TextDocument> = new Map<string, TextDocument>();
@@ -407,28 +393,6 @@ function getDocumentSettings(resource: string): Thenable<DocumentSettings> {
   return result;
 }
 
-function inThisFile(documentUri: string, err: ParseError | Warning): boolean {
-  const fileURI = err.bounds.start.filename.fileURL;
-  if (documentUri === fileURI) {
-    return true;
-  } else {
-    // console.error(`Filtering warning (ideally this shouldn't happen) because it's for file ${fileURI} instead of file ${textDocument.uri}:`, err);
-    return false;
-  }
-}
-
-function toDiagnostic(err: ParseError | Warning): Diagnostic {
-  return {
-    message: err.message,
-    range: {
-      start: { line: err.bounds.start.line - 1, character: err.bounds.start.column },
-      end: { line: err.bounds.end.line - 1, character: err.bounds.end.column },
-    },
-    severity: err.type === 'ParseError' ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning,
-    source: 'PICO-8-LS',
-  };
-}
-
 const fileResolver: FileResolver = {
   doesFileExist: (filepath) => fs.existsSync(filepath),
   isFile: (filepath) => fs.statSync(filepath).isFile(),
@@ -463,9 +427,7 @@ function parseTextDocument(textDocument: TextDocument): ProjectDocument | undefi
     }
     documentIncludes.set(textDocument.uri, includes!);
 
-    // send errors back to client immediately
-    const diagnostics = errors.filter(e => inThisFile(textDocument.uri, e)).map(e => toDiagnostic(e));
-    connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+    parseErrorsByUri.set(textDocument.uri, errorsInFile(textDocument.uri, errors));
 
     return { textDocument, chunk, errors };
   } catch(e) {
@@ -798,7 +760,7 @@ function executeCommand_formatDocument(documentUri: string, opts: FormatterOptio
 
   // Refresh document contents
   const parsedDocument = parseTextDocument(textDocument);
-  if (!parsedDocument || (parsedDocument.errors && parsedDocument.errors.length > 0)) {
+  if (!parsedDocument || errorsInFile(documentUri, parsedDocument.errors).length > 0) {
     console.error(`Can't format document when there are parsing errors! (document: "${textDocument.uri}")`);
     return null;
   }

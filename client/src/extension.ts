@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { ExtensionContext, Position, Range, TextEdit, TextEditorEdit, commands, languages, window, workspace } from 'vscode';
-import { CloseAction, ErrorAction, ExecuteCommandParams, LanguageClient, LanguageClientOptions, Message, ServerOptions, TransportKind } from 'vscode-languageclient/node';
+import { CloseAction, ErrorAction, ErrorHandler, ExecuteCommandParams, LanguageClient, LanguageClientOptions, Message, ServerOptions, TransportKind } from 'vscode-languageclient/node';
 import SemanticTokenProvider, { legend } from './semantic-token-provider';
 
 // Should stay in sync with FormatterOptions in server/src/parser/formatter.ts
@@ -12,6 +12,8 @@ type FormatterOptions = {
   // Force each statement to be on a separate line.
   forceSeparateLines?: boolean,
 };
+
+let defaultErrorHandler: ErrorHandler | undefined;
 
 export function activate(context: ExtensionContext): void {
   languages.registerDocumentSemanticTokensProvider(
@@ -32,6 +34,7 @@ export function activate(context: ExtensionContext): void {
     getServerOptions(context),
     getClientOptions(),
   );
+  defaultErrorHandler = client.createDefaultErrorHandler(4);
 
   // register commands
   registerFormattingCommand(client, context, 'formatFile', false);
@@ -84,7 +87,7 @@ function getClientOptions(): LanguageClientOptions {
         return ErrorAction.Continue;
       },
       closed(): CloseAction {
-        return CloseAction.Restart;
+        return defaultErrorHandler ? defaultErrorHandler.closed() : CloseAction.DoNotRestart;
       },
     },
   };
