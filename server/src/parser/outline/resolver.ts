@@ -188,14 +188,7 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
             getOrAddMember(tableEntry, field.key.name, CodeSymbolType.Field, field.loc!, field.key.loc!);
           }
         } else if (field.type === 'TableValue' || field.type === 'TableKey') {
-          if (field.value.type === 'FunctionDeclaration') {
-            this.targets.set(field.value, { kind: 'anonymous', owner: tableEntry });
-          } else {
-            const unwrapped = unwrapValue(field.value);
-            if (unwrapped?.type === 'TableConstructorExpression') {
-              this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: tableEntry, name: '' });
-            }
-          }
+          this.registerPositionalTarget(field.value, tableEntry);
         }
       }
     } else {
@@ -212,14 +205,7 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
             }
           }
         } else if (field.type === 'TableValue' || field.type === 'TableKey') {
-          if (field.value.type === 'FunctionDeclaration') {
-            this.targets.set(field.value, { kind: 'anonymous', owner });
-          } else {
-            const unwrapped = unwrapValue(field.value);
-            if (unwrapped?.type === 'TableConstructorExpression') {
-              this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner, name: '' });
-            }
-          }
+          this.registerPositionalTarget(field.value, owner);
         }
       }
     }
@@ -231,10 +217,8 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       return this.assignName(variable, value, statement);
     } else if (variable.type === 'MemberExpression') {
       return this.assignMember(variable, value, statement);
-    } else {
-      this.registerTargetForValue(value);
-      return undefined;
     }
+    return undefined;
   }
 
   // A statement is about a table only when all of its targets are.
@@ -305,7 +289,6 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       base = base.base;
     }
     if (base.type !== 'Identifier') {
-      this.registerTargetForValue(value);
       return;
     }
     const root = base as Identifier;
@@ -316,11 +299,7 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       }
       const selfTable = this.resolveSelfTable();
       if (!selfTable) {
-        const unwrapped = unwrapValue(value);
-        if (unwrapped?.type === 'TableConstructorExpression') {
-          const pathName = [ root, ...segments ].map(id => id.name).join('.');
-          this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: this.topScope().owner, name: pathName });
-        }
+        this.assignUnknownRoot(root, segments, value);
         return undefined;
       }
       return this.addMemberField(selfTable, segments, value, statement);
@@ -331,11 +310,7 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       if (value?.type === 'FunctionDeclaration') {
         return this.addMethod(value, root, segments, variable.indexer, undefined, statement);
       }
-      const unwrapped = unwrapValue(value);
-      if (unwrapped?.type === 'TableConstructorExpression') {
-        const pathName = [ root, ...segments ].map(id => id.name).join('.');
-        this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: this.topScope().owner, name: pathName });
-      }
+      this.assignUnknownRoot(root, segments, value); // the outline can't know which table was passed in
       return undefined;
     }
 
@@ -401,21 +376,42 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
     return table && { about: table };
   }
 
-  private registerTargetForValue(value: Expression | undefined): void {
-    if (value?.type === 'FunctionDeclaration') {
-      this.targets.set(value, { kind: 'anonymous', owner: this.topScope().owner });
+  private assignUnknownRoot(root: Identifier, segments: Identifier[], value: Expression | undefined): void {
+    // The outline can't know which table was passed in.
+    const unwrapped = unwrapValue(value);
+    if (unwrapped?.type === 'TableConstructorExpression') {
+      const pathName = [ root, ...segments ].map(id => id.name).join('.');
+      this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: this.topScope().owner, name: pathName });
+    }
+  }
+
+  private registerPositionalTarget(value: Expression, owner: Owner): void {
+    if (value.type === 'FunctionDeclaration') {
+      this.targets.set(value, { kind: 'anonymous', owner });
     } else {
       const unwrapped = unwrapValue(value);
       if (unwrapped?.type === 'TableConstructorExpression') {
-        this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: this.topScope().owner, name: '' });
+        this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner, name: '' });
       }
     }
+  }
+
+  private visibleDecl(scope: ResolverScope, name: string): Decl | undefined {
+    let decl = scope.decls.get(name);
+    while (decl) {
+      const { stmt } = decl;
+      if (!stmt || !this.nodeStack.some(n => n.node === stmt)) {
+        return decl;
+      }
+      decl = decl.previous;
+    }
+    return undefined;
   }
 
   private resolveSelfBinding(): 'local-or-loopvar' | 'other' {
     for (let i = this.scopeStack.length - 1; i >= 0; i--) {
       const scope = this.scopeStack[i];
-      const decl = scope.decls.get('self');
+      const decl = this.visibleDecl(scope, 'self');
       if (decl) {
         return (decl.kind === 'local' || decl.kind === 'loopvar') ? 'local-or-loopvar' : 'other';
       }
@@ -447,15 +443,10 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
 
   private resolve(name: string): Binding {
     for (let i = this.scopeStack.length - 1; i >= 0; i--) {
-      let decl: Decl | undefined = this.scopeStack[i].decls.get(name);
-      // Walk the shadowing chain, skipping any decl whose declaring stmt is still being
-      // initialised (i.e. the LocalStatement is currently on the nodeStack).
-      while (decl) {
-        const { stmt } = decl;
-        if (!stmt || !this.nodeStack.some(n => n.node === stmt)) {
-          return decl;
-        }
-        decl = decl.previous;
+      // Skip any decl whose declaring stmt is still being initialised (LocalStatement on the node stack).
+      const decl = this.visibleDecl(this.scopeStack[i], name);
+      if (decl) {
+        return decl;
       }
     }
     return { kind: 'global', entry: this.globals.get(name) };

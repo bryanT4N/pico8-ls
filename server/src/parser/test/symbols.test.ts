@@ -372,5 +372,10 @@ describe('outline', () => {
       assert.strictEqual(outlineOf('player = {}\nfunction player:update()\n  for self in all(xs) do self.y = 1 end\nend'),
         lines('player [Table]', '  update() [Method]'));
     });
+
+    it('does not see a local self inside its own initializer', () => {
+      assert.strictEqual(outlineOf('T = {}\nfunction T:m()\n  local self = { cb = function() self.x = 1 end }\nend'),
+        lines('T [Table]', '  m() [Method]', '    self [Table]', '      cb() [Method]', '  x [Field]'));
+    });
   });
 });
