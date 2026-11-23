@@ -92,5 +92,17 @@ describe('outline', () => {
     it('puts the locals of a function assigned to a global under it', () => {
       assert.strictEqual(outlineOf('x = function()\n  local y = 1\nend'), lines('x() [Function]', '  y [Variable]'));
     });
+
+    it('does not see a local inside its own initializer', () => {
+      assert.strictEqual(outlineOf('local co = cocreate(function()\n  co = nil\nend)'),
+        lines('co [Variable]', '<anonymous function>() [Function]', 'co [Variable]'));
+      assert.strictEqual(outlineOf('local f = function()\n  f = function() end\nend'),
+        lines('f() [Function]', 'f() [Function]'));
+    });
+
+    it('falls back to the local it shadows in the same scope', () => {
+      assert.strictEqual(outlineOf('local x = 1\nlocal x = function()\n  x = function() end\nend'),
+        lines('x [Variable]', 'x() [Function]', '  x() [Function]'));
+    });
   });
 });

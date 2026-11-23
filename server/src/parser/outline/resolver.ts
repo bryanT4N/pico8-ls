@@ -4,7 +4,15 @@ import { AnonymousFunctionName, AssignmentStatement, Chunk, ForGenericStatement,
 import { ASTVisitor } from '../visitor';
 import { addEntry, CodeSymbolType, OutlineEntry, Owner, signatureOf } from './model';
 
-type Decl = { kind: 'local' | 'param' | 'loopvar', entry?: OutlineEntry };
+type Decl = {
+  kind: 'local' | 'param' | 'loopvar',
+  entry?: OutlineEntry,
+  // Set for locals declared by a LocalStatement; absent for local function and params/loopvars.
+  // While this stmt is on the nodeStack (its initializers are being visited), the decl is hidden.
+  stmt?: Statement,
+  // The decl shadowed by this one in the same scope, if any.
+  previous?: Decl,
+};
 
 // What a name refers to at some point: its innermost declaration, or else the global.
 type Binding = Decl | { kind: 'global', entry?: OutlineEntry };
@@ -86,15 +94,16 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
         return;
       }
       const value = node.init[i];
+      const previous = this.topScope().decls.get(variable.name);
       if (value?.type === 'FunctionDeclaration') {
         const entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Function,
           node.loc!, variable.loc!);
         this.targets.set(value, { kind: 'entry', entry });
-        this.topScope().decls.set(variable.name, { kind: 'local', entry });
+        this.topScope().decls.set(variable.name, { kind: 'local', entry, stmt: node, previous });
       } else {
         const entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Variable,
           node.loc!, variable.loc!);
-        this.topScope().decls.set(variable.name, { kind: 'local', entry });
+        this.topScope().decls.set(variable.name, { kind: 'local', entry, stmt: node, previous });
       }
     });
   }
@@ -142,9 +151,15 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
 
   private resolve(name: string): Binding {
     for (let i = this.scopeStack.length - 1; i >= 0; i--) {
-      const decl = this.scopeStack[i].decls.get(name);
-      if (decl) {
-        return decl;
+      let decl: Decl | undefined = this.scopeStack[i].decls.get(name);
+      // Walk the shadowing chain, skipping any decl whose declaring stmt is still being
+      // initialised (i.e. the LocalStatement is currently on the nodeStack).
+      while (decl) {
+        const { stmt } = decl;
+        if (!stmt || !this.nodeStack.some(n => n.node === stmt)) {
+          return decl;
+        }
+        decl = decl.previous;
       }
     }
     return { kind: 'global', entry: this.globals.get(name) };
