@@ -924,7 +924,7 @@ export default class Lexer {
 
 // ### Validation functions
 
-function isWhiteSpace(charCode: number): boolean {
+export function isWhiteSpace(charCode: number): boolean {
   return 9 === charCode || 32 === charCode || 0xB === charCode || 0xC === charCode;
 }
 

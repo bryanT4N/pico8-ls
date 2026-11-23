@@ -11,6 +11,7 @@ export const errMessages = Object.freeze({
   unexpectedSymbol: 'unexpected symbol \'%1\'',
   expected: '\'%1\' expected near \'%2\'',
   expectedToken: '%1 expected near \'%2\'',
+  expectedToClose: '\'%1\' expected (to close \'%2\' at line %3) near \'%4\'',
   unfinishedString: 'unfinished string near \'%1\'',
   malformedNumber: 'malformed number near \'%1\'',
   decimalEscapeTooLarge: 'decimal escape too large near \'%1\'',

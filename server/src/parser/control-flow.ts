@@ -1,5 +1,4 @@
-import * as errors from './errors';
-import { errMessages } from './errors';
+import { createErrForToken, errMessages, ParseError } from './errors';
 import { Token } from './tokens';
 
 export type Goto = {
@@ -29,16 +28,20 @@ export type FlowScope = {
 // Control flow tracking
 // ---------------------
 // A context object that validates loop breaks and `goto`-based control flow.
+// The errors it finds go into the list it was given, so that the statements
+// around them are still parsed.
 
 export class FlowContext {
   allowVararg: boolean;
   scopes: FlowScope[];
   pendingGotos: Goto[];
+  errors: ParseError[];
 
-  constructor() {
+  constructor(errors: ParseError[]) {
     this.allowVararg = false;
     this.scopes = [];
     this.pendingGotos = [];
+    this.errors = errors;
   }
 
   isInLoop(): boolean {
@@ -66,15 +69,20 @@ export class FlowContext {
   }
 
   popScope() {
+    const stillPending = [];
+
     for (let i = 0; i < this.pendingGotos.length; ++i) {
       const theGoto = this.pendingGotos[i];
       if (theGoto.maxDepth >= this.scopes.length) {
         if (--theGoto.maxDepth <= 0) {
-          errors.raiseErrForToken(theGoto.token, errMessages.labelNotVisible, theGoto.target);
+          this.errors.push(createErrForToken(theGoto.token, errMessages.labelNotVisible, theGoto.target));
+          continue;
         }
       }
+      stillPending.push(theGoto);
     }
 
+    this.pendingGotos = stillPending;
     this.scopes.pop();
   }
 
@@ -100,27 +108,29 @@ export class FlowContext {
   addLabel(name: string, token: Token) {
     const scope = this.currentScope();
 
+    // The first label of a name stays the one gotos jump to.
     if (Object.prototype.hasOwnProperty.call(scope.labels, name)) {
-      errors.raiseErrForToken(token, errMessages.labelAlreadyDefined, name, scope.labels[name].line);
-    } else {
-      const newGotos = [];
+      this.errors.push(createErrForToken(token, errMessages.labelAlreadyDefined, name, scope.labels[name].line));
+      return;
+    }
 
-      for (let i = 0; i < this.pendingGotos.length; ++i) {
-        const theGoto = this.pendingGotos[i];
+    const newGotos = [];
 
-        if (theGoto.maxDepth >= this.scopes.length && theGoto.target === name) {
-          if (theGoto.localCounts[this.scopes.length - 1] < scope.locals.length) {
-            scope.deferredGotos.push(theGoto);
-          }
+    for (let i = 0; i < this.pendingGotos.length; ++i) {
+      const theGoto = this.pendingGotos[i];
 
-          continue;
+      if (theGoto.maxDepth >= this.scopes.length && theGoto.target === name) {
+        if (theGoto.localCounts[this.scopes.length - 1] < scope.locals.length) {
+          scope.deferredGotos.push(theGoto);
         }
 
-        newGotos.push(theGoto);
+        continue;
       }
 
-      this.pendingGotos = newGotos;
+      newGotos.push(theGoto);
     }
+
+    this.pendingGotos = newGotos;
 
     scope.labels[name] = {
       localCount: scope.locals.length,
@@ -140,12 +150,14 @@ export class FlowContext {
     const bads = scope.deferredGotos;
     for (let i = 0; i < bads.length; ++i) {
       const theGoto = bads[i];
-      errors.raiseErrForToken(
+      this.errors.push(createErrForToken(
         theGoto.token,
         errMessages.gotoJumpInLocalScope,
         theGoto.target,
         scope.locals[theGoto.localCounts[this.scopes.length - 1]].name,
-      );
+      ));
     }
+    // Reported once: this runs again before every statement of the scope.
+    scope.deferredGotos = [];
   }
 }
