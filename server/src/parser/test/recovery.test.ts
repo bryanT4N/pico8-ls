@@ -1,9 +1,10 @@
 import * as assert from 'assert';
 import { Identifier } from '../expressions';
-import { AssignmentStatement, DoStatement, FunctionDeclaration, IfStatement } from '../statements';
-import { Bounds } from '../types';
+import { FoldingRangeVisitor } from '../folding-range-visitor';
+import { AssignmentStatement, Chunk, DoStatement, FunctionDeclaration, getFunctionDeclarationName, IfStatement } from '../statements';
+import { ASTNode, Bounds } from '../types';
 import { formatError, parse, parseInChild, TestFilesResolver } from './test-utils';
-import { outlineLines } from './outline-utils';
+import { allSymbols, outlineLines } from './outline-utils';
 
 const lines = (...l: string[]) => l.join('\n');
 
@@ -15,6 +16,33 @@ function check(code: string, errors: string[], outline: string[]) {
 }
 
 const span = (loc: Bounds | undefined) => `${loc!.start.line}:${loc!.start.column}-${loc!.end.line}:${loc!.end.column}`;
+
+function nodesIn(value: unknown): ASTNode[] {
+  if (Array.isArray(value)) {
+    return value.flatMap(nodesIn);
+  }
+  if (value && typeof value === 'object' && typeof (value as ASTNode).type === 'string') {
+    const children = Object.entries(value).filter(([ key ]) => key !== 'loc').map(([ , child ]) => child as unknown);
+    return [ value as ASTNode, ...nodesIn(children) ];
+  }
+  return [];
+}
+
+// `name` is a top-level function that a block left open handed back: no node,
+// outline entry or folding range that starts before it may reach over it.
+function assertHandedBack(chunk: Chunk, name: string) {
+  const handedBack = chunk.block.body.find(s => s.type === 'FunctionDeclaration' && getFunctionDeclarationName(s) === name)!;
+  const start = handedBack.loc!.start.index;
+  const reachesOver = (loc: Bounds) => loc.start.index < start && loc.end.index > start;
+  const others = nodesIn(chunk.block.body.filter(s => s !== handedBack));
+  assert.deepStrictEqual(others.filter(n => n.loc && reachesOver(n.loc)).map(n => `${n.type} ${span(n.loc)}`), []);
+  assert.ok(chunk.symbols.some(s => s.name === name), `${name} is not a top-level outline entry`);
+  assert.deepStrictEqual(allSymbols(chunk.symbols).filter(s => reachesOver(s.loc)).map(s => `${s.name} ${span(s.loc)}`), []);
+  const folding = new FoldingRangeVisitor();
+  folding.visit(chunk);
+  const line = handedBack.loc!.start.line - 1;
+  assert.deepStrictEqual(folding.ranges.filter(r => r.startLine < line && r.endLine >= line), []);
+}
 
 describe('Parser recovery', () => {
   it('keeps a function whose end is missing and gives back what follows', () => {
@@ -75,6 +103,22 @@ describe('Parser recovery', () => {
     );
   });
 
+  it('blames the function, not a repeat closed by a less indented until', () => {
+    check(
+      lines('function f()', '  repeat', '    x()', 'until y'),
+      [ 'main_test_file 1:0 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ],
+      [ 'f() [Function]' ],
+    );
+  });
+
+  it('blames the repeat, not an if closed by a less indented end', () => {
+    check(
+      lines('repeat', '  if a then', '    b()', 'end'),
+      [ 'main_test_file 1:0 \'until\' expected (to close \'repeat\' at line 1) near \'<eof>\'' ],
+      [],
+    );
+  });
+
   it('resumes at a function on the line after x =', () => {
     check(
       lines('function _init()', 'end', 'x =', 'function _update()', 'end'),
@@ -123,6 +167,30 @@ describe('Parser recovery', () => {
       lines('for i=1,3 do', '  if i==2 then goto continue end', '  print(i)', '  ::continue::', 'end'),
       [],
       [ 'continue [Label]' ],
+    );
+  });
+
+  it('reports a break after a broken repeat as outside a loop', () => {
+    check(
+      lines('repeat', 'until', 'break'),
+      [ 'main_test_file 2:5 <expression> expected near \'break\'', 'main_test_file 3:0 no loop to break near \'break\'' ],
+      [],
+    );
+  });
+
+  it('keeps goto continue and break in a loop error-free after a broken statement', () => {
+    check(
+      lines('for i=1,3 do', '  repeat', '  until', '  if i==2 then goto continue end', '  if i==3 then break end', '  ::continue::', 'end'),
+      [ 'main_test_file 3:7 <expression> expected near \'if\'' ],
+      [ 'continue [Label]' ],
+    );
+  });
+
+  it('reports a goto without its label inside a statement that failed', () => {
+    check(
+      lines('repeat', '  goto nowhere', 'until'),
+      [ 'main_test_file 2:2 no visible label \'nowhere\' for <goto>', 'main_test_file 3:0 <expression> expected near \'<eof>\'' ],
+      [],
     );
   });
 
@@ -213,6 +281,54 @@ describe('Parser recovery', () => {
     assert.deepStrictEqual(errors.map(formatError), [ 'main_test_file 2:13 \'do\' expected near \'x\'' ]);
     const assignment = (block.body[0] as FunctionDeclaration).block.body[0] as AssignmentStatement;
     assert.strictEqual((assignment.variables[0] as Identifier).isLocal, false);
+  });
+
+  const AROUND_OPEN_FUNCTION: [string, string, string[], string[]][] = [
+    [
+      'an assignment',
+      lines('f = function()', '  x()', 'function g()', '  y()', 'end'),
+      [ 'main_test_file 1:4 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ],
+      [ 'f() [Function]', 'g() [Function]' ],
+    ],
+    [
+      'a local statement',
+      lines('local f = function()', '  x()', 'function g()', '  y()', 'end'),
+      [ 'main_test_file 1:10 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ],
+      [ 'f() [Function]', 'g() [Function]' ],
+    ],
+    [
+      'a table field',
+      lines('t = {', '  update = function()', '    x()', 'function g()', '  y()', 'end'),
+      [
+        'main_test_file 2:11 \'end\' expected (to close \'function\' at line 2) near \'<eof>\'',
+        'main_test_file 6:0 \'}\' expected near \'<eof>\'',
+      ],
+      [ 'g() [Function]' ],
+    ],
+    [
+      'a field assignment',
+      lines('t = {}', 't.update = function()', '  x()', 'function g()', '  y()', 'end'),
+      [ 'main_test_file 2:11 \'end\' expected (to close \'function\' at line 2) near \'<eof>\'' ],
+      [ 't [Table]', '  update() [Method]', 'g() [Function]' ],
+    ],
+  ];
+  for (const [ wrapper, code, errors, outline ] of AROUND_OPEN_FUNCTION) {
+    it(`ends ${wrapper} around a function left open before the code handed back`, () => {
+      assertHandedBack(check(code, errors, outline), 'g');
+    });
+  }
+
+  it('ends a return of a function left open before the code handed back', () => {
+    const { block } = check(
+      lines('function h()', '  return function()', '    x()', '  function g()', '    y()', '  end'),
+      [
+        'main_test_file 1:0 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'',
+        'main_test_file 2:9 \'end\' expected (to close \'function\' at line 2) near \'<eof>\'',
+      ],
+      [ 'h() [Function]', '  <anonymous function>() [Function]', '  g() [Function]' ],
+    );
+    const [ returned, handedBack ] = (block.body[0] as FunctionDeclaration).block.body;
+    assert.deepStrictEqual([ span(returned.loc), span(handedBack.loc) ], [ '2:2-3:7', '4:2-6:5' ]);
   });
 });
 

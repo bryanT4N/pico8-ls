@@ -96,9 +96,15 @@ export default class Parser {
   private hoisted: Statement[] = [];
 
   // Blocks closed by an `end` (or `until`) less indented than the line they
-  // start on. Such an `end` most likely belongs to a block around them, so when
-  // one of those turns out to have none, the inner block is the one reported.
+  // start on. Such a closer most likely belongs to a block around them that
+  // takes the same closer, so when one of those turns out to have none, the
+  // inner block is the one reported.
   private underIndentedCloses: UnderIndentedClose[] = [];
+
+  // Where the block that handed back the statements in `hoisted` now ends.
+  // Until they are put after the statement being parsed, the nodes around that
+  // block end there too, instead of at the last token, which is past them.
+  private endBeforeHoisted: CodeLocation | null = null;
 
   // Flag for telling DefinitionsUsagesFinder not to add global PICO-8
   // predefined functions. Used for testing, just to make output a bit clearer.
@@ -169,7 +175,14 @@ export default class Parser {
     }
 
     if (location && endingToken) {
-      location.complete(endingToken.bounds.end);
+      let end = endingToken.bounds.end;
+      const limit = this.endBeforeHoisted;
+      // Only a node that starts before the limit can be around that block.
+      if (limit && limit.filename.equals(location.loc.start.filename)
+          && location.loc.start.index < limit.index && end.index > limit.index) {
+        end = limit;
+      }
+      location.complete(end);
       location.bless(node as any as ASTNode);
     }
 
@@ -353,6 +366,7 @@ export default class Parser {
       const startToken = this.token;
       const locationDepth = this.locations.length;
       const scopeDepth = this.scopeDepth;
+      const flowDepth = flowContext.scopes.length;
 
       try {
         const statement = this.parseStatement(flowContext);
@@ -387,10 +401,15 @@ export default class Parser {
       } catch (e) {
         if (errors.isParseError(e)) {
           // A statement that throws part-way through leaves its location
-          // markers and scope depth behind, which would give the nodes around
-          // it the wrong start and make later names local to it.
+          // markers, scope depth and flow scopes behind: the nodes around it
+          // would get the wrong start, and later names, breaks and labels would
+          // count as inside it. Its flow scopes are popped, not dropped, so the
+          // gotos in them are still checked.
           this.locations.length = locationDepth;
           this.scopeDepth = scopeDepth;
+          while (flowContext.scopes.length > flowDepth) {
+            flowContext.popScope();
+          }
 
           // Caught a parse error. Add it to errors and synchronize.
           this.errors.push(this.token === startToken ? e : this.atEndOfPreviousLine(e));
@@ -485,6 +504,7 @@ export default class Parser {
       block.push(statement);
     }
     this.hoisted.length = 0;
+    this.endBeforeHoisted = null;
   }
 
   // Code being typed is usually unfinished at the end of a line, and the error
@@ -520,12 +540,12 @@ export default class Parser {
       return null;
     }
 
-    const inside = this.underIndentedCloses.filter(close =>
-      close.opener.start.filename.equals(file) && close.opener.start.index > opener.start.index);
+    const inside = this.underIndentedCloses.filter(close => close.closer === closer
+      && close.opener.start.filename.equals(file) && close.opener.start.index > opener.start.index);
     this.underIndentedCloses = this.underIndentedCloses.filter(close => !inside.includes(close));
-    const blamed = inside.sort((a, b) => a.closedAt - b.closedAt)[0] ?? { opener, word, closer };
+    const blamed = inside.sort((a, b) => a.closedAt - b.closedAt)[0] ?? { opener, word };
     const near = this.token.type === TokenType.EOF ? '<eof>' : this.token.value;
-    this.errors.push(errors.createErr(blamed.opener, errMessages.expectedToClose, blamed.closer, blamed.word, blamed.opener.start.line, near));
+    this.errors.push(errors.createErr(blamed.opener, errMessages.expectedToClose, closer, blamed.word, blamed.opener.start.line, near));
 
     const statements = body.body;
     const cut = statements.findIndex(statement => statement.loc
@@ -537,13 +557,24 @@ export default class Parser {
     }
 
     // The statements of an #included file in the block end in that file.
+    let end = headerEnd;
     for (let i = statements.length - 1; i >= 0; i--) {
-      const end = statements[i].loc?.end;
-      if (end?.filename.equals(file)) {
-        return end;
+      const statementEnd = statements[i].loc?.end;
+      if (statementEnd?.filename.equals(file)) {
+        end = statementEnd;
+        break;
       }
     }
-    return headerEnd;
+
+    if (cut !== -1) {
+      this.endBeforeHoisted = end;
+      // The body was finished before the cut, so it still reaches over the
+      // statements; with none left, it's empty where the header ends.
+      if (body.loc) {
+        body.loc = { start: body.loc.start.index < end.index ? body.loc.start : end, end };
+      }
+    }
+    return end;
   }
 
   // The whitespace that starts the line `location` is on, in the file being
