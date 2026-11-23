@@ -238,14 +238,6 @@ describe('Parser recovery', () => {
     );
   });
 
-  it('stops a parameter list at a keyword', () => {
-    check(
-      lines('function foo(a', '  local x = 1', 'end'),
-      [ 'main_test_file 1:14 \')\' expected near \'local\'' ],
-      [ 'foo(a) [Function]', '  x [Variable]' ],
-    );
-  });
-
   const UNFINISHED_LINES: [string, string][] = [
     [ 't = {', '3:5 <expression> expected near \'function\'' ],
     [ 'foo(', '3:4 <expression> expected near \'function\'' ],
@@ -285,19 +277,19 @@ describe('Parser recovery', () => {
 
   const AROUND_OPEN_FUNCTION: [string, string, string[], string[]][] = [
     [
-      'an assignment',
+      'ends an assignment around a function left open before the code handed back',
       lines('f = function()', '  x()', 'function g()', '  y()', 'end'),
       [ 'main_test_file 1:4 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ],
       [ 'f() [Function]', 'g() [Function]' ],
     ],
     [
-      'a local statement',
+      'ends a local statement around a function left open before the code handed back',
       lines('local f = function()', '  x()', 'function g()', '  y()', 'end'),
       [ 'main_test_file 1:10 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ],
       [ 'f() [Function]', 'g() [Function]' ],
     ],
     [
-      'a table field',
+      'hands back the code after a function left open in a table field, though the table statement is dropped',
       lines('t = {', '  update = function()', '    x()', 'function g()', '  y()', 'end'),
       [
         'main_test_file 2:11 \'end\' expected (to close \'function\' at line 2) near \'<eof>\'',
@@ -306,17 +298,26 @@ describe('Parser recovery', () => {
       [ 'g() [Function]' ],
     ],
     [
-      'a field assignment',
+      'ends a field assignment around a function left open before the code handed back',
       lines('t = {}', 't.update = function()', '  x()', 'function g()', '  y()', 'end'),
       [ 'main_test_file 2:11 \'end\' expected (to close \'function\' at line 2) near \'<eof>\'' ],
       [ 't [Table]', '  update() [Method]', 'g() [Function]' ],
     ],
   ];
-  for (const [ wrapper, code, errors, outline ] of AROUND_OPEN_FUNCTION) {
-    it(`ends ${wrapper} around a function left open before the code handed back`, () => {
+  for (const [ name, code, errors, outline ] of AROUND_OPEN_FUNCTION) {
+    it(name, () => {
       assertHandedBack(check(code, errors, outline), 'g');
     });
   }
+
+  it('keeps a one-line if whose multi-line else is missing its end', () => {
+    const chunk = check(
+      lines('if (x) y() else', '  z()', 'function b()', 'end'),
+      [ 'main_test_file 1:0 \'end\' expected (to close \'if\' at line 1) near \'<eof>\'' ],
+      [ 'b() [Function]' ],
+    );
+    assertHandedBack(chunk, 'b');
+  });
 
   it('ends a return of a function left open before the code handed back', () => {
     const { block } = check(
@@ -332,10 +333,16 @@ describe('Parser recovery', () => {
   });
 });
 
-describe('Parser recovery at the end of the file', function () {
+describe('Parser recovery of parameter lists left open', function () {
   this.timeout(30000);
 
-  const AT_EOF: [string, string, string[], string[]][] = [
+  const OPEN_PARAMETER_LISTS: [string, string, string[], string[]][] = [
+    [
+      'stops a parameter list at a keyword',
+      lines('function foo(a', '  local x = 1', 'end'),
+      [ 'main_test_file 1:14 \')\' expected near \'local\'' ],
+      [ 'foo(a) [Function]', '  x [Variable]' ],
+    ],
     [
       'ends a parameter list left open after a whole function',
       lines('function a()', 'end', 'function foo('),
@@ -373,9 +380,10 @@ describe('Parser recovery at the end of the file', function () {
       [ 'foo(a,b) [Function]' ],
     ],
   ];
-  for (const [ name, code, errors, outline ] of AT_EOF) {
+  for (const [ name, code, errors, outline ] of OPEN_PARAMETER_LISTS) {
     it(name, () => {
       const result = parseInChild(code);
+      assert.strictEqual(result.threw, null);
       assert.deepStrictEqual(result.errors, errors);
       assert.deepStrictEqual(result.outline, outline);
     });

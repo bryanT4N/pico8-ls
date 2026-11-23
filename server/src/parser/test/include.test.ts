@@ -62,6 +62,7 @@ describe('#include', function () {
   for (const [ name, files, chain, statements ] of LOOPS) {
     it(name, () => {
       const result = parseInChild('#include a.lua\nprint(1)', files);
+      assert.strictEqual(result.threw, null);
       assert.deepStrictEqual(result.errors, [ `main_test_file 1:0 Can't #include a.lua from ${chain}: Circular #includes detected!` ]);
       assert.deepStrictEqual(result.statements, statements);
     });

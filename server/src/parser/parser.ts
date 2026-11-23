@@ -817,6 +817,7 @@ export default class Parser {
 
         // Handle special PICO-8 one-line if statement. Each clause contains
         // every statement up to the end of the line (or the `else`).
+        let truncatedEnd: CodeLocation | null = null;
         this.lexer.withSignificantNewline((cancelSignificantNewline) => {
           this.createScope();
           flowContext.pushScope();
@@ -843,6 +844,7 @@ export default class Parser {
               cancelSignificantNewline();
               multilineElse = true;
             }
+            const headerEnd = this.previousToken.bounds.end;
 
             this.createScope();
             flowContext.pushScope();
@@ -850,17 +852,17 @@ export default class Parser {
             // Otherwise it ends at the end of the line.
             const elseBlock = this.parseBlock(flowContext, multilineElse ? isBlockFollow : isEndOfLine);
             if (multilineElse) {
-              this.lexer.expect('end');
+              truncatedEnd = this.expectBlockEnd('end', opener, 'if', elseBlock, headerEnd);
             } else if (elseBlock.body.length === 0) {
               errors.raiseUnexpectedToken('statement', this.token);
             }
             flowContext.popScope();
             this.destroyScope();
-            clauses.push(this.finishNode(AST.elseClause(elseBlock), true));
+            clauses.push(endAt(this.finishNode(AST.elseClause(elseBlock), true), truncatedEnd));
           }
         });
 
-        return this.finishNode(AST.ifStatement(clauses, true));
+        return endAt(this.finishNode(AST.ifStatement(clauses, true)), truncatedEnd);
       } else {
         errors.raiseErrForToken(this.token, errMessages.expected, 'then', this.token.value);
       }
