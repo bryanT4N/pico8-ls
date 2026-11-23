@@ -6,22 +6,28 @@
 - Fixed: a character the parser does not know, like a backtick, stopped the outline and errors from updating.
 - While you type, the outline, folding, Go to Definition and errors keep working:
   - A block with a missing `end` keeps its contents, and the code after it is no longer swallowed into it. The error points at the block that is missing its `end`.
-  - An unfinished line no longer hides the function or statement on the next line, and its error is shown at the end of the line being typed.
+  - A statement that starts with a keyword, like `function` or `local`, is no longer hidden by an unfinished line before it, and the error is shown at the end of the unfinished line. A line that starts with a name can still be taken into an unfinished `x =` above it.
   - Syntax errors are no longer hidden by "undefined variable" warnings.
   - A `goto` whose label is not written yet no longer drops the whole function.
   - An unfinished string no longer shifts the line numbers of everything after it.
+  - A `#` typed on a line of its own, on the way to an `#include`, no longer shifts the line numbers of everything after it.
+  - In a `.p8` file, an unclosed `--[[` comment or `[[` string stops at the end of the code instead of running on into `__gfx__` and the sections after it.
 - With `#include`:
   - Each file's folding shows only its own code.
   - A block left open at the end of an included file is reported in that file and no longer swallows the code after the `#include`.
   - An `#include` on the last line of an included file is resolved relative to that file, and its errors are shown.
-  - `#include`s nested more than 32 levels deep are reported, and symlinked files can be included.
+  - `#include`s nested more than 32 levels deep, or more than 256 included files to parse in all, are reported, and symlinked files can be included.
+  - An included file that cannot be read, for example because it is locked, is reported on its `#include` instead of freezing the file's outline and errors.
   - Formatting a file is no longer refused because an included file has errors.
 - Tabs and regions:
   - A tab is named after the comment on its first line.
+  - `-->8` starts a tab only on a line of its own, not after code.
   - `.lua` files with `-->8` get a tab 0 for the code before the first `-->8`, like `.p8` files.
-  - An unclosed `#region` starts on its own line and stops at the end of the `__lua__` section.
+  - An unclosed `#region` starts on its own line and stops at the end of its tab, or of the `__lua__` section when there are no tabs.
   - `#region` and `#endregion` count only at the start of a line, followed by a space or the end of the line.
   - In the outline, regions nest inside each other and inside tabs, and empty tabs are left out.
+  - Tabs always stay at the top level of the outline: a region that runs into a later tab is listed inside the tab it starts in.
+- Fixed: the `pico-8-ls.maxNumberOfProblems` setting had no effect. Each file now shows at most that many problems, 100 by default, syntax errors first.
 - The extension stops restarting the language server after it crashes 5 times in 3 minutes, and says so.
 
 ## 0.1.0 (unreleased)
