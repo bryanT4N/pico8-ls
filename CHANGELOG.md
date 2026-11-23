@@ -14,6 +14,7 @@ First version of PICO-8-LS, a personal fork of PICO-8 LS 0.8.0.
 - Folding no longer depends on the outline.
 - Fixed: a function set on a field of an indexed table, like `btns[i].press = function() end`, showed up under an unrelated entry, or made the whole file fail to parse when it came before any other definition.
 - Fixed: a broken `#include` inside an included file made the including file's outline and folding come from the included file.
+- Fixed: a file whose last comment is a `-->8` tab marker lost its outline, diagnostics and go-to-definition.
 
 ## 0.8.0 (10/29/2026)
 
