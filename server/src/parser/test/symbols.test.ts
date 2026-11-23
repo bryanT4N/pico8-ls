@@ -249,6 +249,11 @@ describe('outline', () => {
         lines('obj [Table]', 'obj:a() [Method]', 'obj() [Function]', 'obj:b() [Method]'));
     });
 
+    it('keeps methods in place for a global table defined inside a function', () => {
+      assert.strictEqual(outlineOf('function _init()\n  player = {}\n  function player:update() end\nend'),
+        lines('_init() [Function]', '  player:update() [Method]', 'player [Table]'));
+    });
+
     it('still groups when a method body assigns a global for the first time', () => {
       assert.strictEqual(outlineOf('vector = {}\nfunction vector:len()\n  count = 0\nend'),
         lines('vector [Table]', '  len() [Method]', 'count [Variable]'));

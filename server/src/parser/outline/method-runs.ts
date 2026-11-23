@@ -53,13 +53,18 @@ function groupRun(table: OutlineEntry, statements: Statement[], info: Map<Statem
   if (!lastMethod.loc!.start.filename.equals(definition.loc!.start.filename)) {
     return;
   }
+  const moving = methodIndices.flatMap(i => info.get(statements[i])!.methods!);
+  // A global table defined inside a function is listed at the top level, but its methods sit inside the
+  // function: under the table, a cursor in a method body would find only the function.
+  if (moving.some(({ entry }) => entry.parent !== table.parent)) {
+    return;
+  }
   if (statements.slice(first + 1, last + 1).some(statement => info.get(statement)?.about !== table)) {
     return;
   }
   if (boundaryLines.some(line => definition.loc!.start.line < line && line <= lastMethod.loc!.end.line)) {
     return;
   }
-  const moving = methodIndices.flatMap(i => info.get(statements[i])!.methods!);
   // Breadcrumbs only follow ranges that contain the cursor, so the stretched table must not cover an entry
   // the cursor could reach before. The moving methods are exempt, and so is anything inside them, which they
   // covered already.
