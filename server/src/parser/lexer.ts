@@ -983,7 +983,7 @@ function isBinaryDigit(charCode: number): boolean {
 // identifiers cannot use 'locale-dependent' letters (i.e. dependent on the C
 // locale). On the other hand, LuaJIT allows arbitrary octets ≥ 128 in
 // identifiers.
-function isIdentifierStart(charCode: number): boolean {
+export function isIdentifierStart(charCode: number): boolean {
   if (
     (charCode >= 65 && charCode <= 90) // A-Z
     || (charCode >= 97 && charCode <= 122) // a-z

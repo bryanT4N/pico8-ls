@@ -1,12 +1,13 @@
 import { Expression, Identifier, Indexer, MemberExpression, TableConstructorExpression, Variable } from '../expressions';
 import { AnonymousFunctionName, AssignmentStatement, Block, Chunk, ForGenericStatement, ForNumericStatement,
-  FunctionDeclaration, GotoStatement, isStatementWithBody, LabelStatement, LocalStatement, Statement } from '../statements';
-import { ASTNode, Bounds } from '../types';
+  FunctionDeclaration, GotoStatement, IncludeStatement, isStatementWithBody, LabelStatement, LocalStatement, Statement } from '../statements';
+import { resolveIncludeFile } from '../file-resolver';
+import { ASTNode, Bounds, CodeLocation } from '../types';
 import { ASTVisitor, VisitableASTNode } from '../visitor';
 import { addEntry, CodeSymbolType, OutlineEntry, Owner, signatureOf } from '../outline/model';
 import { getOrAddMember, receiveTable, tableTypeOf, unwrapValue } from '../outline/members';
 import { findBoundaryLines, groupMethodRuns, StatementInfo } from '../outline/method-runs';
-import { Analysis, LuaSymbol, Reference } from './model';
+import { Analysis, LuaSymbol, Reference, Scope } from './model';
 
 type Decl = {
   kind: 'local' | 'param' | 'loopvar',
@@ -45,13 +46,17 @@ class BinderScope {
   readonly labels = new Map<string, LuaSymbol>();
   // A goto may jump to a label further down, so a function, or the file, resolves its gotos when it ends.
   readonly gotos: PendingGoto[] = [];
-  constructor(public owner: Owner, public kind: 'file' | 'function' | 'block', public block?: Block) {}
+  // analysisScope: the scope the analysis keeps, which a table constructor shares with the scope around it.
+  constructor(public owner: Owner, public kind: 'file' | 'function' | 'block', readonly analysisScope: Scope, public block?: Block) {}
 }
 
 class Binder extends ASTVisitor<BinderScope> {
   readonly root: Owner = { children: [] };
   readonly globals = new Map<string, LuaSymbol>();
   readonly references: Reference[] = [];
+  readonly fileScope: Scope = { kind: 'file', children: [], declarations: [] };
+  readonly includeScopes = new Map<string, Scope>();
+  private order = 0;
   // The first entry each global name got.
   private readonly globalEntries = new Map<string, OutlineEntry>();
   // For each expression value, where to attach it in the outline. The statement hooks fill this in before the
@@ -82,11 +87,30 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   override startingScope(): BinderScope {
-    return new BinderScope(this.root, 'file');
+    return new BinderScope(this.root, 'file', this.fileScope);
   }
 
   createDefaultScope(scopeNode: VisitableASTNode | null): BinderScope {
-    return new BinderScope(this.topScope().owner, 'block', isStatementWithBody(scopeNode) ? scopeNode.block : undefined);
+    return new BinderScope(this.topScope().owner, 'block', { kind: 'block', loc: scopeNode?.loc, children: [], declarations: [] },
+      isStatementWithBody(scopeNode) ? scopeNode.block : undefined);
+  }
+
+  // A scope joins the tree when it is entered. A function in a loop header or a condition is entered before the
+  // loop or clause, whose range contains it too, so visibleAt's descent, which takes the first child that contains
+  // the cursor, finds the function.
+  override onEnterScope(scope: BinderScope): void {
+    const parent = this.topScope(1).analysisScope;
+    if (scope.analysisScope !== parent) {
+      scope.analysisScope.parent = parent;
+      parent.children.push(scope.analysisScope);
+    }
+  }
+
+  override visitIncludeStatement(node: IncludeStatement): void {
+    const included = resolveIncludeFile(node.loc!.start.filename, node.filename).path;
+    if (!this.includeScopes.has(included)) {
+      this.includeScopes.set(included, this.topScope().analysisScope);
+    }
   }
 
   override visitFunctionDeclaration(node: FunctionDeclaration): BinderScope {
@@ -99,6 +123,7 @@ class Binder extends ASTVisitor<BinderScope> {
         node.loc!, node.identifier.loc!), symbol);
       this.targets.set(node, { kind: 'entry', entry });
       outer.decls.set(node.identifier.name, { kind: 'local', symbol, entry });
+      this.declare(outer, symbol, node.identifier.loc!.end);
       this.statementInfo.set(node, { about: entry, defines: entry });
     } else if (node.identifier) {
       // function f() end and function t.f() end — same as f = function() end and t.f = function() end
@@ -122,7 +147,7 @@ class Binder extends ASTVisitor<BinderScope> {
       owner = this.topScope().owner;
     }
 
-    const scope = new BinderScope(owner, 'function', node.block);
+    const scope = new BinderScope(owner, 'function', { kind: 'function', loc: node.loc, children: [], declarations: [] }, node.block);
 
     const firstParam = node.parameters[0];
     const firstParamIsSelf = firstParam?.type === 'Identifier' && firstParam.name === 'self';
@@ -141,10 +166,14 @@ class Binder extends ASTVisitor<BinderScope> {
       scope.selfTable = null;
     }
 
+    // The syntax tree has no place for the closing parenthesis, so the parameters count from the end of the last one,
+    // or of the name.
+    const parametersEnd = (node.parameters[node.parameters.length - 1] ?? node.identifier)?.loc!.end ?? node.loc!.start;
     if (isColonMethod) {
       const self = new LuaSymbol('self', 'self');
       self.table = selfSymbol;
       scope.decls.set('self', { kind: 'param', symbol: self });
+      this.declare(scope, self, parametersEnd);
     }
     for (const param of node.parameters) {
       if (param.type === 'Identifier') {
@@ -155,6 +184,7 @@ class Binder extends ASTVisitor<BinderScope> {
         }
         this.define(symbol, param, param.loc!, param);
         scope.decls.set(param.name, { kind: 'param', symbol });
+        this.declare(scope, symbol, parametersEnd);
       }
     }
     return scope;
@@ -187,6 +217,7 @@ class Binder extends ASTVisitor<BinderScope> {
       }
       this.link(entry, symbol);
       this.topScope().decls.set(variable.name, { kind: 'local', symbol, entry, stmt: node, previous });
+      this.declare(this.topScope(), symbol, node.loc!.end);
       return { about: entry, defines: entry };
     }));
   }
@@ -209,6 +240,8 @@ class Binder extends ASTVisitor<BinderScope> {
     const symbol = new LuaSymbol('loopvar', variable.name);
     this.define(symbol, variable, variable.loc!, node);
     scope.decls.set(variable.name, { kind: 'loopvar', symbol });
+    const lastInHeader = node.type === 'ForNumericStatement' ? (node.step ?? node.end) : node.iterators[node.iterators.length - 1];
+    this.declare(scope, symbol, lastInHeader.loc!.end);
   }
 
   override visitLabelStatement(node: LabelStatement): void {
@@ -316,7 +349,8 @@ class Binder extends ASTVisitor<BinderScope> {
         }
       }
     }
-    return this.createDefaultScope(node);
+    // A scope to the visitor only: nothing can be declared in a table constructor.
+    return new BinderScope(this.topScope().owner, 'block', this.topScope().analysisScope);
   }
 
   private assign(variable: Variable, value: Expression | undefined, statement: Statement, compound: boolean): StatementInfo | undefined {
@@ -538,9 +572,15 @@ class Binder extends ASTVisitor<BinderScope> {
     this.addReference({ symbol, loc, read: true, write: false, isCall });
   }
 
-  private addReference(reference: Reference): void {
+  private addReference(unordered: Omit<Reference, 'order'>): void {
+    const reference = { ...unordered, order: this.order++ };
     reference.symbol.references.push(reference);
     this.references.push(reference);
+  }
+
+  // For completion: symbol is visible in scope from `from` on.
+  private declare(scope: BinderScope, symbol: LuaSymbol, from: CodeLocation): void {
+    scope.analysisScope.declarations.push({ symbol, file: from.filename, visibleFrom: from.index, order: this.order++ });
   }
 
   private link(entry: OutlineEntry, symbol: LuaSymbol | undefined): OutlineEntry {
@@ -663,7 +703,10 @@ export function analyze(chunk: Chunk): Analysis {
   for (const references of referencesByFile.values()) {
     references.sort((a, b) => a.loc.start.index - b.loc.start.index);
   }
-  return { outline: binder.root.children, globals: binder.globals, referencesByFile, membersByKey };
+  return {
+    outline: binder.root.children, globals: binder.globals, referencesByFile, membersByKey,
+    scope: binder.fileScope, includeScopes: binder.includeScopes,
+  };
 }
 
 function listIn<T>(map: Map<string, T[]>, key: string): T[] {

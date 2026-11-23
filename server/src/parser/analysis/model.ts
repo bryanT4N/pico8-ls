@@ -1,3 +1,4 @@
+import ResolvedFile from '../file-resolver';
 import { OutlineEntry } from '../outline/model';
 import { ASTNode, Bounds } from '../types';
 
@@ -7,7 +8,13 @@ export type SymbolKind = 'global' | 'local' | 'param' | 'loopvar' | 'member' | '
 export type Definition = { loc: Bounds, nameLoc: Bounds, node: ASTNode, isFunction: boolean, compound: boolean };
 
 // One per identifier that names something; loc covers that identifier only. A compound target (x += 1) reads and writes.
-export type Reference = { symbol: LuaSymbol, loc: Bounds, read: boolean, write: boolean, isCall: boolean };
+// order: when the analysis came to it, counted together with Declared.order.
+export type Reference = { symbol: LuaSymbol, loc: Bounds, read: boolean, write: boolean, isCall: boolean, order: number };
+
+// A local, parameter or loop variable, visible in its scope from index visibleFrom of file on.
+export type Declared = { symbol: LuaSymbol, file: ResolvedFile, visibleFrom: number, order: number };
+
+export type Scope = { kind: 'file' | 'function' | 'block', loc?: Bounds, parent?: Scope, children: Scope[], declarations: Declared[] };
 
 export class LuaSymbol {
   readonly members = new Map<string, LuaSymbol>();
@@ -41,4 +48,8 @@ export type Analysis = {
   referencesByFile: Map<string, Reference[]>,
   // Every member symbol that has a reference, by key.
   membersByKey: Map<string, LuaSymbol[]>,
+  // The file scope.
+  scope: Scope,
+  // Key: ResolvedFile.path of an #included file. The scope its first #include is in.
+  includeScopes: Map<string, Scope>,
 };

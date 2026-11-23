@@ -1,8 +1,8 @@
 import { isBuiltinName } from '../builtins';
 import { createWarning, errMessages, Warning } from '../errors';
 import ResolvedFile from '../file-resolver';
-import { Bounds } from '../types';
-import { Analysis, LuaSymbol, Reference } from './model';
+import { Bounds, containsIndex } from '../types';
+import { Analysis, LuaSymbol, Reference, Scope } from './model';
 
 // The reference whose name covers index. The end counts, so a cursor right after a name still finds it.
 export function referenceAt(analysis: Analysis, file: ResolvedFile, index: number): Reference | undefined {
@@ -75,6 +75,68 @@ export function warningsOf(analysis: Analysis): Warning[] {
     warnings.push(...reads.map(loc => createWarning(loc, errMessages.undefinedVariable, symbol.name)));
   }
   return warnings.sort((a, b) => byPlace(a.bounds, b.bounds));
+}
+
+// The locals, parameters and loop variables declared above index in the scopes around it, innermost and latest first,
+// each name once; then every global that has a definition. A declaration in another file counts if the analysis came
+// to it before index: the parser pastes an #included file in where its #include is.
+export function visibleAt(analysis: Analysis, file: ResolvedFile, index: number): LuaSymbol[] {
+  const order = orderAt(analysis, file, index);
+  const visible = new Map<string, LuaSymbol>();
+  // Code #included in a function body sees the locals of that function.
+  const start = analysis.includeScopes.get(file.path) ?? analysis.scope;
+  for (let scope: Scope | undefined = innermostScope(start, file, index); scope; scope = scope.parent) {
+    for (let i = scope.declarations.length - 1; i >= 0; i--) {
+      const { symbol, file: declaredIn, visibleFrom, order: declaredAt } = scope.declarations[i];
+      const isVisible = declaredIn.path === file.path ? visibleFrom <= index : declaredAt < order;
+      if (isVisible && !visible.has(symbol.name)) {
+        visible.set(symbol.name, symbol);
+      }
+    }
+  }
+  for (const global of analysis.globals.values()) {
+    if (global.definitions.length > 0 && !visible.has(global.name)) {
+      visible.set(global.name, global);
+    }
+  }
+  return [ ...visible.values() ];
+}
+
+function innermostScope(scope: Scope, file: ResolvedFile, index: number): Scope {
+  const inner = scope.children.find(child => child.loc && containsIndex(child.loc, file, index));
+  return inner ? innermostScope(inner, file, index) : scope;
+}
+
+// Where index falls in the order the analysis came to things: the order of the first reference in file from index
+// on, or just after the last one.
+function orderAt(analysis: Analysis, file: ResolvedFile, index: number): number {
+  const references = analysis.referencesByFile.get(file.path) ?? [];
+  const next = references.find(reference => reference.loc.start.index >= index);
+  if (next) {
+    return next.order;
+  }
+  return references.length > 0 ? references[references.length - 1].order + 0.5 : Infinity;
+}
+
+// The members to offer after `path.` or `path:`: those with a definition, only functions after a colon. When there
+// are none, as for a parameter, the ones used through the same variable: only those called, after a colon.
+// Undefined when the path leads nowhere.
+export function membersAt(analysis: Analysis, file: ResolvedFile, index: number, path: string[], colon: boolean): LuaSymbol[] | undefined {
+  let symbol = visibleAt(analysis, file, index).find(visible => visible.name === path[0]);
+  for (const key of path.slice(1)) {
+    symbol = symbol && (symbol.table ?? symbol).members.get(key);
+  }
+  if (!symbol) {
+    return undefined;
+  }
+  const members = [ ...(symbol.table ?? symbol).members.values() ];
+  const defined = members.filter(member => colon
+    ? member.definitions.some(definition => definition.isFunction)
+    : member.definitions.length > 0);
+  if (defined.length > 0) {
+    return defined;
+  }
+  return members.filter(member => colon ? member.references.some(reference => reference.isCall) : member.references.length > 0);
 }
 
 function placeOf(bounds: Bounds): string {
