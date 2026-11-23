@@ -9,12 +9,12 @@ import { Token, TokenType, TokenValue } from '../tokens';
 import { Bounds, codeLocationToString } from '../types';
 import ResolvedFile, { FileResolver } from '../file-resolver';
 import { DefinitionsUsagesResult, DefsUsagesOptions, findDefinitionsUsages } from '../definitions-usages';
-import { ParseError } from '../errors';
+import { CodeProblem, ParseError } from '../errors';
 import { Comment_ } from '../expressions';
 import { Chunk } from '../statements';
 import { analyze } from '../analysis/binder';
 import { Analysis, LuaSymbol, Reference } from '../analysis/model';
-import { referenceAt } from '../analysis/queries';
+import { definitionsAt, referenceAt, referencesOf, warningsOf } from '../analysis/queries';
 import { CodeSymbol, outlineFor } from '../symbols';
 
 export function getTestFileContents(filename: string): string {
@@ -93,7 +93,25 @@ export function describeSymbol(symbol: LuaSymbol | undefined): string {
   return symbol ? `${symbol.kind} ${symbol.name}` : 'none';
 }
 
-export function formatError(e: ParseError): string {
+export function formatBounds(b: Bounds): string {
+  return `${path.basename(b.start.filename.path)} ${b.start.line}:${b.start.column}-${b.end.line}:${b.end.column}`;
+}
+
+export function definitionsAtPos(a: Analyzed, line: number, column: number, filename?: string): string[] {
+  const reference = referenceAtPos(a, line, column, filename);
+  return reference ? definitionsAt(a.analysis, reference).map(formatBounds) : [];
+}
+
+export function referencesAtPos(a: Analyzed, line: number, column: number, filename?: string, includeDeclaration = true): string[] {
+  const reference = referenceAtPos(a, line, column, filename);
+  return reference ? referencesOf(reference.symbol, includeDeclaration).map(formatBounds) : [];
+}
+
+export function warningsIn(a: Analyzed): string[] {
+  return warningsOf(a.analysis).map(formatError);
+}
+
+export function formatError(e: CodeProblem): string {
   return `${codeLocationToString(e.bounds.start)} ${e.message}`;
 }
 

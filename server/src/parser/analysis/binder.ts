@@ -343,6 +343,11 @@ class Binder extends ASTVisitor<BinderScope> {
 
   private assignName(name: Identifier, value: Expression | undefined, statement: Statement, compound: boolean): StatementInfo | undefined {
     const binding = this.resolve(name.name);
+    if (compound && binding.kind === 'global') {
+      // In PICO-8, x += 1 fails on a global that was never assigned, so a plain assignment elsewhere defines it.
+      this.write(binding.symbol, name, true);
+      return binding.entry && { about: binding.entry };
+    }
     this.define(binding.symbol, name, statement.loc!, statement, value, compound);
     const unwrapped = unwrapValue(value);
 
@@ -521,6 +526,10 @@ class Binder extends ASTVisitor<BinderScope> {
     if (isFunction) {
       symbol.signature = signatureOf(value);
     }
+    this.write(symbol, name, compound);
+  }
+
+  private write(symbol: LuaSymbol, name: Identifier, compound: boolean): void {
     this.recorded.add(name);
     this.addReference({ symbol, loc: name.loc!, read: compound, write: true, isCall: false });
   }

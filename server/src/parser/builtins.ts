@@ -954,3 +954,8 @@ export const BuiltinConstants: Set<string> = new Set<string>([
   '▤',
   '▥',
 ]);
+
+// Builtins is a plain object, so `in` would also find names like constructor and toString.
+export function isBuiltinName(name: string): boolean {
+  return Object.prototype.hasOwnProperty.call(Builtins, name) || BuiltinConstants.has(name);
+}
