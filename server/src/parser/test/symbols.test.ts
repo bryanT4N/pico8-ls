@@ -105,4 +105,67 @@ describe('outline', () => {
         lines('x [Variable]', 'x() [Function]', '  x() [Function]'));
     });
   });
+
+  describe('table members', () => {
+    it('groups constructor keys and later field assignments under the table, once each', () => {
+      assert.strictEqual(outlineOf(lines('player = { x = 64, y = 64 }', 'function _init()',
+        '  player.hp = 3', '  player.x = 10', 'end')),
+      lines('player [Table]', '  x [Field]', '  y [Field]', '  hp [Field]', '_init() [Function]'));
+    });
+
+    it('creates intermediate members for nested paths', () => {
+      assert.strictEqual(outlineOf('cfg = {}\ncfg.screen.w = 128\ncfg.screen.h = 128'),
+        lines('cfg [Table]', '  screen [Table]', '    w [Field]', '    h [Field]'));
+    });
+
+    it('merges keys when a table is assigned again', () => {
+      assert.strictEqual(outlineOf('t = { a = 1 }\nt = { b = 2 }\nt.c = 3'),
+        lines('t [Table]', '  a [Field]', '  b [Field]', '  c [Field]'));
+    });
+
+    it('marks tables with only positional values as arrays', () => {
+      assert.strictEqual(outlineOf('levels = { 1, 2, 3 }\nempty = {}\nmixed = { 1, k = 2 }'),
+        lines('levels [Array]', 'empty [Table]', 'mixed [Table]', '  k [Field]'));
+    });
+
+    it('turns an array that gets a field into a table', () => {
+      assert.strictEqual(outlineOf('a = { 1, 2 }\na.n = 2'), lines('a [Table]', '  n [Field]'));
+    });
+
+    it('nests table constructors inside table constructors', () => {
+      assert.strictEqual(outlineOf('player = { pos = { x = 0, y = 0 } }'),
+        lines('player [Table]', '  pos [Table]', '    x [Field]', '    y [Field]'));
+    });
+
+    it('groups members of local tables under them', () => {
+      assert.strictEqual(outlineOf(lines('function spawn(x, y)', '  local e = { x = x, y = y }',
+        '  e.hp = 2', '  add(enemies, e)', 'end')),
+      lines('spawn(x,y) [Function]', '  e [Table]', '    x [Field]', '    y [Field]', '    hp [Field]'));
+    });
+
+    it('places a global table used through a field first at its first assignment', () => {
+      assert.strictEqual(outlineOf('function _init()\n  player.hp = 3\nend\nplayer = { x = 1 }'),
+        lines('_init() [Function]', 'player [Table]', '  hp [Field]', '  x [Field]'));
+    });
+
+    it('treats setmetatable(table, mt) as the table', () => {
+      assert.strictEqual(outlineOf('obj = setmetatable({ x = 0 }, mt)'), lines('obj [Table]', '  x [Field]'));
+    });
+
+    it('lists a global table first assigned inside a function at the top level', () => {
+      assert.strictEqual(outlineOf('function _init()\n  player = { x = 64 }\nend'),
+        lines('_init() [Function]', 'player [Table]', '  x [Field]'));
+    });
+
+    it('keeps fields of a local and a global with the same name apart', () => {
+      assert.strictEqual(outlineOf(lines('function f()', '  local p = {}', '  p.x = 1', 'end',
+        'function g()', '  p.y = 2', 'end')),
+      lines('f() [Function]', '  p [Table]', '    x [Field]', 'g() [Function]', 'p [Table]', '  y [Field]'));
+    });
+
+    it('attaches each value of a multiple assignment to its own target', () => {
+      assert.strictEqual(outlineOf('t = {}\na, t.k = function() end, { n = 1 }'),
+        lines('t [Table]', '  k [Table]', '    n [Field]', 'a() [Function]'));
+    });
+  });
 });

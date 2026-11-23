@@ -1,8 +1,9 @@
-﻿import { Expression, Identifier } from '../expressions';
+﻿import { Expression, Identifier, MemberExpression, TableConstructorExpression } from '../expressions';
 import { AnonymousFunctionName, AssignmentStatement, Chunk, ForGenericStatement, ForNumericStatement,
   FunctionDeclaration, LabelStatement, LocalStatement, Statement } from '../statements';
 import { ASTVisitor } from '../visitor';
 import { addEntry, CodeSymbolType, OutlineEntry, Owner, signatureOf } from './model';
+import { getOrAddMember, receiveTable, tableTypeOf, unwrapValue } from './members';
 
 type Decl = {
   kind: 'local' | 'param' | 'loopvar',
@@ -84,6 +85,8 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
     node.variables.forEach((variable, i) => {
       if (variable.type === 'Identifier') {
         this.assignName(variable, node.init[i], node);
+      } else if (variable.type === 'MemberExpression') {
+        this.assignMember(variable, node.init[i], node);
       }
     });
   }
@@ -95,10 +98,16 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       }
       const value = node.init[i];
       const previous = this.topScope().decls.get(variable.name);
+      const unwrapped = unwrapValue(value);
       if (value?.type === 'FunctionDeclaration') {
         const entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Function,
           node.loc!, variable.loc!);
         this.targets.set(value, { kind: 'entry', entry });
+        this.topScope().decls.set(variable.name, { kind: 'local', entry, stmt: node, previous });
+      } else if (unwrapped?.type === 'TableConstructorExpression') {
+        const ctor = unwrapped as TableConstructorExpression;
+        const entry = addEntry(this.topScope().owner, variable.name, tableTypeOf(ctor), node.loc!, variable.loc!);
+        this.targets.set(ctor, { kind: 'entry', entry });
         this.topScope().decls.set(variable.name, { kind: 'local', entry, stmt: node, previous });
       } else {
         const entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Variable,
@@ -126,14 +135,43 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
     addEntry(this.topScope().owner, node.label.name, CodeSymbolType.Label, node.loc!, node.label.loc!);
   }
 
+  override visitTableConstructorExpression(node: TableConstructorExpression): ResolverScope {
+    const target = this.targets.get(node);
+    if (target?.kind === 'entry') {
+      const tableEntry = target.entry;
+      for (const field of node.fields) {
+        if (field.type !== 'TableKeyString') {
+          continue;
+        }
+        if (field.value.type === 'FunctionDeclaration') {
+          continue; // Task 6
+        }
+        const unwrapped = unwrapValue(field.value);
+        if (unwrapped?.type === 'TableConstructorExpression') {
+          const innerCtor = unwrapped as TableConstructorExpression;
+          const member = getOrAddMember(tableEntry, field.key.name, tableTypeOf(innerCtor), field.loc!, field.key.loc!);
+          this.targets.set(innerCtor, { kind: 'entry', entry: member });
+        } else {
+          getOrAddMember(tableEntry, field.key.name, CodeSymbolType.Field, field.loc!, field.key.loc!);
+        }
+      }
+    }
+    return this.createDefaultScope();
+  }
+
   private assignName(name: Identifier, value: Expression | undefined, statement: Statement): void {
     const binding = this.resolve(name.name);
+    const unwrapped = unwrapValue(value);
+
     if (binding.kind !== 'global') {
-      // Assignment to a local, param, or loopvar: only record if value is a function
       if (value?.type === 'FunctionDeclaration') {
         const entry = addEntry(this.topScope().owner, name.name, CodeSymbolType.Function,
           statement.loc!, name.loc!);
         this.targets.set(value, { kind: 'entry', entry });
+      } else if (unwrapped?.type === 'TableConstructorExpression' && binding.kind === 'local' && binding.entry) {
+        const ctor = unwrapped as TableConstructorExpression;
+        receiveTable(binding.entry, ctor);
+        this.targets.set(ctor, { kind: 'entry', entry: binding.entry });
       }
       return;
     }
@@ -144,8 +182,91 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       if (!binding.entry) {
         this.globals.set(name.name, entry);
       }
+    } else if (unwrapped?.type === 'TableConstructorExpression') {
+      const ctor = unwrapped as TableConstructorExpression;
+      if (binding.entry) {
+        if (binding.entry.implicit) {
+          binding.entry.loc = statement.loc!;
+          binding.entry.selectionLoc = name.loc!;
+          binding.entry.implicit = false;
+        }
+        receiveTable(binding.entry, ctor);
+        this.targets.set(ctor, { kind: 'entry', entry: binding.entry });
+      } else {
+        const entry = addEntry(this.root, name.name, tableTypeOf(ctor), statement.loc!, name.loc!);
+        this.globals.set(name.name, entry);
+        this.targets.set(ctor, { kind: 'entry', entry });
+      }
     } else if (!binding.entry) {
       this.globals.set(name.name, addEntry(this.root, name.name, CodeSymbolType.Variable, statement.loc!, name.loc!));
+    }
+  }
+
+  private assignMember(variable: MemberExpression, value: Expression | undefined, statement: Statement): void {
+    // Collect the dotted path segments in order: innermost last.
+    const segments: Identifier[] = [ variable.identifier ];
+    let base: Expression = variable.base;
+    while (base.type === 'MemberExpression') {
+      segments.unshift(base.identifier);
+      base = base.base;
+    }
+    if (base.type !== 'Identifier') {
+      return; // Not a pure dotted path
+    }
+    const root = base as Identifier;
+
+    if (root.name === 'self') {
+      return; // Task 7
+    }
+
+    const binding = this.resolve(root.name);
+    if (binding.kind === 'param' || binding.kind === 'loopvar') {
+      return; // Task 7
+    }
+
+    let tableEntry: OutlineEntry;
+    if (binding.kind === 'global') {
+      if (binding.entry) {
+        tableEntry = binding.entry;
+      } else {
+        const entry = addEntry(this.root, root.name, CodeSymbolType.Table, statement.loc!, root.loc!);
+        entry.implicit = true;
+        this.globals.set(root.name, entry);
+        tableEntry = entry;
+      }
+    } else {
+      if (!binding.entry) {
+        return;
+      }
+      tableEntry = binding.entry;
+    }
+
+    // Walk intermediate segments, creating Table members as needed.
+    for (let i = 0; i < segments.length - 1; i++) {
+      const seg = segments[i];
+      tableEntry = getOrAddMember(tableEntry, seg.name, CodeSymbolType.Table, statement.loc!, seg.loc!);
+    }
+
+    const lastSeg = segments[segments.length - 1];
+    const unwrapped = unwrapValue(value);
+
+    if (unwrapped?.type === 'FunctionDeclaration') {
+      return; // Task 6
+    }
+
+    let memberType: CodeSymbolType;
+    if (unwrapped?.type === 'TableConstructorExpression') {
+      memberType = tableTypeOf(unwrapped as TableConstructorExpression);
+    } else {
+      memberType = CodeSymbolType.Field;
+    }
+
+    const member = getOrAddMember(tableEntry, lastSeg.name, memberType, statement.loc!, lastSeg.loc!);
+
+    if (unwrapped?.type === 'TableConstructorExpression') {
+      const ctor = unwrapped as TableConstructorExpression;
+      receiveTable(member, ctor);
+      this.targets.set(ctor, { kind: 'entry', entry: member });
     }
   }
 
