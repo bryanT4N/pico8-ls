@@ -1,7 +1,6 @@
 import { ParseError } from './errors';
 import { Comment_, Expression, Identifier, VarargLiteral, Variable, MemberExpression, getMemberExpressionName, Whitespace } from './expressions';
 import ResolvedFile from './file-resolver';
-import { CodeSymbol } from './symbols';
 import { ASTNode } from './types';
 
 export type Block = ASTNode & {
@@ -169,7 +168,6 @@ export type Chunk = {
   type: 'Chunk',
   block: Block,
   errors: ParseError[],
-  symbols: CodeSymbol[],
   comments?: Comment_[],
   includes?: Include[],
 };

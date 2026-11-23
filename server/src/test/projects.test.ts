@@ -14,7 +14,6 @@ function mockTextDocument(name: string, includes: string[]): ProjectDocument {
         body: [],
       },
       errors: [],
-      symbols: [],
       type: 'Chunk',
       includes: includes.map(filename => {
         return {

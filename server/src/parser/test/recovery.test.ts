@@ -1,9 +1,9 @@
 import * as assert from 'assert';
 import { Identifier } from '../expressions';
 import { FoldingRangeVisitor } from '../folding-range-visitor';
-import { AssignmentStatement, Chunk, DoStatement, FunctionDeclaration, getFunctionDeclarationName, IfStatement } from '../statements';
+import { AssignmentStatement, DoStatement, FunctionDeclaration, getFunctionDeclarationName, IfStatement } from '../statements';
 import { ASTNode, Bounds } from '../types';
-import { formatError, parse, parseInChild, TestFilesResolver } from './test-utils';
+import { formatError, parse, ParsedForTest, parseInChild, TestFilesResolver } from './test-utils';
 import { allSymbols, outlineLines } from './outline-utils';
 
 const lines = (...l: string[]) => l.join('\n');
@@ -30,7 +30,7 @@ function nodesIn(value: unknown): ASTNode[] {
 
 // `name` is a top-level function that a block left open handed back: no node,
 // outline entry or folding range that starts before it may reach over it.
-function assertHandedBack(chunk: Chunk, name: string) {
+function assertHandedBack(chunk: ParsedForTest, name: string) {
   const handedBack = chunk.block.body.find(s => s.type === 'FunctionDeclaration' && getFunctionDeclarationName(s) === name)!;
   const start = handedBack.loc!.start.index;
   const reachesOver = (loc: Bounds) => loc.start.index < start && loc.end.index > start;

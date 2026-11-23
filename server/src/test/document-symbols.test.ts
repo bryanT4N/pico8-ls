@@ -3,7 +3,8 @@ import { DocumentSymbol, Range, SymbolKind } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import Parser from '../parser/parser';
 import ResolvedFile from '../parser/file-resolver';
-import { CodeSymbolType } from '../parser/symbols';
+import { analyze } from '../parser/analysis/binder';
+import { CodeSymbolType, outlineFor } from '../parser/symbols';
 import { buildDocumentSymbols, symbolKindFor } from '../document-symbols';
 import { computeFoldingRanges } from '../folding-ranges';
 
@@ -13,7 +14,8 @@ const P8 = 'pico-8 cartridge // http://www.pico-8.com\nversion 43\n__lua__\n';
 function documentSymbolsOf(filename: string, text: string): DocumentSymbol[] {
   const file = new ResolvedFile(filename, `file:///${filename}`);
   const doc = TextDocument.create(file.fileURL, filename.endsWith('.p8') ? 'pico-8' : 'pico-8-lua', 1, text);
-  return buildDocumentSymbols(doc, new Parser(file, text).parseChunk());
+  const chunk = new Parser(file, text).parseChunk();
+  return buildDocumentSymbols(doc, chunk.comments ?? [], outlineFor(analyze(chunk), file));
 }
 
 describe('symbolKindFor', () => {
@@ -32,7 +34,7 @@ describe('buildDocumentSymbols', () => {
     const file = new ResolvedFile('test.lua', 'file:///test.lua');
     const doc = TextDocument.create(file.fileURL, 'pico-8-lua', 1, text);
     const chunk = new Parser(file, text).parseChunk();
-    const symbols = buildDocumentSymbols(doc, chunk);
+    const symbols = buildDocumentSymbols(doc, chunk.comments ?? [], outlineFor(analyze(chunk), file));
     assert.deepStrictEqual(symbols.map(s => s.name), [ '0: tab', '1: tab' ]);
     assert.deepStrictEqual(symbols[0].children!.map(s => s.name), [ 'f' ]);
     assert.deepStrictEqual(symbols[1].children!.map(s => s.name), [ 'g' ]);

@@ -2,7 +2,8 @@ import * as fs from 'fs';
 import { performance } from 'perf_hooks';
 import ResolvedFile from '../file-resolver';
 import Parser from '../parser';
-import { findSymbols, CodeSymbol } from '../symbols';
+import { analyze } from '../analysis/binder';
+import { outlineFor, CodeSymbol } from '../symbols';
 import { Chunk } from '../statements';
 import { outlineLines } from './outline-utils';
 import { ChildParseJob, ChildParseResult, formatError, TestFilesResolver } from './test-utils';
@@ -49,11 +50,11 @@ function parseJob(job: ChildParseJob): ChildParseResult {
     };
   }
 
-  // parseChunk already ran findSymbols, but it catches a throw and leaves the
-  // outline empty; running it again lets a throw show up in `threw`.
+  // A throw in the analysis shows up in `threw` too, along with what the parse
+  // found.
   let symbols: CodeSymbol[];
   try {
-    symbols = findSymbols(chunk, mainFile);
+    symbols = outlineFor(analyze(chunk), mainFile);
   } catch (e) {
     return {
       ms: performance.now() - start,

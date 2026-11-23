@@ -1,3 +1,4 @@
+import { LuaSymbol } from '../analysis/model';
 import { FunctionDeclaration } from '../statements';
 import { Bounds } from '../types';
 
@@ -34,6 +35,8 @@ export type OutlineEntry = Owner & {
   members: Map<string, OutlineEntry>,
   // Created for a field assignment before the name itself was assigned.
   implicit: boolean,
+  // Unset for anonymous functions and the functions of tables that no name holds.
+  symbol?: LuaSymbol,
 };
 
 export function addEntry(parent: Owner, name: string, type: CodeSymbolType, loc: Bounds, selectionLoc: Bounds, detail?: string): OutlineEntry {

@@ -24,6 +24,8 @@ import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
 import { buildDocumentSymbols } from './document-symbols';
+import { analyze } from './parser/analysis/binder';
+import { outlineFor } from './parser/symbols';
 import { computeFoldingRanges } from './folding-ranges';
 import { errorsInFile, mergeDiagnostics } from './diagnostics';
 
@@ -438,7 +440,8 @@ function parseTextDocument(textDocument: TextDocument): ProjectDocument | undefi
 
     // Set document info in caches
     try {
-      documentSymbols.set(textDocument.uri, buildDocumentSymbols(textDocument, chunk));
+      documentSymbols.set(textDocument.uri, buildDocumentSymbols(textDocument, chunk.comments ?? [],
+        outlineFor(analyze(chunk), ResolvedFile.fromFileURL(textDocument.uri))));
     } catch (e) {
       console.error('Failed to build the outline', e);
       documentSymbols.set(textDocument.uri, []);

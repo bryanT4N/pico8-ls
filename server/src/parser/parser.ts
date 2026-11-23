@@ -40,7 +40,6 @@ import {
   Statement,
   WhileStatement,
 } from './statements';
-import { findSymbols } from './symbols';
 import { Token, TokenType } from './tokens';
 import * as path from 'path';
 import { ASTNode, Bounds, CodeLocation, codeLocationsEqual } from './types';
@@ -266,13 +265,6 @@ export default class Parser {
     const chunk = this.finishNode(AST.chunk(body, this.errors));
     chunk.includes = this.includes;
     chunk.comments = this.lexer.comments;
-
-    try {
-      chunk.symbols = findSymbols(chunk, this.filename);
-    } catch (e) {
-      console.error('Failed to build the outline', e);
-      chunk.symbols = [];
-    }
 
     return chunk;
   }

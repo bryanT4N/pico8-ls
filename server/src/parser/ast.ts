@@ -174,9 +174,6 @@ export default class AST {
       type: 'Chunk',
       block,
       errors,
-
-      // This stuff is added later
-      symbols: [],
     };
   }
 

@@ -12,6 +12,10 @@ import { DefinitionsUsagesResult, DefsUsagesOptions, findDefinitionsUsages } fro
 import { ParseError } from '../errors';
 import { Comment_ } from '../expressions';
 import { Chunk } from '../statements';
+import { analyze } from '../analysis/binder';
+import { Analysis, LuaSymbol, Reference } from '../analysis/model';
+import { referenceAt } from '../analysis/queries';
+import { CodeSymbol, outlineFor } from '../symbols';
 
 export function getTestFileContents(filename: string): string {
   const filepath = path.join(__dirname, '../../../../testfiles/', filename);
@@ -45,16 +49,48 @@ export function lexWithErrors(input: string): { tokens: Token[], errors: ParseEr
 
 export type TestParseOptions = ParserOptions & DefsUsagesOptions & { filename?: string };
 
-export function parse(input: string, opts: TestParseOptions = {}): Chunk & DefinitionsUsagesResult {
+export type ParsedForTest = Chunk & DefinitionsUsagesResult & { symbols: CodeSymbol[] };
+
+export function parse(input: string, opts: TestParseOptions = {}): ParsedForTest {
   // If a filename is given, resolve it the same way #include'd files are
   // resolved, so they can be compared
-  const file = opts?.filename ? ResolvedFile.fromPath(opts.filename) : new ResolvedFile('main_test_file', 'main_test_file');
+  const file = opts?.filename ? ResolvedFile.fromPath(opts.filename) : testFile();
   const chunk = new Parser(file, input, opts).parseChunk();
+  const symbols = outlineFor(analyze(chunk), file);
   const defUsResult = findDefinitionsUsages(chunk, opts);
   return {
     ...chunk,
     ...defUsResult,
+    symbols,
   };
+}
+
+export type Analyzed = { chunk: Chunk, analysis: Analysis, texts: Record<string, string> };
+
+export function analyzeCode(code: string, files: Record<string, string> = {}): Analyzed {
+  const chunk = new Parser(testFile(), code, { includeFileResolver: new TestFilesResolver(files) }).parseChunk();
+  return { chunk, analysis: analyze(chunk), texts: { main_test_file: code, ...files } };
+}
+
+export function testFile(filename = 'main_test_file'): ResolvedFile {
+  return filename === 'main_test_file' ? new ResolvedFile(filename, filename) : ResolvedFile.fromPath(path.normalize(filename));
+}
+
+// line counts from 1 and column from 0. A '\r' at the end of a line is part of that line.
+export function indexAt(a: Analyzed, line: number, column: number, filename = 'main_test_file'): number {
+  return a.texts[filename].split('\n').slice(0, line - 1).reduce((index, text) => index + text.length + 1, 0) + column;
+}
+
+export function referenceAtPos(a: Analyzed, line: number, column: number, filename?: string): Reference | undefined {
+  return referenceAt(a.analysis, testFile(filename), indexAt(a, line, column, filename));
+}
+
+export function symbolAt(a: Analyzed, line: number, column: number, filename?: string): LuaSymbol | undefined {
+  return referenceAtPos(a, line, column, filename)?.symbol;
+}
+
+export function describeSymbol(symbol: LuaSymbol | undefined): string {
+  return symbol ? `${symbol.kind} ${symbol.name}` : 'none';
 }
 
 export function formatError(e: ParseError): string {

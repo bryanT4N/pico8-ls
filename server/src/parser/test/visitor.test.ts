@@ -25,6 +25,10 @@ describe('ASTVisitor scopes', () => {
     assert.deepStrictEqual(depths('for t in all(t) do print(t) end'), [ 'all@1', 't@1', 't@2', 'print@2', 't@2' ]);
   });
 
+  it('visits every iterator of a generic for before any of its names', () => {
+    assert.deepStrictEqual(depths('for k, v in next, t do end'), [ 'next@1', 't@1', 'k@2', 'v@2' ]);
+  });
+
   it('visits the bounds of a numeric for outside the loop', () => {
     assert.deepStrictEqual(depths('for i = a, b, c do x = i end'), [ 'a@1', 'b@1', 'c@1', 'i@2', 'x@2', 'i@2' ]);
   });

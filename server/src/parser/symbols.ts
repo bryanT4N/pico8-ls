@@ -1,11 +1,10 @@
+import { Analysis } from './analysis/model';
 import ResolvedFile from './file-resolver';
 import { CodeSymbol } from './outline/model';
 import { projectToFile } from './outline/project';
-import { resolveOutline } from './outline/resolver';
-import { Chunk } from './statements';
 
 export { CodeSymbolType, CodeSymbol } from './outline/model';
 
-export function findSymbols(chunk: Chunk, file: ResolvedFile): CodeSymbol[] {
-  return projectToFile(resolveOutline(chunk), file);
+export function outlineFor(analysis: Analysis, file: ResolvedFile): CodeSymbol[] {
+  return projectToFile(analysis.outline, file);
 }
