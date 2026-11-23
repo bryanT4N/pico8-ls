@@ -40,13 +40,12 @@ class BinderScope {
   // undefined = inherit from enclosing scope; null = this function binds self but its table is unknown
   selfTable?: OutlineEntry | null;
   selfPath?: SelfPath;
-  // In a function that binds no self, self is a variable of its own whose table is unknown.
+  // In a function that binds no self, self is a variable of that function whose table is unknown.
   implicitSelf?: Decl;
   readonly labels = new Map<string, LuaSymbol>();
-  // A goto may jump to a label further down, so a function resolves its gotos when it ends.
+  // A goto may jump to a label further down, so a function, or the file, resolves its gotos when it ends.
   readonly gotos: PendingGoto[] = [];
-  // The file is a function too, as in Lua.
-  constructor(public owner: Owner, public block?: Block, public isFunction = false) {}
+  constructor(public owner: Owner, public kind: 'file' | 'function' | 'block', public block?: Block) {}
 }
 
 class Binder extends ASTVisitor<BinderScope> {
@@ -74,7 +73,7 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   override onExitScope(scope: BinderScope): void {
-    if (scope.isFunction) {
+    if (scope.kind === 'function') {
       this.resolveGotos(scope);
     }
     if (scope.block) {
@@ -83,11 +82,11 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   override startingScope(): BinderScope {
-    return new BinderScope(this.root, undefined, true);
+    return new BinderScope(this.root, 'file');
   }
 
   createDefaultScope(scopeNode: VisitableASTNode | null): BinderScope {
-    return new BinderScope(this.topScope().owner, isStatementWithBody(scopeNode) ? scopeNode.block : undefined);
+    return new BinderScope(this.topScope().owner, 'block', isStatementWithBody(scopeNode) ? scopeNode.block : undefined);
   }
 
   override visitFunctionDeclaration(node: FunctionDeclaration): BinderScope {
@@ -123,7 +122,7 @@ class Binder extends ASTVisitor<BinderScope> {
       owner = this.topScope().owner;
     }
 
-    const scope = new BinderScope(owner, node.block, true);
+    const scope = new BinderScope(owner, 'function', node.block);
 
     const firstParam = node.parameters[0];
     const firstParamIsSelf = firstParam?.type === 'Identifier' && firstParam.name === 'self';
@@ -226,7 +225,7 @@ class Binder extends ASTVisitor<BinderScope> {
     for (let i = this.scopeStack.length - 1; i >= 0; i--) {
       const scope = this.scopeStack[i];
       blocks.push(scope);
-      if (scope.isFunction) {
+      if (scope.kind !== 'block') {
         scope.gotos.push({ label: node.label, blocks });
         return;
       }
@@ -294,21 +293,22 @@ class Binder extends ASTVisitor<BinderScope> {
     } else {
       const owner = target?.kind === 'flat' ? target.owner : this.topScope().owner;
       const prefix = target?.kind === 'flat' ? target.name : '';
-      const table = target?.kind === 'flat' ? target.symbol : undefined;
+      const named = target?.kind === 'flat' ? target.symbol : undefined;
+      // The keys of a table that no name holds still get symbols, so that a method call on some other table
+      // can find its methods by key.
+      const table = named ?? new LuaSymbol('value', '');
       for (const field of node.fields) {
         if (field.type === 'TableKeyString') {
-          const member = table?.member(field.key.name);
-          if (member) {
-            this.define(member, field.key, field.loc!, field, field.value);
-          }
+          const member = table.member(field.key.name);
+          this.define(member, field.key, field.loc!, field, field.value);
           if (field.value.type === 'FunctionDeclaration') {
             this.targets.set(field.value, { kind: 'flat', owner, name: prefix ? `${prefix}.${field.key.name}` : field.key.name,
-              loc: field.loc!, selectionLoc: field.key.loc!, symbol: member });
+              loc: field.loc!, selectionLoc: field.key.loc!, symbol: named && member });
           } else {
             const unwrapped = unwrapValue(field.value);
             if (unwrapped?.type === 'TableConstructorExpression') {
               this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner, name: prefix ? `${prefix}.${field.key.name}` : '',
-                symbol: member });
+                symbol: named && member });
             }
           }
         } else if (field.type === 'TableValue' || field.type === 'TableKey') {
@@ -582,7 +582,7 @@ class Binder extends ASTVisitor<BinderScope> {
       }
       decl = decl.previous;
     }
-    return name === 'self' ? scope.implicitSelf : undefined;
+    return undefined;
   }
 
   private resolveSelfBinding(): 'local-or-loopvar' | 'other' {
@@ -626,14 +626,12 @@ class Binder extends ASTVisitor<BinderScope> {
         return decl;
       }
     }
-    if (name === 'self') {
-      let i = this.scopeStack.length - 1;
-      while (!this.scopeStack[i].isFunction) {
-        i--;
-      }
-      const self: Decl = { kind: 'param', symbol: new LuaSymbol('self', 'self') };
-      this.scopeStack[i].implicitSelf = self;
-      return self;
+    // A self that nothing declares belongs to the innermost function alone, so that self.k never links two
+    // functions. Outside every function it is the global of that name, as in Lua.
+    const fn = name === 'self' ? [ ...this.scopeStack ].reverse().find(scope => scope.kind === 'function') : undefined;
+    if (fn) {
+      fn.implicitSelf ??= { kind: 'param', symbol: new LuaSymbol('self', 'self') };
+      return fn.implicitSelf;
     }
     return { kind: 'global', symbol: this.globalSymbol(name), entry: this.globalEntries.get(name) };
   }

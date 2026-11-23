@@ -114,6 +114,21 @@ describe('binder', () => {
     ne(at(1, 18), at(2, 24));
   });
 
+  it('keeps self.k of two functions apart wherever top-level code uses self', () => {
+    const first = probe(analyzeCode(lines('print(self)', 'function f() self.x = 1 end', 'function g() print(self.x) end')));
+    eq(first.kind(1, 6), 'global self');
+    ne(first.at(2, 18), first.at(3, 24));
+    const last = probe(analyzeCode(lines('function f() self.x = 1 end', 'function g() print(self.x) end', 'print(self)')));
+    ne(last.at(1, 18), last.at(2, 24));
+  });
+
+  it('gives a callback in a function that is not a method its own self, whichever uses self first', () => {
+    const outerFirst = probe(analyzeCode(lines('function f()', '  self.y = 2', '  foreach(t, function(e) self.x = 1 end)', 'end')));
+    ne(outerFirst.at(2, 2), outerFirst.at(3, 25));
+    const callbackFirst = probe(analyzeCode(lines('function f()', '  foreach(t, function(e) self.x = 1 end)', '  self.y = 2', 'end')));
+    ne(callbackFirst.at(2, 25), callbackFirst.at(3, 2));
+  });
+
   it('connects constructor keys with field uses', () => {
     const { at } = probe(analyzeCode(lines('player = { x = 64, y = 64 }', 'function _draw()', '  spr(1, player.x, player.y)', 'end')));
     eq(at(1, 11), at(3, 16));
@@ -141,6 +156,14 @@ describe('binder', () => {
     eq(kind(1, 11), 'member update');
     eq(referenceAtPos(a, 1, 11)!.isCall, true);
     eq(kind(2, 13), 'member hit');
+  });
+
+  it('gives the keys of a table that no name holds a symbol', () => {
+    const a = analyzeCode('add(enemies, { update = function(self) end })');
+    const update = probe(a).at(1, 15);
+    eq(describeSymbol(update), 'member update');
+    ok(update.definitions.some(definition => definition.isFunction));
+    ok(a.analysis.membersByKey.get('update')!.includes(update));
   });
 
   it('marks compound assignment targets as read and written', () => {

@@ -352,6 +352,11 @@ describe('outline', () => {
       assert.strictEqual(outlineOf('function f()\n  self.h = { on = function() end, n = 1 }\nend'),
         lines('f() [Function]', '  self.h.on() [Method]'));
     });
+
+    it('lists self assigned at the top level as a global, but not self assigned in a method', () => {
+      assert.strictEqual(outlineOf('self = { x = 1 }'), lines('self [Table]', '  x [Field]'));
+      assert.strictEqual(outlineOf('function T:m() self = {} end'), 'T:m() [Method]');
+    });
   });
 
   describe('fields of parameters and unnamed tables', () => {
