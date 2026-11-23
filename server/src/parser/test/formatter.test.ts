@@ -866,8 +866,6 @@ end
 function f2()
   printh("inside f2")
 end`.trim();
-      const actual = formatLua(input);
-      console.log('actual: ', actual);
       eq(formatLua(input), input);
     });
 

@@ -87,7 +87,6 @@ export default class Formatter {
       ? chunk.errors.filter(e => e.bounds.start.filename.fileURL === ownFileUri)
       : chunk.errors;
     if (ownErrors.length > 0) {
-      console.error('can\'t format - errors are present!');
       return undefined;
     }
 

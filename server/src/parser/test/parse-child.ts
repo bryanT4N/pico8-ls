@@ -49,6 +49,8 @@ function parseJob(job: ChildParseJob): ChildParseResult {
     };
   }
 
+  // parseChunk already ran findSymbols, but it catches a throw and leaves the
+  // outline empty; running it again lets a throw show up in `threw`.
   let symbols: CodeSymbol[];
   try {
     symbols = findSymbols(chunk, mainFile);
