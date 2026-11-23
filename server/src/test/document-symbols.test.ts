@@ -52,6 +52,13 @@ describe('buildDocumentSymbols', () => {
     assert.deepStrictEqual(inner.children!.map(s => s.name), [ 'f' ]);
   });
 
+  it('ends a region at the end of its line in a CRLF file', () => {
+    const text = [ '-- #region outer', '-- #region inner', 'function f() end', '-- #endregion', 'function g() end', '-- #endregion', '' ].join('\r\n');
+    const [ outer ] = documentSymbolsOf('test.lua', text);
+    assert.deepStrictEqual(outer.range, Range.create(0, 0, 5, 13));
+    assert.deepStrictEqual(outer.children![0].range, Range.create(1, 0, 3, 13));
+  });
+
   it('puts a region in the nearest region around it and lists children in order', () => {
     const symbols = documentSymbolsOf('test.lua', lines('-- #region a', 'function f() end', '-- #region b', '-- #region c',
       'function g() end', '-- #endregion', '-- #endregion', '-- #endregion'));
@@ -71,4 +78,19 @@ describe('buildDocumentSymbols', () => {
     assert.deepStrictEqual(regions.map(s => [ s.name, s.kind ]), [[ 'player', SymbolKind.Namespace ]]);
     assert.deepStrictEqual(regions[0].children!.map(s => [ s.name, s.kind ]), [[ 'player', SymbolKind.Function ]]);
   });
+
+  const REGIONS_INTO_THE_NEXT_TAB: [string, string, string][] = [
+    [ 'an unclosed region', 'typing', P8 + lines('function a() end', '-->8', '-- #region typing', 'function b() end', '-->8', 'function c() end', '__gfx__') ],
+    [ 'a region closed in the next tab', 'r', P8 + lines('function a() end', '-->8', '-- #region r', 'function b() end', '-->8', 'function c() end', '-- #endregion', '__gfx__') ],
+  ];
+  for (const [ what, name, text ] of REGIONS_INTO_THE_NEXT_TAB) {
+    it(`keeps the tabs at the top and ${what} inside the tab it starts in`, () => {
+      const symbols = documentSymbolsOf('test.p8', text);
+      assert.deepStrictEqual(symbols.map(s => s.name), [ '0: tab', `1: #region ${name}`, '2: tab' ]);
+      const regions = symbols[1].children!;
+      assert.deepStrictEqual(regions.map(s => [ s.name, s.kind, s.range ]), [[ name, SymbolKind.Namespace, Range.create(5, 0, 6, 16) ]]);
+      assert.deepStrictEqual(regions[0].children!.map(s => s.name), [ 'b' ]);
+      assert.deepStrictEqual(symbols[2].children!.map(s => s.name), [ 'c' ]);
+    });
+  }
 });

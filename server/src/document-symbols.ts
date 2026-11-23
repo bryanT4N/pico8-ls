@@ -5,7 +5,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Bounds } from './parser/types';
 import { CodeSymbolType, CodeSymbol } from './parser/symbols';
 import { Chunk } from './parser/statements';
-import { FoldingRegion, getFoldingRegions } from './parser/folding-regions';
+import { FoldingRegion, getFoldingRegions, tabAt } from './parser/folding-regions';
 
 const symbolTypeLookup: Record<CodeSymbolType, SymbolKind> = {
   [CodeSymbolType.Function]: SymbolKind.Function,
@@ -41,7 +41,14 @@ export function toDocumentSymbol(textDocument: TextDocument, symbol: CodeSymbol)
 }
 
 export function buildDocumentSymbols(textDocument: TextDocument, chunk: Chunk): DocumentSymbol[] {
-  const regions = getFoldingRegions(textDocument, chunk.comments || [])
+  const foldingRegions = getFoldingRegions(textDocument, chunk.comments || []);
+  const regions = foldingRegions
+    // A region that runs into a later tab would take that tab in, so in the
+    // outline it ends with its own tab and the tabs stay at the top.
+    .map(region => {
+      const tab = region.kind === 'region' ? tabAt(foldingRegions, region.startLine) : undefined;
+      return tab && tab.endLine < region.endLine ? { ...region, endLine: tab.endLine } : region;
+    })
     .sort(outerFirst)
     .map(region => {
       const range = Range.create(Position.create(region.startLine, 0), endOfLine(textDocument, region.endLine));

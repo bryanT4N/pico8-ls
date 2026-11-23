@@ -86,10 +86,16 @@ export function getFoldingRegions(textDocument: TextDocument, comments: Comment_
     }
   }
   for (const start of openRegions) {
-    regions.push({ name: start.label || 'region', startLine: start.startLine, endLine: codeEndLine, kind: 'region' });
+    // Running on to the end of the code would take in every later tab as well.
+    const endLine = tabAt(regions, start.startLine)?.endLine ?? codeEndLine;
+    regions.push({ name: start.label || 'region', startLine: start.startLine, endLine, kind: 'region' });
   }
 
   return regions.sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+}
+
+export function tabAt(regions: FoldingRegion[], line: number): FoldingRegion | undefined {
+  return regions.find(region => region.kind === 'tab' && region.startLine <= line && line <= region.endLine);
 }
 
 // PICO-8 shows the comment that starts a tab's first line as the name of the tab.

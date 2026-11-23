@@ -384,6 +384,26 @@ local b = 2
     ]);
   });
 
+  it('ends an unclosed #region at the end of its tab', () => {
+    const code = P8 + lines('function a() end', '-->8', '-- #region typing', 'function b() end', '-->8', 'function c() end', '__gfx__');
+    deepEquals(foldingRegionsOf('test.p8', code), [
+      { name: '0: tab', startLine: 3, endLine: 3, kind: 'tab' },
+      { name: '1: #region typing', startLine: 5, endLine: 6, kind: 'tab' },
+      { name: 'typing', startLine: 5, endLine: 6, kind: 'region' },
+      { name: '2: tab', startLine: 8, endLine: 8, kind: 'tab' },
+    ]);
+  });
+
+  it('folds a #region closed in a later tab over the lines written', () => {
+    const code = P8 + lines('function a() end', '-->8', '-- #region r', 'function b() end', '-->8', 'function c() end', '-- #endregion', '__gfx__');
+    deepEquals(foldingRegionsOf('test.p8', code), [
+      { name: '0: tab', startLine: 3, endLine: 3, kind: 'tab' },
+      { name: '1: #region r', startLine: 5, endLine: 6, kind: 'tab' },
+      { name: 'r', startLine: 5, endLine: 9, kind: 'region' },
+      { name: '2: tab', startLine: 8, endLine: 9, kind: 'tab' },
+    ]);
+  });
+
   it('names a tab after the comment on its first line only', () => {
     deepEquals(foldingRegionsOf('test.p8', P8 + lines('-- main tab', 'f()', '-->8', 'function e() end', 'x = 1 -- later', '__gfx__')), [
       { name: '0: main tab', startLine: 3, endLine: 4 },
@@ -418,6 +438,10 @@ local b = 2
       { name: '1: tab', startLine: 4, endLine: 4 },
       { name: '3: tab', startLine: 7, endLine: 7 },
     ]);
+  });
+
+  it('does not count a -->8 after code as a tab', () => {
+    deepEquals(foldingRegionsOf('test.lua', lines('function a() end', 'x = 1 -->8', 'function b() end')), []);
   });
 
   it('gives a .lua file a tab 0 before its first -->8', () => {
