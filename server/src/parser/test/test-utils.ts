@@ -1,13 +1,15 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as util from 'util';
+import { spawnSync } from 'child_process';
 import { fail } from 'assert';
 import Lexer from '../lexer';
 import Parser, { ParserOptions } from '../parser';
 import { Token, TokenType, TokenValue } from '../tokens';
-import { Bounds } from '../types';
+import { Bounds, codeLocationToString } from '../types';
 import ResolvedFile, { FileResolver } from '../file-resolver';
 import { DefinitionsUsagesResult, DefsUsagesOptions, findDefinitionsUsages } from '../definitions-usages';
+import { ParseError } from '../errors';
 import { Chunk } from '../statements';
 
 export function getTestFileContents(filename: string): string {
@@ -48,6 +50,45 @@ export function parse(input: string, opts: TestParseOptions = {}): Chunk & Defin
     ...chunk,
     ...defUsResult,
   };
+}
+
+export function formatError(e: ParseError): string {
+  return `${codeLocationToString(e.bounds.start)} ${e.message}`;
+}
+
+export type ChildParseJob = { code: string, files?: Record<string, string> };
+
+export type ChildParseResult = {
+  ms: number,
+  threw: string | null,
+  errors: string[],
+  statements: string[],
+  outline: string[],
+};
+
+export function parseManyInChild(jobs: ChildParseJob[], timeoutMs: number): ChildParseResult[] {
+  // The small heap makes a parse that never ends die of out-of-memory soon,
+  // instead of running until the timeout.
+  const child = spawnSync(process.execPath, [ '--max-old-space-size=256', path.join(__dirname, 'parse-child.js') ], {
+    input: JSON.stringify({ jobs }),
+    encoding: 'utf8',
+    timeout: timeoutMs,
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  if ((child.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') {
+    throw new Error(`parse did not finish within ${timeoutMs} ms`);
+  }
+  if (child.error) {
+    throw child.error;
+  }
+  if (child.status !== 0) {
+    throw new Error(`parse child exited with ${child.status ?? child.signal}\n${child.stderr.trim()}`);
+  }
+  return JSON.parse(child.stdout) as ChildParseResult[];
+}
+
+export function parseInChild(code: string, files?: Record<string, string>, timeoutMs = 10000): ChildParseResult {
+  return parseManyInChild([{ code, files }], timeoutMs)[0];
 }
 
 export function deepEqualsAST(code: string, expected: any) {
@@ -203,18 +244,18 @@ export class TestFilesResolver implements FileResolver {
   files: FilesystemMap;
 
   constructor(files: FilesystemMap) {
-    this.files = files;
+    this.files = Object.fromEntries(Object.entries(files).map(([ filename, contents ]) => [ path.normalize(filename), contents ]));
   }
 
   doesFileExist(filepath: string): boolean {
-    return !!this.files[filepath];
+    return Object.prototype.hasOwnProperty.call(this.files, path.normalize(filepath));
   }
 
   isFile(filepath: string): boolean {
-    return !!this.files[filepath];
+    return this.doesFileExist(filepath);
   }
 
   loadFileContents(filepath: string): string {
-    return this.files[filepath];
+    return this.files[path.normalize(filepath)];
   }
 }

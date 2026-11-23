@@ -1,16 +1,20 @@
 import { CodeSymbol } from '../symbols';
 import { parse, TestParseOptions } from './test-utils';
 
-export function outlineOf(code: string, opts: TestParseOptions = {}): string {
+export function outlineLines(symbols: CodeSymbol[]): string[] {
   const lines: string[] = [];
-  const walk = (symbols: CodeSymbol[], depth: number) => {
-    for (const s of symbols) {
+  const walk = (level: CodeSymbol[], depth: number) => {
+    for (const s of level) {
       lines.push(`${'  '.repeat(depth)}${s.name}${s.detail ?? ''} [${s.type}]`);
       walk(s.children, depth + 1);
     }
   };
-  walk(parse(code, opts).symbols, 0);
-  return lines.join('\n');
+  walk(symbols, 0);
+  return lines;
+}
+
+export function outlineOf(code: string, opts: TestParseOptions = {}): string {
+  return outlineLines(parse(code, opts).symbols).join('\n');
 }
 
 export function allSymbols(symbols: CodeSymbol[]): CodeSymbol[] {

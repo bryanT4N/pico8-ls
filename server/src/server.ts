@@ -431,7 +431,7 @@ function toDiagnostic(err: ParseError | Warning): Diagnostic {
 
 const fileResolver: FileResolver = {
   doesFileExist: (filepath) => fs.existsSync(filepath),
-  isFile: (filepath) => fs.lstatSync(filepath).isFile(),
+  isFile: (filepath) => fs.statSync(filepath).isFile(),
   loadFileContents: (filepath) => {
     const uri = url.pathToFileURL(filepath).toString();
 

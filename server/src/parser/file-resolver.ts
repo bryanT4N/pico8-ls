@@ -70,7 +70,7 @@ export class RealFileResolver implements FileResolver {
   }
 
   isFile(filepath: string): boolean {
-    return fs.lstatSync(filepath).isFile();
+    return fs.statSync(filepath).isFile();
   }
 
   loadFileContents(filepath: string): string {

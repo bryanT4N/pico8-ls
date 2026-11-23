@@ -49,6 +49,10 @@ import Operators from './operators';
 
 export type Scope = string[];
 
+// The circular #include check compares paths, and a link to a parent
+// directory gives the same file an ever longer one (sub/a.lua, sub/sub/a.lua).
+const MAX_INCLUDE_DEPTH = 32;
+
 export type ParserOptions = {
   dontAddGlobalSymbols?: boolean,
   includeFileResolver?: FileResolver,
@@ -131,10 +135,6 @@ export default class Parser {
 
   lexerNext(): void {
     this.lexer.next();
-
-    if (isEndOfFile(this.token) && this.isInIncludedFile()) {
-      this.lexerStack.pop();
-    }
   }
 
   parse(): Chunk {
@@ -162,11 +162,7 @@ export default class Parser {
       location.bless(node as any as ASTNode);
     }
 
-    // A node belongs to an included file if it *started* in one. We can't just
-    // look at the lexer stack here: a lexer is popped as soon as it runs out of
-    // tokens, which for the last node of an included file happens before we get
-    // here. That made the last node look like it came from the top-level file,
-    // so the formatter would write it out right after the `#include` line.
+    // A node belongs to an included file if it *started* in one.
     node.included = location ?
       !this.mainFile.equals(location.loc.start.filename) :
       this.isInIncludedFile();
@@ -320,19 +316,13 @@ export default class Parser {
         const statement = this.parseStatement(flowContext);
 
         if (statement?.type === 'IncludeStatement') {
-          // Include statement - Load the included file and push a new lexer on
-          // top of the stack to lex it.
           const resolvedInclude = resolveIncludeFile(this.filename, statement.filename);
 
           // Check for circular dependencies
           if (this.lexerStack.some(l => l.lexer.filename.equals(resolvedInclude))) {
             this.errors.push(this.getIncludeStatementError(statement, 'Circular #includes detected!'));
           } else {
-            // Push include statement on there
-            block.push(statement);
-
-            // Load the file
-            this.includeFile(statement, resolvedInclude);
+            block.push(statement, ...this.parseIncludedFile(statement, resolvedInclude, flowContext));
           }
         } else {
           // optional semicolon ending the statement
@@ -361,8 +351,6 @@ export default class Parser {
           if (this.token.type === TokenType.Newline && !endingFunction(this.token)) {
             // If we got to a newline, consume the newline token and continue parsing.
             this.lexerNext();
-          } else if (isEndOfFile(this.token) && this.isInIncludedFile()) {
-            this.lexerStack.pop();
           } else {
           // Otherwise we got to the end of the block so we should stop.
             break;
@@ -373,24 +361,27 @@ export default class Parser {
           throw e;
         }
       }
-
-      if (isEndOfFile(this.token) && this.isInIncludedFile()) {
-        this.lexerStack.pop();
-      }
     }
 
     return this.finishNode(AST.block(block), true);
   }
 
-  includeFile(statement: IncludeStatement, resolvedInclude: ResolvedFile) {
+  // An #included file is parsed to its own end of file, so a statement or
+  // block left open in it can't run on into the file that includes it.
+  parseIncludedFile(statement: IncludeStatement, resolvedInclude: ResolvedFile, flowContext: FlowContext): Statement[] {
     if (!this.includeFileResolver.doesFileExist(resolvedInclude.path)) {
       this.errors.push(this.getIncludeStatementError(statement, 'File does not exist'));
-      return;
+      return [];
     }
 
     if (!this.includeFileResolver.isFile(resolvedInclude.path)) {
       this.errors.push(this.getIncludeStatementError(statement, 'File cannot be read (is it a directory?)'));
-      return;
+      return [];
+    }
+
+    if (this.lexerStack.length > MAX_INCLUDE_DEPTH) {
+      this.errors.push(this.getIncludeStatementError(statement, `#includes are nested more than ${MAX_INCLUDE_DEPTH} levels deep`));
+      return [];
     }
 
     if (!this.isInIncludedFile()) {
@@ -399,12 +390,17 @@ export default class Parser {
 
     const fileContents = this.includeFileResolver.loadFileContents(resolvedInclude.path);
     const newLexer = new Lexer(fileContents, resolvedInclude);
-    newLexer.next();
-
     this.lexerStack.push({
       lexer: newLexer,
       includeStatement: statement,
     });
+
+    try {
+      newLexer.next();
+      return this.parseBlock(flowContext, isEndOfFile).body;
+    } finally {
+      this.lexerStack.pop();
+    }
   }
 
   // There are two types of statements, simple and compound.

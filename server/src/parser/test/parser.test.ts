@@ -1,5 +1,5 @@
 import { strictEqual as eq } from 'assert';
-import { bounds, deepEquals, deepEqualsAST, getTestFileContents, MockFileResolver, parse } from './test-utils';
+import { bounds, deepEquals, deepEqualsAST, formatError, getTestFileContents, MockFileResolver, parse } from './test-utils';
 
 describe('Parser', () => {
   it('parses basic assignment statement', () => {
@@ -926,23 +926,16 @@ __music__
       deepEquals(errors, [{ type: 'ParseError' }]);
     });
 
-    // I'm not sure we really care to support #includes that only have a partial
-    // statement -- seems like it'll get messy real fast and could easily
-    // disrupt some of the other analysis that happens. For example, finding the
-    // starts/ends of scopes and its interaction with files that are #included
-    // seems like it could get complicated very fast.
-    //
-    // So, although this currently works, it may break in the future. And I feel
-    // that it'll be better for the health of this plugin if we just say that
-    // #includes only put declarations, etc. into the global scope, and can't
-    // affect anything more narrow than that.
-    it('handles an include file that contains a partial statement', () => {
+    it('reports a statement split across an #include in both files', () => {
       const fileResolver = new MockFileResolver();
       fileResolver.loadFileContents = () => 'a';
 
       const { block: { body }, errors } = parse('#include other_file.lua\n= 1', { includeFileResolver: fileResolver });
-      deepEquals(errors, []);
-      deepEquals(body, [{ type: 'IncludeStatement' }, { type: 'AssignmentStatement' }]);
+      deepEquals(errors.map(formatError).sort(), [
+        'main_test_file 2:0 unexpected symbol \'=\' near \'1\'',
+        'other_file.lua 1:0 assignment operator expected near \'<eof>\'',
+      ]);
+      deepEquals(body, [{ type: 'IncludeStatement' }]);
     });
 
     it('contains no warnings for symbols defined in included files', () => {
