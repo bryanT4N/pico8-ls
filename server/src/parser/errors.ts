@@ -8,6 +8,7 @@ import { sprintf } from './util';
 export const errMessages = Object.freeze({
   unexpected: 'unexpected %1 \'%2\' near \'%3\'',
   unexpectedEOF: 'unexpected symbol near \'<eof>\'',
+  unexpectedSymbol: 'unexpected symbol \'%1\'',
   expected: '\'%1\' expected near \'%2\'',
   expectedToken: '%1 expected near \'%2\'',
   unfinishedString: 'unfinished string near \'%1\'',

@@ -4,7 +4,11 @@ import { ParseError } from '../errors';
 import ResolvedFile from '../file-resolver';
 import Lexer from '../lexer';
 import { Token, TokenType, TokenValue } from '../tokens';
-import { deepEquals, getLexedTokens } from './test-utils';
+import { deepEquals, getLexedTokens, lexWithErrors } from './test-utils';
+
+function formatLexError(e: ParseError): string {
+  return `${e.bounds.start.line}:${e.bounds.start.column} ${e.message}`;
+}
 
 function assertNextToken(tokens: Token[], type: TokenType, value?: TokenValue) {
   if (tokens.length === 0) {
@@ -103,9 +107,10 @@ describe('Lexer', () => {
     });
 
     it('NumericLiteral - malformed hexadecimal fraction', () => {
-      assert.throws(() => {
-        getLexedTokens('0x.');
-      }, ParseError);
+      const { tokens, errors } = lexWithErrors('0x.');
+      assertNextToken(tokens, TokenType.NumericLiteral);
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 malformed number near \'0x.\'' ]);
     });
 
     it('NumericLiteral - hexadecimal with exponents', () => {
@@ -325,37 +330,139 @@ __music__
 
   describe('error handling', () => {
     it('returns an error for an unterminated string literal', () => {
-      assert.throws(() => {
-        getLexedTokens('"asdf');
-      }, ParseError);
+      const { tokens, errors } = lexWithErrors('"asdf');
+      assertNextToken(tokens, TokenType.StringLiteral, 'asdf');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 unfinished string near \'"asdf\'' ]);
+    });
+
+    it('ends an unterminated string literal at the end of its line', () => {
+      const { tokens, errors } = lexWithErrors('"asdf\nx');
+      assert.strictEqual(tokens[1].bounds.start.line, 2);
+      assertNextToken(tokens, TokenType.StringLiteral, 'asdf');
+      assertNextToken(tokens, TokenType.Identifier, 'x');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 unfinished string near \'"asdf\'' ]);
+    });
+
+    it('ends an unterminated string literal at the end of its CRLF line', () => {
+      const { tokens, errors } = lexWithErrors('"asdf\r\nx');
+      assert.strictEqual(tokens[1].bounds.start.line, 2);
+      assertNextToken(tokens, TokenType.StringLiteral, 'asdf');
+      assertNextToken(tokens, TokenType.Identifier, 'x');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 unfinished string near \'"asdf\'' ]);
     });
 
     it('doesn\'t return an error the second time next() is called', () => {
       const lexer = new Lexer('"asdf', new ResolvedFile('main_test_file', 'main_test_file'));
 
-      assert.throws(() => {
-        lexer.next();
-      }, ParseError);
+      lexer.next();
+      assert.strictEqual(lexer.token!.type, TokenType.StringLiteral);
+      assert.strictEqual(lexer.errors.length, 1);
       lexer.next();
       assert.strictEqual(lexer.token!.type, TokenType.EOF);
+      assert.strictEqual(lexer.errors.length, 1);
     });
 
     it('errors on unterminated long string literal', () => {
-      assert.throws(() => {
-        getLexedTokens('[[asdf');
-      }, ParseError);
+      const { tokens, errors } = lexWithErrors('[[asdf');
+      assertNextToken(tokens, TokenType.StringLiteral, 'asdf');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 unfinished long string (starting at line 1) near \'<eof>\'' ]);
+    });
+
+    it('ends an unterminated long string literal at the end of a file that ends in a line break', () => {
+      const { tokens } = lexWithErrors('[[asdf\n');
+      deepEquals(tokens.map(t => t.bounds.end), [{ index: 7, line: 2, column: 0 }, { index: 7, line: 2, column: 0 }]);
     });
 
     it('errors on malformed hex number literal', () => {
-      assert.throws(() => {
-        getLexedTokens('0xZ');
-      }, ParseError);
+      const { tokens, errors } = lexWithErrors('0xZ');
+      assertNextToken(tokens, TokenType.NumericLiteral);
+      assertNextToken(tokens, TokenType.Identifier, 'Z');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 malformed number near \'0x\'' ]);
     });
 
     it('errors on hex number literal with malformed binary exponent', () => {
-      assert.throws(() => {
-        getLexedTokens('0x3pQ');
-      }, ParseError);
+      const { tokens, errors } = lexWithErrors('0x3pQ');
+      assertNextToken(tokens, TokenType.NumericLiteral);
+      assertNextToken(tokens, TokenType.Identifier, 'Q');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 malformed number near \'0x3p\'' ]);
+    });
+
+    it('skips a lone !', () => {
+      const { tokens, errors } = lexWithErrors('a ! b');
+      assertNextToken(tokens, TokenType.Identifier, 'a');
+      assertNextToken(tokens, TokenType.Identifier, 'b');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:2 unexpected symbol \'!\'' ]);
+    });
+
+    it('skips a lone ! at the end of a line without taking the line break', () => {
+      const { tokens, errors } = lexWithErrors('a !\nb');
+      assert.strictEqual(tokens[1].bounds.start.line, 2);
+      assertNextToken(tokens, TokenType.Identifier, 'a');
+      assertNextToken(tokens, TokenType.Identifier, 'b');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:2 unexpected symbol \'!\'' ]);
+    });
+
+    it('still lexes != between names', () => {
+      const { tokens, errors } = lexWithErrors('a != b');
+      assertNextToken(tokens, TokenType.Identifier, 'a');
+      assertNextToken(tokens, TokenType.Punctuator, '!=');
+      assertNextToken(tokens, TokenType.Identifier, 'b');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), []);
+    });
+
+    it('skips an unknown character', () => {
+      const { tokens, errors } = lexWithErrors('a ` b');
+      assertNextToken(tokens, TokenType.Identifier, 'a');
+      assertNextToken(tokens, TokenType.Identifier, 'b');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:2 unexpected symbol \'`\'' ]);
+    });
+
+    it('keeps the character after an invalid escape sequence', () => {
+      const { tokens, errors } = lexWithErrors('"a\\qb"');
+      assertNextToken(tokens, TokenType.StringLiteral, 'aqb');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 invalid escape sequence near \'\\q\'' ]);
+    });
+
+    it('ends a string at a backslash at the end of the file', () => {
+      const { tokens, errors } = lexWithErrors('"a\\');
+      assert.deepStrictEqual(tokens.map(t => t.bounds.end.index), [ 3, 3 ]);
+      assertNextToken(tokens, TokenType.StringLiteral, 'a');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [
+        '1:0 invalid escape sequence near \'\\\'',
+        '1:0 unfinished string near \'"a\\\'',
+      ]);
+    });
+
+    it('runs an unterminated long comment to the end of the file', () => {
+      const { tokens, errors, comments } = lexWithErrors('a = 1\n--[[ open\nb = 2');
+      assertNextToken(tokens, TokenType.Identifier, 'a');
+      assertNextToken(tokens, TokenType.Punctuator, '=');
+      assertNextToken(tokens, TokenType.NumericLiteral, 1);
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(comments.map(c => [ c.loc!.start.line, c.loc!.end.line ]), [[ 2, 3 ]]);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '2:0 unfinished long comment (starting at line 2) near \'<eof>\'' ]);
+    });
+
+    it('lexes [= without a second [ as punctuators', () => {
+      const { tokens, errors } = lexWithErrors('t[=x');
+      assertNextToken(tokens, TokenType.Identifier, 't');
+      assertNextToken(tokens, TokenType.Punctuator, '[');
+      assertNextToken(tokens, TokenType.Punctuator, '=');
+      assertNextToken(tokens, TokenType.Identifier, 'x');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), []);
     });
   });
 

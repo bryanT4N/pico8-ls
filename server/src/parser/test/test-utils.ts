@@ -10,6 +10,7 @@ import { Bounds, codeLocationToString } from '../types';
 import ResolvedFile, { FileResolver } from '../file-resolver';
 import { DefinitionsUsagesResult, DefsUsagesOptions, findDefinitionsUsages } from '../definitions-usages';
 import { ParseError } from '../errors';
+import { Comment_ } from '../expressions';
 import { Chunk } from '../statements';
 
 export function getTestFileContents(filename: string): string {
@@ -26,6 +27,10 @@ export const TEST_CARTS = [
 ];
 
 export function getLexedTokens(input: string): Token[] {
+  return lexWithErrors(input).tokens;
+}
+
+export function lexWithErrors(input: string): { tokens: Token[], errors: ParseError[], comments: Comment_[] } {
   const lexer = new Lexer(input, new ResolvedFile('main_test_file', 'main_test_file'));
 
   const tokens: Token[] = [];
@@ -35,7 +40,7 @@ export function getLexedTokens(input: string): Token[] {
     tokens.push(lexer.token!);
   } while (lexer.token!.type !== TokenType.EOF);
 
-  return tokens;
+  return { tokens, errors: lexer.errors, comments: lexer.comments };
 }
 
 export type TestParseOptions = ParserOptions & DefsUsagesOptions & { filename?: string };

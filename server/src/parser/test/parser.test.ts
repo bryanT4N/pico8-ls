@@ -1,5 +1,6 @@
 import { strictEqual as eq } from 'assert';
-import { bounds, deepEquals, deepEqualsAST, formatError, getTestFileContents, MockFileResolver, parse } from './test-utils';
+import { Statement } from '../statements';
+import { bounds, deepEquals, deepEqualsAST, formatError, getTestFileContents, MockFileResolver, parse, TestFilesResolver } from './test-utils';
 
 describe('Parser', () => {
   it('parses basic assignment statement', () => {
@@ -896,6 +897,71 @@ __music__
       deepEquals(errors, [
         { message: '\')\' expected near \'+\'' },
         { message: 'unexpected symbol \'*\' near \'3\'' },
+      ]);
+    });
+  });
+
+  describe('lexical errors', () => {
+    const lines = (...l: string[]) => l.join('\n');
+    const statementsOf = (body: Statement[]) => body.map(s => `${s.type}${s.included ? '*' : ''} ${s.loc!.start.line}`);
+    const unfinishedStringLines = [ 'a = 1', 's = "abc', 'function f()', '  return 1', 'end', 'b = 2' ];
+
+    it('skips an unknown character', () => {
+      const { errors, block } = parse(lines('x = 1', 'b = 2 `', 'c = 3'));
+      deepEquals(errors.map(formatError), [ 'main_test_file 2:6 unexpected symbol \'`\'' ]);
+      deepEquals(statementsOf(block.body), [ 'AssignmentStatement 1', 'AssignmentStatement 2', 'AssignmentStatement 3' ]);
+    });
+
+    it('ends an unfinished string at the end of its line', () => {
+      const { errors, block } = parse(unfinishedStringLines.join('\n'));
+      deepEquals(errors.map(formatError), [ 'main_test_file 2:4 unfinished string near \'"abc\'' ]);
+      deepEquals(statementsOf(block.body), [ 'AssignmentStatement 1', 'AssignmentStatement 2', 'FunctionDeclaration 3', 'AssignmentStatement 6' ]);
+    });
+
+    it('keeps line numbers after an unfinished string in a CRLF file', () => {
+      const { errors, block } = parse(unfinishedStringLines.join('\r\n'));
+      deepEquals(errors.map(formatError), [ 'main_test_file 2:4 unfinished string near \'"abc\'' ]);
+      deepEquals(statementsOf(block.body), [ 'AssignmentStatement 1', 'AssignmentStatement 2', 'FunctionDeclaration 3', 'AssignmentStatement 6' ]);
+    });
+
+    it('keeps the statement before an unclosed long comment', () => {
+      const { errors, block } = parse(lines('a = 1', 'b = 2', '--[[ open', 'c = 3'));
+      deepEquals(errors.map(formatError), [ 'main_test_file 3:0 unfinished long comment (starting at line 3) near \'<eof>\'' ]);
+      deepEquals(statementsOf(block.body), [ 'AssignmentStatement 1', 'AssignmentStatement 2' ]);
+    });
+
+    it('skips a lone !', () => {
+      const { errors, block } = parse('x = 1 !\ny = 2');
+      deepEquals(errors.map(formatError), [ 'main_test_file 1:6 unexpected symbol \'!\'' ]);
+      deepEquals(statementsOf(block.body), [ 'AssignmentStatement 1', 'AssignmentStatement 2' ]);
+    });
+
+    it('sorts lexical and syntax errors by position', () => {
+      const { errors, block } = parse('x = ) "abc');
+      deepEquals(errors.map(formatError), [
+        'main_test_file 1:4 <expression> expected near \')\'',
+        'main_test_file 1:6 unfinished string near \'"abc\'',
+      ]);
+      deepEquals(statementsOf(block.body), []);
+    });
+
+    it('merges the lexical errors of an included file', () => {
+      const { errors, block } = parse('#include inc.lua\nx = 1', {
+        includeFileResolver: new TestFilesResolver({ 'inc.lua': 's = "abc' }),
+      });
+      deepEquals(errors.map(formatError), [ 'inc.lua 1:4 unfinished string near \'"abc\'' ]);
+      deepEquals(statementsOf(block.body), [ 'IncludeStatement 1', 'AssignmentStatement* 1', 'AssignmentStatement 2' ]);
+    });
+
+    it('puts the main file\'s errors first, then each included file\'s by path', () => {
+      const { errors } = parse(lines('#include b.lua', '#include a.lua', 's = "abc', 'x = )'), {
+        includeFileResolver: new TestFilesResolver({ 'b.lua': 'y = )', 'a.lua': 't = "a' }),
+      });
+      deepEquals(errors.map(formatError), [
+        'main_test_file 3:4 unfinished string near \'"abc\'',
+        'main_test_file 4:4 <expression> expected near \')\'',
+        'a.lua 1:4 unfinished string near \'"a\'',
+        'b.lua 1:4 <expression> expected near \')\'',
       ]);
     });
   });

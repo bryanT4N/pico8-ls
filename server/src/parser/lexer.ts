@@ -43,6 +43,7 @@ export default class Lexer {
   tokenStartLineIdx: number = 0;
 
   comments: Comment_[] = [];
+  errors: errors.ParseError[] = [];
   lookahead: Token | undefined;
   previousToken: Token | undefined;
   token: Token | undefined;
@@ -135,49 +136,9 @@ export default class Lexer {
     }
   }
 
-  // #### Raise a general unexpected error
-  //
-  // Usage should pass either a token object or a symbol string which was
-  // expected. We can also specify a nearby token such as <eof>, this will
-  // default to the currently active token.
-  //
-  // Example:
-  //
-  //     // Unexpected symbol 'end' near '<eof>'
-  //     unexpected(token);
-  //
-  // If there's no token in the buffer it means we have reached <eof>.
-
-  unexpectedToken(found: Token): never {
-    const near = this.lookahead!.value;
-
-    let type;
-    switch (found.type) {
-    case TokenType.StringLiteral:   type = 'string';      break;
-    case TokenType.Keyword:         type = 'keyword';     break;
-    case TokenType.Identifier:      type = 'identifier';  break;
-    case TokenType.NumericLiteral:  type = 'number';      break;
-    case TokenType.Punctuator:      type = 'symbol';      break;
-    case TokenType.BooleanLiteral:  type = 'boolean';     break;
-    case TokenType.NilLiteral:
-      errors.raiseErrForToken(found, errMessages.unexpected, 'symbol', 'nil', near);
-      break;
-    case TokenType.EOF:
-      errors.raiseErrForToken(found, errMessages.unexpectedEOF);
-      break;
-    }
-
-    errors.raiseErrForToken(found, errMessages.unexpected, type, found.value, near);
-  }
-
-  unexpectedString(found: string): never {
-    const near = this.lookahead?.value;
-    this.raiseErr(errMessages.unexpected, 'symbol', found, near);
-  }
-
-  raiseErr(fmtMessage: string, ...rest: any[]): never {
+  addError(fmtMessage: string, ...rest: any[]) {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    errors.raiseErr(this.getCurrentBounds(), fmtMessage, ...rest);
+    this.errors.push(errors.createErr(this.getCurrentBounds(), fmtMessage, ...rest));
   }
 
   getLocation(): CodeLocation {
@@ -219,174 +180,180 @@ export default class Lexer {
       return this.makeToken(TokenType.EOF, '<eof>');
     }
 
-    this.skipWhiteSpace();
-
-    while (
-      // Skip comments beginning with --
-      (45 === this.input.charCodeAt(this.index) && 45 === this.input.charCodeAt(this.index + 1))
-      // (pico-8 specific) Also skip comments beginning with `//`
-      || (47 === this.input.charCodeAt(this.index) && 47 === this.input.charCodeAt(this.index + 1))
-    ) {
-      const canBeLongComment = 45 === this.input.charCodeAt(this.index);
-      this.scanComment(canBeLongComment);
+    for (;;) {
       this.skipWhiteSpace();
-    }
 
-    if (this.index >= this.length) {
-      return this.makeToken(TokenType.EOF, '<eof>');
-    }
+      while (
+        // Skip comments beginning with --
+        (45 === this.input.charCodeAt(this.index) && 45 === this.input.charCodeAt(this.index + 1))
+        // (pico-8 specific) Also skip comments beginning with `//`
+        || (47 === this.input.charCodeAt(this.index) && 47 === this.input.charCodeAt(this.index + 1))
+      ) {
+        const canBeLongComment = 45 === this.input.charCodeAt(this.index);
+        this.scanComment(canBeLongComment);
+        this.skipWhiteSpace();
+      }
 
-    const charCode = this.input.charCodeAt(this.index);
-    const next = this.input.charCodeAt(this.index + 1);
+      if (this.index >= this.length) {
+        return this.makeToken(TokenType.EOF, '<eof>');
+      }
 
-    // Memorize the range index where the token begins.
-    this.tokenStart = this.index;
-    this.tokenStartLine = this.line;
-    this.tokenStartLineIdx = this.lineStart;
-    if (isIdentifierStart(charCode)) {
-      return this.scanIdentifierOrKeyword();
-    }
+      const charCode = this.input.charCodeAt(this.index);
+      const next = this.input.charCodeAt(this.index + 1);
 
-    switch (charCode) {
-    case 39: case 34: // '"
-      return this.scanStringLiteral();
+      // Memorize the range index where the token begins.
+      this.tokenStart = this.index;
+      this.tokenStartLine = this.line;
+      this.tokenStartLineIdx = this.lineStart;
+      if (isIdentifierStart(charCode)) {
+        return this.scanIdentifierOrKeyword();
+      }
 
-    case 48: case 49: case 50: case 51: case 52: case 53:
-    case 54: case 55: case 56: case 57: // 0-9
-      return this.scanNumericLiteral();
+      switch (charCode) {
+      case 39: case 34: // '"
+        return this.scanStringLiteral();
 
-    case 46: // .
-      // If the dot is followed by a digit it's a float.
-      if (isDecDigit(next)) {
+      case 48: case 49: case 50: case 51: case 52: case 53:
+      case 54: case 55: case 56: case 57: // 0-9
         return this.scanNumericLiteral();
-      }
-      if (46 === next) {
-        const uberNext = this.input.charCodeAt(this.index + 2);
-        if (61 === uberNext) {
-          return this.scanPunctuator('..=');
-        }
-        if (46 === uberNext) {
-          return this.scanVarargLiteral();
-        }
-        return this.scanPunctuator('..');
-      }
-      return this.scanPunctuator('.');
 
-    case 61: // =
-      if (61 === next) {
-        return this.scanPunctuator('==');
-      }
-      return this.scanPunctuator('=');
-
-    case 62: // >, >=, >>, >>= (arithmetic right shift), >>>, >>>= (logical right shift), >><, >><= (rotate right)
-      if (62 === next) { // it's one of >>, >>=, >>>, >>>=, >><, >><=
-        const uberNext = this.input.charCodeAt(this.index + 2);
-        if (61 === uberNext) {
-          return this.scanPunctuator('>>=');
+      case 46: // .
+        // If the dot is followed by a digit it's a float.
+        if (isDecDigit(next)) {
+          return this.scanNumericLiteral();
         }
-        if (62 === uberNext) { // it's >>> or >>>=
-          if (this.input.charCodeAt(this.index + 3) === 61) {
-            return this.scanPunctuator('>>>=');
+        if (46 === next) {
+          const uberNext = this.input.charCodeAt(this.index + 2);
+          if (61 === uberNext) {
+            return this.scanPunctuator('..=');
           }
-          return this.scanPunctuator('>>>');
-        }
-        if (60 === uberNext) { // it's >>< or >><=
-          if (this.input.charCodeAt(this.index + 3) === 61) {
-            return this.scanPunctuator('>><=');
+          if (46 === uberNext) {
+            return this.scanVarargLiteral();
           }
-          return this.scanPunctuator('>><');
+          return this.scanPunctuator('..');
         }
-        if (62 === next) {
-          return this.scanPunctuator('>>');
-        }
-      }
-      if (61 === next) {
-        return this.scanPunctuator('>=');
-      }
-      return this.scanPunctuator('>');
+        return this.scanPunctuator('.');
 
-    case 60: // <, <=, <<, <<= (left shift), <<>, <<>= (rotate left)
-      if (60 === next) { // it's <<, <<=, <<>, or <<>=
-        const uberNext = this.input.charCodeAt(this.index + 2);
-        if (61 === uberNext) {
-          return this.scanPunctuator('<<=');
+      case 61: // =
+        if (61 === next) {
+          return this.scanPunctuator('==');
         }
-        if (62 === uberNext) { // 62 is >
-          if (this.input.charCodeAt(this.index + 3) === 61) {
-            return this.scanPunctuator('<<>=');
+        return this.scanPunctuator('=');
+
+      case 62: // >, >=, >>, >>= (arithmetic right shift), >>>, >>>= (logical right shift), >><, >><= (rotate right)
+        if (62 === next) { // it's one of >>, >>=, >>>, >>>=, >><, >><=
+          const uberNext = this.input.charCodeAt(this.index + 2);
+          if (61 === uberNext) {
+            return this.scanPunctuator('>>=');
           }
-          return this.scanPunctuator('<<>');
+          if (62 === uberNext) { // it's >>> or >>>=
+            if (this.input.charCodeAt(this.index + 3) === 61) {
+              return this.scanPunctuator('>>>=');
+            }
+            return this.scanPunctuator('>>>');
+          }
+          if (60 === uberNext) { // it's >>< or >><=
+            if (this.input.charCodeAt(this.index + 3) === 61) {
+              return this.scanPunctuator('>><=');
+            }
+            return this.scanPunctuator('>><');
+          }
+          if (62 === next) {
+            return this.scanPunctuator('>>');
+          }
         }
-        return this.scanPunctuator('<<');
-      }
-      if (61 === next) {
-        return this.scanPunctuator('<=');
-      }
-      return this.scanPunctuator('<');
-
-    case 126: // ~
-      if (61 === next) {
-        return this.scanPunctuator('~=');
-      }
-      return this.scanPunctuator('~');
-
-    case 58: // :
-      if (58 === next) {
-        return this.scanPunctuator('::');
-      }
-      return this.scanPunctuator(':');
-
-    case 91: // [
-      // Check for a multiline string, they begin with [= or [[
-      if (91 === next || 61 === next) {
-        return this.scanLongStringLiteral();
-      }
-      return this.scanPunctuator('[');
-
-    case 94: // ^, ^= (exponentiation), ^^, ^^= (xor)
-      if (61 === next) {
-        return this.scanPunctuator('^=');
-      }
-      if (94 === next) {
-        if (61 === this.input.charCodeAt(this.index + 2)) {
-          return this.scanPunctuator('^^=');
+        if (61 === next) {
+          return this.scanPunctuator('>=');
         }
-        return this.scanPunctuator('^^');
+        return this.scanPunctuator('>');
+
+      case 60: // <, <=, <<, <<= (left shift), <<>, <<>= (rotate left)
+        if (60 === next) { // it's <<, <<=, <<>, or <<>=
+          const uberNext = this.input.charCodeAt(this.index + 2);
+          if (61 === uberNext) {
+            return this.scanPunctuator('<<=');
+          }
+          if (62 === uberNext) { // 62 is >
+            if (this.input.charCodeAt(this.index + 3) === 61) {
+              return this.scanPunctuator('<<>=');
+            }
+            return this.scanPunctuator('<<>');
+          }
+          return this.scanPunctuator('<<');
+        }
+        if (61 === next) {
+          return this.scanPunctuator('<=');
+        }
+        return this.scanPunctuator('<');
+
+      case 126: // ~
+        if (61 === next) {
+          return this.scanPunctuator('~=');
+        }
+        return this.scanPunctuator('~');
+
+      case 58: // :
+        if (58 === next) {
+          return this.scanPunctuator('::');
+        }
+        return this.scanPunctuator(':');
+
+      case 91: // [
+        // Check for a multiline string, they begin with [= or [[
+        if (91 === next || 61 === next) {
+          return this.scanLongStringLiteral();
+        }
+        return this.scanPunctuator('[');
+
+      case 94: // ^, ^= (exponentiation), ^^, ^^= (xor)
+        if (61 === next) {
+          return this.scanPunctuator('^=');
+        }
+        if (94 === next) {
+          if (61 === this.input.charCodeAt(this.index + 2)) {
+            return this.scanPunctuator('^^=');
+          }
+          return this.scanPunctuator('^^');
+        }
+        return this.scanPunctuator('^');
+
+      case 33: // != only (solitary ! is not allowed)
+        if (61 === next) {
+          return this.scanPunctuator('!=');
+        }
+        break;
+
+      // Check for assignment operators (+=, etc.)
+      case 37: // %
+      case 38: // &
+      case 42: // *
+      case 43: // +
+      case 45: // -
+      case 47: // /
+      case 92: // \
+      case 124: // |
+        if (61 === next) {
+          return this.scanPunctuator(this.input.charAt(this.index) + '=');
+        }
+        return this.scanPunctuator(this.input.charAt(this.index));
+
+      case 35: // #
+      case 36: // $
+      case 40: // (
+      case 41: // )
+      case 44: // ,
+      case 59: // ;
+      case 63: // ?
+      case 64: // @
+      case 93: // ]
+      case 123: // {
+      case 125: // }
+        return this.scanPunctuator(this.input.charAt(this.index));
       }
-      return this.scanPunctuator('^');
 
-    case 33: // != only (solitary ! is not allowed)
-      return this.scanPunctuator('!=');
-
-    // Check for assignment operators (+=, etc.)
-    case 37: // %
-    case 38: // &
-    case 42: // *
-    case 43: // +
-    case 45: // -
-    case 47: // /
-    case 92: // \
-    case 124: // |
-      if (61 === next) {
-        return this.scanPunctuator(this.input.charAt(this.index) + '=');
-      }
-      return this.scanPunctuator(this.input.charAt(this.index));
-
-    case 35: // #
-    case 36: // $
-    case 40: // (
-    case 41: // )
-    case 44: // ,
-    case 59: // ;
-    case 63: // ?
-    case 64: // @
-    case 93: // ]
-    case 123: // {
-    case 125: // }
-      return this.scanPunctuator(this.input.charAt(this.index));
+      this.index++;
+      this.addError(errMessages.unexpectedSymbol, this.input.charAt(this.tokenStart));
     }
-
-    this.unexpectedString(this.input.charAt(this.index));
   }
 
   // Whitespace has no semantic meaning in lua so simply skip ahead while
@@ -489,16 +456,9 @@ export default class Lexer {
         break;
       }
       // EOF or `\n` terminates a string literal. If we haven't found the
-      // ending delimiter by now, raise an exception.
+      // ending delimiter by now, the string is unfinished.
       if (this.index > this.length || isLineTerminator(this.charCode)) {
-        string += this.input.slice(stringStart, this.index - 1);
-
-        // Get ready for next time lex() is called
-        if (isLineTerminator(this.charCode)) {
-          this.consumeEOL();
-        }
-
-        this.raiseErr(errMessages.unfinishedString, this.input.slice(this.tokenStart, this.index - 1));
+        break;
       }
       if (92 === this.charCode) { // backslash
         if (!this.encodingMode.discardStrings) {
@@ -516,19 +476,24 @@ export default class Lexer {
       string += this.encodingMode.encodeByte(null);
       string += this.encodingMode.fixup(this.getLocation(), this.input.slice(stringStart, this.index - 1));
     }
+    if (delimiter !== this.charCode) {
+      // Leave the line break to skipWhiteSpace, so that the line gets counted.
+      this.index--;
+      this.addError(errMessages.unfinishedString, this.input.slice(this.tokenStart, this.index));
+    }
 
     return this.makeToken(TokenType.StringLiteral, string);
   }
 
   // Expect a multiline string literal and return it as a regular string
-  // literal, if it doesn't validate into a valid multiline string, throw an
-  // exception.
+  // literal, if it doesn't validate into a valid multiline string, return the
+  // `[` on its own.
 
   scanLongStringLiteral(): Token {
     const string = this.readLongString(false);
-    // Fail if it's not a multiline literal.
+    // Not a long string after all, just a `[`. The parser reports what follows.
     if (false === string) {
-      errors.raiseErrForToken(this.token!, errMessages.expected, '[', this.token!.value);
+      return this.makeToken(TokenType.Punctuator, '[');
     }
 
     return this.makeToken(
@@ -588,7 +553,7 @@ export default class Lexer {
     if ('.' !== this.input.charAt(this.index)) {
       // A minimum of one hex digit is required.
       if (!isHexDigit(this.input.charCodeAt(this.index))) {
-        this.raiseErr(errMessages.malformedNumber, this.input.slice(this.tokenStart, this.index));
+        return this.malformedHexLiteral();
       }
 
       while (isHexDigit(this.input.charCodeAt(this.index))) {
@@ -613,7 +578,7 @@ export default class Lexer {
       }
 
       if (needAtLeastOneFractionalDigit) {
-        this.raiseErr(errMessages.malformedNumber, this.input.slice(this.tokenStart, this.index));
+        return this.malformedHexLiteral();
       }
 
       const fracStr = this.input.slice(fractionStart, this.index);
@@ -639,7 +604,7 @@ export default class Lexer {
 
       // The binary exponent sign requires a decimal digit.
       if (!isDecDigit(this.input.charCodeAt(this.index))) {
-        this.raiseErr(errMessages.malformedNumber, this.input.slice(this.tokenStart, this.index));
+        return this.malformedHexLiteral();
       }
 
       while (isDecDigit(this.input.charCodeAt(this.index))) {
@@ -655,6 +620,11 @@ export default class Lexer {
       value: (digit + fraction) * binaryExponent,
       hasFractionPart: foundFraction || foundBinaryExponent,
     };
+  }
+
+  malformedHexLiteral() {
+    this.addError(errMessages.malformedNumber, this.input.slice(this.tokenStart, this.index));
+    return { value: 0, hasFractionPart: false };
   }
 
   // Decimal numbers are exactly the same in Lua and in JavaScript, because of
@@ -738,8 +708,8 @@ export default class Lexer {
         // eslint-disable-next-line max-len
         return this.encodingMode.encodeByte(parseInt(this.input.slice(sequenceStart + 1, this.index), 16)); //, '\\' + this.input.slice(sequenceStart, this.index));
       }
-      this.raiseErr(errMessages.hexadecimalDigitExpected, '\\' + this.input.slice(sequenceStart, this.index + 2));
-      break;
+      this.addError(errMessages.hexadecimalDigitExpected, '\\' + this.input.slice(sequenceStart, this.index + 2));
+      return this.input.charAt(this.index++);
 
     case '\\': case '"': case '\'':
       return this.input.charAt(this.index++);
@@ -751,7 +721,8 @@ export default class Lexer {
       return this.input.charAt(this.index++);
     }
 
-    this.raiseErr(errMessages.invalidEscape, '\\' + this.input.slice(sequenceStart, this.index + 1));
+    this.addError(errMessages.invalidEscape, '\\' + this.input.slice(sequenceStart, this.index + 1));
+    return this.index < this.length ? this.input.charAt(this.index++) : '';
   }
 
   // Comments begin with -- after which it will be decided if they are
@@ -762,12 +733,12 @@ export default class Lexer {
 
   scanComment(canBeLongComment: boolean) {
     this.tokenStart = this.index;
+    this.tokenStartLine = this.line;
+    this.tokenStartLineIdx = this.lineStart;
     this.index += 2; // --
 
     const character = this.input.charAt(this.index);
     const commentStart = this.index;
-    const lineStartComment = this.lineStart;
-    const lineComment = this.line;
     let content: string | false = '';
     let isLong = false;
 
@@ -795,20 +766,7 @@ export default class Lexer {
 
     // `Marker`s depend on tokens available in the parser and as comments are
     // intercepted in the lexer all location data is set manually.
-    node.loc = {
-      start: {
-        index: this.tokenStart,
-        line: lineComment,
-        column: this.tokenStart - lineStartComment,
-        filename: this.filename,
-      },
-      end: {
-        index: this.index,
-        line: this.line,
-        column: this.index - this.lineStart,
-        filename: this.filename,
-      },
-    };
+    node.loc = this.getCurrentBounds();
     this.comments.push(node);
   }
 
@@ -844,8 +802,8 @@ export default class Lexer {
     while (this.index < this.length) {
       // To keep track of line numbers run the `consumeEOL()` which increments
       // its counter.
-      while (isLineTerminator(this.input.charCodeAt(this.index))) {
-        this.consumeEOL();
+      if (this.consumeEOL()) {
+        continue;
       }
 
       character = this.input.charAt(this.index++);
@@ -874,7 +832,8 @@ export default class Lexer {
     }
 
     const errMessage = isComment ? errMessages.unfinishedLongComment : errMessages.unfinishedLongString;
-    this.raiseErr(errMessage, firstLine, '<eof>');
+    this.addError(errMessage, firstLine, '<eof>');
+    return this.input.slice(stringStart, this.index);
   }
 
   // ## Lex functions and helpers.

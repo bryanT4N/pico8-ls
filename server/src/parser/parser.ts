@@ -287,6 +287,9 @@ export default class Parser {
       this.errors.push(this.getUnexpectedTokenErr(this.token));
     }
 
+    this.addLexerErrors(this.lexer);
+    this.sortErrors();
+
     const chunk = this.finishNode(AST.chunk(body, this.errors));
     chunk.includes = this.includes;
     chunk.comments = this.lexer.comments;
@@ -299,6 +302,30 @@ export default class Parser {
     }
 
     return chunk;
+  }
+
+  addLexerErrors(lexer: Lexer) {
+    // One by one, since spreading a long list as arguments overflows the stack.
+    for (const error of lexer.errors) {
+      this.errors.push(error);
+    }
+  }
+
+  sortErrors() {
+    const mainPath = this.mainFile.path;
+    // The sort is stable, so errors at the same position keep the order they
+    // were found in.
+    this.errors.sort((a, b) => {
+      const aPath = a.bounds.start.filename.path;
+      const bPath = b.bounds.start.filename.path;
+      if (aPath !== bPath) {
+        if (aPath === mainPath || bPath === mainPath) {
+          return aPath === mainPath ? -1 : 1;
+        }
+        return aPath < bPath ? -1 : 1;
+      }
+      return a.bounds.start.index - b.bounds.start.index;
+    });
   }
 
   // A block contains a list of statements with an optional return statement
@@ -415,6 +442,7 @@ export default class Parser {
       this.lexerStack.pop();
       this.locations.length = locationDepth;
       this.scopeDepth = scopeDepth;
+      this.addLexerErrors(newLexer);
     }
   }
 
