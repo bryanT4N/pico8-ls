@@ -54,10 +54,8 @@ function createFoldingRegion(name: string, startLine: number, endLine: number, t
 }
 
 function getRegionNameFromNextComment(sortedComments: Comment_[], currentIndex: number): string {
-  // Assuming the next comment always exists and contains the name.
-  // This assumption is based on the previous user instruction.
   const nextComment = sortedComments[currentIndex + 1];
-  if (nextComment.raw === '-->8'){
+  if (!nextComment || nextComment.raw === '-->8'){
     return 'tab';
   }
   return nextComment.value.trim() || 'tab';

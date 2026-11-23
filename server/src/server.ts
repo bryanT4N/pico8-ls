@@ -455,7 +455,12 @@ function parseTextDocument(textDocument: TextDocument): ProjectDocument | undefi
     const { errors, includes } = chunk;
 
     // Set document info in caches
-    documentSymbols.set(textDocument.uri, buildDocumentSymbols(textDocument, chunk));
+    try {
+      documentSymbols.set(textDocument.uri, buildDocumentSymbols(textDocument, chunk));
+    } catch (e) {
+      console.error('Failed to build the outline', e);
+      documentSymbols.set(textDocument.uri, []);
+    }
     documentIncludes.set(textDocument.uri, includes!);
 
     // send errors back to client immediately
