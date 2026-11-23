@@ -98,13 +98,23 @@ describe('#include', function () {
   });
 
   it('reports a block left open at the end of an included file in that file only', () => {
-    const { errors, symbols } = parseWith(
-      lines('function _init()', '  x = 0', 'end', '#include inc.lua', 'function _update()', '  x += 1', 'end'),
+    const { errors, symbols, block } = parseWith(
+      lines('function _init()', '  x = 0', 'end', '#include inc.lua', 'a = 5', 'function _update()', '  x += 1', 'end'),
       { 'inc.lua': 'function typing()\n  local a = 1' },
     );
     assert.strictEqual(errors.length, 1, errors.map(formatError).join('\n'));
     assert.strictEqual(errors[0].bounds.start.filename.path, 'inc.lua');
-    assert.deepStrictEqual(symbols.map(s => s.name), [ '_init', 'x', '_update' ]);
+    assert.deepStrictEqual(symbols.map(s => s.name), [ '_init', 'x', 'a', '_update' ]);
+    assert.strictEqual(block.included, false);
+    assert.strictEqual(block.loc!.start.filename.path, 'main_test_file');
+    const assignment = block.body.find((s): s is AssignmentStatement => s.type === 'AssignmentStatement')!;
+    const target = assignment.variables[0] as Identifier;
+    assert.deepStrictEqual([ target.name, target.isLocal ], [ 'a', false ]);
+  });
+
+  it('keeps an #include whose file starts with a lexical error', () => {
+    const { block, includes } = parseWith('#include a.lua\nprint(1)', { 'a.lua': '"abc' });
+    assert.strictEqual(block.body[0], includes![0].stmt);
   });
 
   it('ends a one-line if at the end of an included file there', () => {

@@ -322,7 +322,13 @@ export default class Parser {
           if (this.lexerStack.some(l => l.lexer.filename.equals(resolvedInclude))) {
             this.errors.push(this.getIncludeStatementError(statement, 'Circular #includes detected!'));
           } else {
-            block.push(statement, ...this.parseIncludedFile(statement, resolvedInclude, flowContext));
+            // Pushed on its own so the #include stays when its file throws, and
+            // the file's statements one by one, since spreading a huge file's
+            // statements as arguments overflows the stack.
+            block.push(statement);
+            for (const includedStatement of this.parseIncludedFile(statement, resolvedInclude, flowContext)) {
+              block.push(includedStatement);
+            }
           }
         } else {
           // optional semicolon ending the statement
@@ -395,11 +401,20 @@ export default class Parser {
       includeStatement: statement,
     });
 
+    // A statement that throws part-way through leaves its location marker and
+    // scope depth behind; restoring both keeps that out of the including file.
+    // this.scopes is not cut back: destroyScope never shrinks it, so doing that
+    // would change what later valid code sees as local.
+    const locationDepth = this.locations.length;
+    const scopeDepth = this.scopeDepth;
+
     try {
       newLexer.next();
       return this.parseBlock(flowContext, isEndOfFile).body;
     } finally {
       this.lexerStack.pop();
+      this.locations.length = locationDepth;
+      this.scopeDepth = scopeDepth;
     }
   }
 
