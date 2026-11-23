@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Identifier } from '../expressions';
-import { RealFileResolver } from '../file-resolver';
+import { FileResolver, RealFileResolver } from '../file-resolver';
 import { AssignmentStatement, FunctionDeclaration, Statement } from '../statements';
 import { formatError, parse, parseInChild, TestFilesResolver } from './test-utils';
 
@@ -17,6 +17,12 @@ const parseWith = (code: string, files: Record<string, string>) =>
 const assignedNames = (body: Statement[]) => body
   .filter((s): s is AssignmentStatement => s.type === 'AssignmentStatement')
   .map(s => (s.variables[0] as Identifier).name);
+
+const errnoError = (message: string, code: string) => Object.assign(new Error(message), { code });
+
+const throwing = (error: Error) => (): never => {
+  throw error;
+};
 
 describe('#include', function () {
   this.timeout(30000);
@@ -155,6 +161,38 @@ describe('#include', function () {
     assert.ok(messages[0].startsWith('main_test_file 1:0 Can\'t #include f33.lua from f32.lua, which is #included from'), messages[0]);
     assert.ok(messages[0].endsWith(': #includes are nested more than 32 levels deep'), messages[0]);
     assert.strictEqual(assignedNames(block.body).pop(), 'v32');
+  });
+
+  const UNREADABLE: [string, Partial<FileResolver>, string][] = [
+    [ 'reading it fails', { loadFileContents: throwing(errnoError('EACCES: permission denied, open \'inc.lua\'', 'EACCES')) }, 'EACCES' ],
+    [ 'checking it fails', { isFile: throwing(errnoError('ENOENT: no such file or directory, stat \'inc.lua\'', 'ENOENT')) }, 'ENOENT' ],
+    [ 'reading it fails without an error code', { loadFileContents: throwing(new Error('locked')) }, 'locked' ],
+  ];
+  for (const [ how, failing, reason ] of UNREADABLE) {
+    it(`reports an #included file when ${how}`, () => {
+      const resolver = Object.assign(new TestFilesResolver({ 'inc.lua': 'x = 1' }), failing);
+      const chunk = parse('#include inc.lua\nfunction f() end', { includeFileResolver: resolver });
+      assert.deepStrictEqual(chunk.errors.map(formatError), [ `main_test_file 1:0 Can't #include inc.lua from main_test_file: File cannot be read (${reason})` ]);
+      assert.deepStrictEqual(statementsOf(chunk), [ 'IncludeStatement', 'FunctionDeclaration' ]);
+    });
+  }
+
+  it('parses 256 #included files and reports the next one', () => {
+    const errorsFor = (includes: number) => parseWith('#include a.lua\n'.repeat(includes), { 'a.lua': 'x = 1' }).errors.map(formatError);
+    assert.deepStrictEqual(errorsFor(256), []);
+    assert.deepStrictEqual(errorsFor(257), [ 'main_test_file 257:0 Can\'t #include a.lua from main_test_file: Too many #include parses (more than 256)' ]);
+  });
+
+  it('stops a tree of #includes that doubles at every level', () => {
+    const files: Record<string, string> = { 'f21.lua': 'x = 1' };
+    for (let i = 1; i <= 20; i++) {
+      files[`f${i}.lua`] = `#include f${i + 1}.lua\n#include f${i + 1}.lua`;
+    }
+    const result = parseInChild('#include f1.lua\nprint(x)', files);
+    assert.strictEqual(result.threw, null);
+    assert.strictEqual(result.errors.length, 1, result.errors.join('\n'));
+    assert.ok(result.errors[0].startsWith('main_test_file 1:0 Can\'t #include f'), result.errors[0]);
+    assert.ok(result.errors[0].endsWith(': Too many #include parses (more than 256)'), result.errors[0]);
   });
 
   it('accepts an empty included file', () => {

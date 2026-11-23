@@ -55,6 +55,10 @@ type UnderIndentedClose = { opener: Bounds, word: string, closer: 'end' | 'until
 // directory gives the same file an ever longer one (sub/a.lua, sub/sub/a.lua).
 const MAX_INCLUDE_DEPTH = 32;
 
+// A file included twice is parsed twice, so files that each include the next
+// one twice take 2^depth parses, even within MAX_INCLUDE_DEPTH.
+const MAX_INCLUDE_PARSES = 256;
+
 export type ParserOptions = {
   dontAddGlobalSymbols?: boolean,
   includeFileResolver?: FileResolver,
@@ -111,6 +115,9 @@ export default class Parser {
   dontAddGlobalSymbols: boolean;
 
   includes: Include[] = [];
+
+  private includeParses = 0;
+  private reportedTooManyIncludeParses = false;
 
   // eslint-disable-next-line @typescript-eslint/ban-types
   constructor(filename: ResolvedFile, input: string, options: ParserOptions = {}) {
@@ -454,13 +461,11 @@ export default class Parser {
   // An #included file is parsed to its own end of file, so a statement or
   // block left open in it can't run on into the file that includes it.
   parseIncludedFile(statement: IncludeStatement, resolvedInclude: ResolvedFile, flowContext: FlowContext): Statement[] {
-    if (!this.includeFileResolver.doesFileExist(resolvedInclude.path)) {
-      this.errors.push(this.getIncludeStatementError(statement, 'File does not exist'));
-      return [];
-    }
-
-    if (!this.includeFileResolver.isFile(resolvedInclude.path)) {
-      this.errors.push(this.getIncludeStatementError(statement, 'File cannot be read (is it a directory?)'));
+    if (this.includeParses >= MAX_INCLUDE_PARSES) {
+      if (!this.reportedTooManyIncludeParses) {
+        this.reportedTooManyIncludeParses = true;
+        this.errors.push(this.getIncludeStatementError(statement, `Too many #include parses (more than ${MAX_INCLUDE_PARSES})`));
+      }
       return [];
     }
 
@@ -469,11 +474,31 @@ export default class Parser {
       return [];
     }
 
+    if (!this.includeFileResolver.doesFileExist(resolvedInclude.path)) {
+      this.errors.push(this.getIncludeStatementError(statement, 'File does not exist'));
+      return [];
+    }
+
+    let fileContents: string;
+    try {
+      if (!this.includeFileResolver.isFile(resolvedInclude.path)) {
+        this.errors.push(this.getIncludeStatementError(statement, 'File cannot be read (is it a directory?)'));
+        return [];
+      }
+      fileContents = this.includeFileResolver.loadFileContents(resolvedInclude.path);
+    } catch (e) {
+      // The file can be locked, lose its permissions or go away after it was
+      // found; that is an error in this file, not a reason to lose the parse.
+      const reason = (e as NodeJS.ErrnoException | null)?.code ?? (e instanceof Error ? e.message : String(e));
+      this.errors.push(this.getIncludeStatementError(statement, `File cannot be read (${reason})`));
+      return [];
+    }
+
     if (!this.isInIncludedFile()) {
       this.includes.push({ stmt: statement, resolvedFile: resolvedInclude });
     }
 
-    const fileContents = this.includeFileResolver.loadFileContents(resolvedInclude.path);
+    this.includeParses++;
     const newLexer = new Lexer(fileContents, resolvedInclude);
     this.lexerStack.push({
       lexer: newLexer,
