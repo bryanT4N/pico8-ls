@@ -69,6 +69,7 @@ export type ChildParseResult = {
   errors: string[],
   statements: string[],
   outline: string[],
+  invalid: string[],
 };
 
 export function parseManyInChild(jobs: ChildParseJob[], timeoutMs: number): ChildParseResult[] {
