@@ -59,12 +59,21 @@ function groupRun(table: OutlineEntry, statements: Statement[], info: Map<Statem
   if (boundaryLines.some(line => definition.loc!.start.line < line && line <= lastMethod.loc!.end.line)) {
     return;
   }
+  const moving = methodIndices.flatMap(i => info.get(statements[i])!.methods!);
+  // Breadcrumbs only follow ranges that contain the cursor, so the stretched table must not cover an entry
+  // the cursor could reach before. The moving methods are exempt, and so is anything inside them, which they
+  // covered already.
+  const wouldCover = (entry: OutlineEntry) => entry !== table
+    && entry.loc.start.filename.equals(definition.loc!.start.filename)
+    && definition.loc!.end.index < entry.loc.start.index && entry.loc.start.index <= lastMethod.loc!.end.index
+    && !moving.some(method => contains(method.entry.loc, entry.loc));
+  if (table.parent.children.some(wouldCover)) {
+    return;
+  }
 
-  for (const i of methodIndices) {
-    for (const { entry, key } of info.get(statements[i])!.methods!) {
-      entry.name = key;
-      moveEntry(entry, table);
-    }
+  for (const { entry, key } of moving) {
+    entry.name = key;
+    moveEntry(entry, table);
   }
   table.loc = { start: table.loc.start, end: lastMethod.loc!.end };
   if (table.type === CodeSymbolType.Variable || table.type === CodeSymbolType.Field || table.type === CodeSymbolType.Array) {

@@ -239,5 +239,19 @@ describe('outline', () => {
       assert.strictEqual(outlineOf('function player:draw() end\nplayer.speed = 2'),
         lines('player:draw() [Method]', 'player [Table]', '  speed [Field]'));
     });
+
+    it('keeps methods in place when grouping would cover another entry', () => {
+      assert.strictEqual(outlineOf('game = {}\ngame.co = cocreate(function() end)\nfunction game:update() end'),
+        lines('game [Table]', '  co [Field]', '<anonymous function>() [Function]', 'game:update() [Method]'));
+      assert.strictEqual(outlineOf('p = {}\np.anim = {}\nfunction p.anim.walk() end\nfunction p:update() end'),
+        lines('p [Table]', '  anim [Table]', 'p.anim.walk() [Method]', 'p:update() [Method]'));
+      assert.strictEqual(outlineOf('obj = {}\nfunction obj:a() end\nobj = function() end\nfunction obj:b() end'),
+        lines('obj [Table]', 'obj:a() [Method]', 'obj() [Function]', 'obj:b() [Method]'));
+    });
+
+    it('still groups when a method body assigns a global for the first time', () => {
+      assert.strictEqual(outlineOf('vector = {}\nfunction vector:len()\n  count = 0\nend'),
+        lines('vector [Table]', '  len() [Method]', 'count [Variable]'));
+    });
   });
 });
