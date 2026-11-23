@@ -1,4 +1,4 @@
-﻿import { Expression, Identifier, Indexer, MemberExpression, TableConstructorExpression, Variable } from '../expressions';
+import { Expression, Identifier, Indexer, MemberExpression, TableConstructorExpression, Variable } from '../expressions';
 import { AnonymousFunctionName, AssignmentStatement, Block, Chunk, ForGenericStatement, ForNumericStatement,
   FunctionDeclaration, isStatementWithBody, LabelStatement, LocalStatement, Statement } from '../statements';
 import { Bounds } from '../types';
@@ -26,12 +26,12 @@ type SelfPath = { root: OutlineEntry, segments: Identifier[], stmt: Statement };
 
 type ValueTarget =
   | { kind: 'entry', entry: OutlineEntry, selfTable?: OutlineEntry | null, selfPath?: SelfPath }
-  | { kind: 'flat', owner: Owner, name: string, loc?: Bounds, selectionLoc?: Bounds } // rule 7, unnamed table (Task 8)
-  | { kind: 'anonymous', owner: Owner };                              // Task 8
+  | { kind: 'flat', owner: Owner, name: string, loc?: Bounds, selectionLoc?: Bounds } // rule 7, unnamed table
+  | { kind: 'anonymous', owner: Owner };
 
 class ResolverScope {
   decls = new Map<string, Decl>();
-  // undefined = inherit from enclosing scope; null = self is used but the table is not known
+  // undefined = inherit from enclosing scope; null = this function binds self but its table is unknown
   selfTable?: OutlineEntry | null;
   selfPath?: SelfPath;
   constructor(public owner: Owner, public block?: Block) {}
@@ -41,7 +41,9 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
   readonly root: Owner = { children: [] };
   // The first entry each global name got.
   private readonly globals = new Map<string, OutlineEntry>();
-  // For each expression value, where to attach it in the outline.
+  // For each expression value, where to attach it in the outline. The statement hooks fill this in before the
+  // visitor reaches the values (so do function and table constructor hooks for the values inside them); the
+  // whole design relies on that order.
   private readonly targets = new Map<Expression, ValueTarget>();
   private readonly statementInfo = new Map<Statement, StatementInfo>();
 
@@ -380,7 +382,6 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
   }
 
   private assignUnknownRoot(root: Identifier, segments: Identifier[], value: Expression | undefined): void {
-    // The outline can't know which table was passed in.
     const unwrapped = unwrapValue(value);
     if (unwrapped?.type === 'TableConstructorExpression') {
       const pathName = [ root, ...segments ].map(id => id.name).join('.');

@@ -1,10 +1,12 @@
 import { Comment_ } from '../expressions';
 import { Statement } from '../statements';
 import { Bounds } from '../types';
-import { CodeSymbolType, moveEntry, OutlineEntry } from './model';
+import { moveEntry, OutlineEntry } from './model';
+import { promoteToTable } from './members';
 
-// For a statement that assigns a table T, or members or methods of T: about is T, and defines is T
-// when the statement assigns T itself.
+// For a statement that assigns a table T, or members or methods of T: about is T, defines is T when the
+// statement assigns T itself, and methods holds only the methods one key deep (T.m), the ones that can be
+// grouped under T.
 export type StatementInfo = { about?: OutlineEntry, defines?: OutlineEntry, methods?: Array<{ entry: OutlineEntry, key: string }> };
 
 export function findBoundaryLines(comments: Comment_[]): number[] {
@@ -81,9 +83,7 @@ function groupRun(table: OutlineEntry, statements: Statement[], info: Map<Statem
     moveEntry(entry, table);
   }
   table.loc = { start: table.loc.start, end: lastMethod.loc!.end };
-  if (table.type === CodeSymbolType.Variable || table.type === CodeSymbolType.Field || table.type === CodeSymbolType.Array) {
-    table.type = CodeSymbolType.Table;
-  }
+  promoteToTable(table);
 }
 
 function contains(outer: Bounds, inner: Bounds): boolean {

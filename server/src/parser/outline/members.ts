@@ -22,6 +22,12 @@ export function tableTypeOf(ctor: TableConstructorExpression): CodeSymbolType {
   return CodeSymbolType.Table;
 }
 
+export function promoteToTable(entry: OutlineEntry): void {
+  if (entry.type === CodeSymbolType.Variable || entry.type === CodeSymbolType.Field || entry.type === CodeSymbolType.Array) {
+    entry.type = CodeSymbolType.Table;
+  }
+}
+
 export function getOrAddMember(
   table: OutlineEntry,
   key: string,
@@ -29,11 +35,7 @@ export function getOrAddMember(
   loc: Bounds,
   selectionLoc: Bounds,
 ): OutlineEntry {
-  if (table.type === CodeSymbolType.Variable ||
-      table.type === CodeSymbolType.Field ||
-      table.type === CodeSymbolType.Array) {
-    table.type = CodeSymbolType.Table;
-  }
+  promoteToTable(table);
   const existing = table.members.get(key);
   if (existing) {
     return existing;
