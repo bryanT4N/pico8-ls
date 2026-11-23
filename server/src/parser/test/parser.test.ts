@@ -1004,6 +1004,28 @@ __music__
       deepEquals(body, [{ type: 'IncludeStatement' }]);
     });
 
+    it('keeps the line numbers after a lone #', () => {
+      const { block: { body }, comments, errors } = parse([ 'x = 1', '#', '-->8', 'function f()', 'end', 'y = 2' ].join('\n'));
+      deepEquals(comments!.map(c => c.loc!.start.line), [ 3 ]);
+      deepEquals(body.map(s => s.loc!.start.line), [ 1, 4, 6 ]);
+      deepEquals(errors.map(formatError), [ 'main_test_file 2:0 #include <filename> expected near \'#\'' ]);
+    });
+
+    it('keeps a comment between a lone # and the end of a cart\'s code', () => {
+      const p8 = 'pico-8 cartridge // http://www.pico-8.com\nversion 43\n__lua__\n';
+      const { comments } = parse(p8 + [ 'x = 1', '#', '-- c', '__gfx__', '0000' ].join('\n'));
+      deepEquals(comments!.map(c => `${c.loc!.start.line} ${c.raw}`), [ '6 -- c' ]);
+    });
+
+    it('reports a lexical error on the line after a lone # once', () => {
+      const { block: { body }, errors } = parse('#\n` x = 1');
+      deepEquals(errors.map(formatError), [
+        'main_test_file 1:0 #include <filename> expected near \'#\'',
+        'main_test_file 2:0 unexpected symbol \'`\'',
+      ]);
+      deepEquals(body.map(s => `${s.type} ${s.loc!.start.line}`), [ 'AssignmentStatement 2' ]);
+    });
+
     it('contains no warnings for symbols defined in included files', () => {
       const fileResolver = new MockFileResolver();
       fileResolver.loadFileContents = () => 'local a = 5';

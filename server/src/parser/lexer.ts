@@ -795,12 +795,18 @@ export default class Lexer {
     this.index += level + 1;
 
     // If the first character is a newline, ignore it and begin on next line.
-    if (isLineTerminator(this.input.charCodeAt(this.index))) {
+    if (isLineTerminator(this.input.charCodeAt(this.index)) && !this.isBeforeNextSection()) {
       this.consumeEOL();
     }
 
     const stringStart = this.index;
     while (this.index < this.length) {
+      // PICO-8 ends a cart's code at the next section even inside a long string
+      // or comment. The line break is left for lex(), which ends the code there.
+      if (this.isBeforeNextSection()) {
+        break;
+      }
+
       // To keep track of line numbers run the `consumeEOL()` which increments
       // its counter.
       if (this.consumeEOL()) {
@@ -835,6 +841,22 @@ export default class Lexer {
     const errMessage = isComment ? errMessages.unfinishedLongComment : errMessages.unfinishedLongString;
     this.addError(errMessage, firstLine, '<eof>');
     return this.input.slice(stringStart, this.index);
+  }
+
+  // Whether the line break at this.index is followed by a line that
+  // scanIdentifierOrKeyword takes as the end of a .p8 file's code.
+  isBeforeNextSection(): boolean {
+    const charCode = this.input.charCodeAt(this.index);
+    if (!this.fullP8File || !isLineTerminator(charCode)) {
+      return false;
+    }
+    const next = this.input.charCodeAt(this.index + 1);
+    const lineStart = this.index + (isLineTerminator(next) && next !== charCode ? 2 : 1);
+    let wordEnd = lineStart;
+    while (isIdentifierPart(this.input.charCodeAt(wordEnd))) {
+      wordEnd++;
+    }
+    return isP8EndOfCodeSection(this.input.slice(lineStart, wordEnd)) && isLineTerminator(this.input.charCodeAt(wordEnd));
   }
 
   // ## Lex functions and helpers.
@@ -879,7 +901,19 @@ export default class Lexer {
     if (fromIdx === undefined) {
       fromIdx = this.index;
     } else {
+      // The lookahead is lexed again from the end of this line, so whatever
+      // lexing it did past fromIdx (line breaks, comments, errors, reaching the
+      // end of the code) must be undone, or it counts twice.
+      const start = this.token!.bounds.start;
       this.index = fromIdx;
+      this.line = start.line;
+      this.lineStart = start.index - start.column;
+      this.tokenStart = fromIdx;
+      this.tokenStartLine = this.line;
+      this.tokenStartLineIdx = this.lineStart;
+      this.reachedEnd = false;
+      this.comments = this.comments.filter(comment => comment.loc!.start.index < fromIdx!);
+      this.errors = this.errors.filter(error => error.bounds.start.index < fromIdx!);
     }
 
     let charCode = this.input.charCodeAt(this.index);

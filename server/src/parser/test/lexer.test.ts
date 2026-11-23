@@ -434,6 +434,13 @@ __music__
       assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 invalid escape sequence near \'\\q\'' ]);
     });
 
+    it('keeps the characters after a \\x without two hexadecimal digits', () => {
+      const { tokens, errors } = lexWithErrors('"\\xZZ"');
+      assertNextToken(tokens, TokenType.StringLiteral, 'xZZ');
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 hexadecimal digit expected near \'\\xZ\'' ]);
+    });
+
     it('ends a string at a backslash at the end of the file', () => {
       const { tokens, errors } = lexWithErrors('"a\\');
       assert.deepStrictEqual(tokens.map(t => t.bounds.end.index), [ 3, 3 ]);
