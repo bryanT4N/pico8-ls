@@ -1,4 +1,4 @@
-import { deepEquals, parse, getTestFileContents } from './test-utils';
+import { deepEquals, parse, getTestFileContents, TestFilesResolver } from './test-utils';
 import { FoldingRangeVisitor } from '../folding-range-visitor';
 import { FoldingRange } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -424,5 +424,28 @@ __map__
     const textDocument = TextDocument.create('test.lua', 'pico-8-lua', 0, code);
 
     deepEquals(getSectionFoldingRegions(textDocument), []);
+  });
+});
+
+describe('Folding ranges with #include', () => {
+  const rangesOf = (code: string, files: Record<string, string>) => {
+    const visitor = new FoldingRangeVisitor();
+    visitor.visit(parse(code, { includeFileResolver: new TestFilesResolver(files) }));
+    return visitor.ranges;
+  };
+
+  it('folds only the main file\'s own blocks', () => {
+    const main = [ '-- main.lua', '#include inc.lua', 'a = 1', 'b = 2', 'c = 3', 'd = 4', 'function main_fn()', '  return 1', 'end' ].join('\n');
+    const inc = [ '-- inc.lua', '', 'function inc_fn()', '  if x then', '    y()', '  end', 'end', 't = {', '  a = 1,', '}' ].join('\n');
+    deepEquals(rangesOf(main, { 'inc.lua': inc }), [{ startLine: 6, endLine: 8 }]);
+  });
+
+  it('ignores a multi-line statement at the end of an included file', () => {
+    const main = [ ...Array.from({ length: 30 }, (_, i) => `v${i + 1} = ${i + 1}`), '#include inc.lua', 'print(v1)' ].join('\n');
+    deepEquals(rangesOf(main, { 'inc.lua': 'x = 1\ny = 2 +\n  3' }), []);
+  });
+
+  it('folds a function whose body includes a file, but not the included lines', () => {
+    deepEquals(rangesOf('function f()\n#include body.lua\nend', { 'body.lua': 'if a then\n  b()\nend' }), [{ startLine: 0, endLine: 2 }]);
   });
 });
