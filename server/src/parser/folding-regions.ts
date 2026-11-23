@@ -1,5 +1,6 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Comment_ } from './expressions';
+import { isTabMarker, regionMarkerOf } from './region-markers';
 
 export type CartridgeSection = {
   // Name of the section, without the surrounding underscores (e.g. 'lua', 'gfx')
@@ -34,32 +35,7 @@ export function findCartridgeSections(lines: string[]): CartridgeSection[] {
   return sections;
 }
 
-function findSpecialMarkers(lines: string[]): { luaStartLine?: number, luaEndLine?: number } {
-  const sections = findCartridgeSections(lines);
-  const luaSection = sections.find(section => section.name === 'lua');
-
-  if (!luaSection) {
-    return {};
-  }
-
-  return { luaStartLine: luaSection.startLine, luaEndLine: luaSection.endLine };
-}
-
-function createFoldingRegion(name: string, startLine: number, endLine: number, tabNumber: number) {
-  return {
-    name: `${tabNumber}: ${name}`,
-    startLine: startLine,
-    endLine: endLine,
-  };
-}
-
-function getRegionNameFromNextComment(sortedComments: Comment_[], currentIndex: number): string {
-  const nextComment = sortedComments[currentIndex + 1];
-  if (!nextComment || nextComment.raw === '-->8'){
-    return 'tab';
-  }
-  return nextComment.value.trim() || 'tab';
-}
+export type FoldingRegion = { name: string, startLine: number, endLine: number, kind: 'tab' | 'region' };
 
 // Folding regions for the cartridge sections themselves (__lua__, __gfx__, __map__, etc).
 // Each region spans from the section marker to the last line before the next section.
@@ -76,104 +52,48 @@ export function getSectionFoldingRegions(textDocument: TextDocument): { name: st
     }));
 }
 
-export function getFoldingRegions(textDocument: TextDocument, comments: Comment_[]): { name: string, startLine: number, endLine: number }[] {
-  const foldingRegions: { name: string, startLine: number, endLine: number }[] = [];
-  const lines = textDocument.getText().split('\n');
-  const sortedComments = comments.sort((a, b) => a.loc!.start.line - b.loc!.start.line);
+export function getFoldingRegions(textDocument: TextDocument, comments: Comment_[]): FoldingRegion[] {
+  const sortedComments = [ ...comments ].sort((a, b) => a.loc!.start.line - b.loc!.start.line);
+  const lua = findCartridgeSections(textDocument.getText().split('\n')).find(section => section.name === 'lua');
+  const codeStartLine = lua ? lua.startLine + 1 : 0;
+  const codeEndLine = lua ? lua.endLine : textDocument.lineCount - 1;
+  const regions: FoldingRegion[] = [];
 
-  const { luaStartLine, luaEndLine } = findSpecialMarkers(lines);
-
-  let tabNumber = 0;
-  let currentFoldingStartLine: number | undefined = undefined;
-  let currentFoldingName: string | undefined = undefined;
-
-  // Stack to handle nested #region comments
-  const regionStack: { startLine: number; name: string; isDefaultName: boolean }[] = [];
-  const regionStartRegex = /^#region\s*(.*)$/;
-  const regionEndRegex = /^#endregion\s*(.*)$/;
-
-  // Handle the initial region before the first '-->8' comment, if __lua__ exists.
-  if (luaStartLine !== undefined) {
-    const firstFoldingComment = sortedComments.find(comment =>
-      comment.raw === '-->8' && comment.loc!.start.line - 1 > luaStartLine,
-    );
-
-    if (firstFoldingComment) {
-      const regionStartLine = luaStartLine + 1;
-      // The name for this initial region is taken from a comment on the first line of the region, if it exists.
-      const commentOnFirstLine = sortedComments.find(c => c.loc!.start.line - 1 === regionStartLine);
-      const regionName = commentOnFirstLine ? commentOnFirstLine.value.trim() : 'tab';
-
-      foldingRegions.push(createFoldingRegion(regionName, regionStartLine, firstFoldingComment.loc!.start.line - 2, tabNumber++));
-    }
-  }
-
-  // Iterate through comments to find '-->8' markers and create folding regions.
-  for (let i = 0; i < sortedComments.length; i++) {
-    const comment = sortedComments[i];
-    const commentText = comment.value.trim();
-
-    // Handle #region and #endregion markers
-    const regionStartMatch = regionStartRegex.exec(commentText);
-    if (regionStartMatch) {
-      const label = regionStartMatch[1] ? regionStartMatch[1].trim() : '';
-      const name = label || 'region';
-      regionStack.push({ startLine: comment.loc!.start.line, name: name, isDefaultName: !label });
-    } else {
-      const regionEndMatch = regionEndRegex.exec(commentText);
-      if (regionEndMatch) {
-        if (regionStack.length > 0) {
-          const startRegion = regionStack.pop()!;
-          const endLabel = regionEndMatch[1] ? regionEndMatch[1].trim() : '';
-
-          let finalName = startRegion.name;
-          if (startRegion.isDefaultName && endLabel) {
-            finalName = endLabel;
-          }
-
-          foldingRegions.push({
-            name: finalName,
-            startLine: startRegion.startLine - 1,
-            endLine: comment.loc!.start.line - 1,
-          });
-        }
+  const tabMarkerLines = sortedComments.filter(isTabMarker).map(comment => comment.loc!.start.line - 1);
+  if (tabMarkerLines.length > 0) {
+    const startLines = [ codeStartLine, ...tabMarkerLines.map(line => line + 1) ];
+    const endLines = [ ...tabMarkerLines.map(line => line - 1), codeEndLine ];
+    startLines.forEach((startLine, tabNumber) => {
+      const endLine = endLines[tabNumber];
+      // An empty tab still takes its number, so that the numbers match the tabs in PICO-8.
+      if (endLine >= startLine) {
+        regions.push({ name: `${tabNumber}: ${tabName(sortedComments, startLine)}`, startLine, endLine, kind: 'tab' });
       }
-    }
-
-    if (comment.raw === '-->8') {
-      if (currentFoldingStartLine !== undefined) {
-        foldingRegions.push(createFoldingRegion(currentFoldingName!, currentFoldingStartLine, comment.loc!.start.line - 2, tabNumber++));
-      }
-      currentFoldingStartLine = comment.loc!.start.line;
-      currentFoldingName = getRegionNameFromNextComment(sortedComments, i);
-    }
-  }
-
-  // Handle the last folding region.
-  if (currentFoldingStartLine !== undefined) {
-    // The last tab ends where the __lua__ section ends (right before the next
-    // section marker), or at the end of the file if there is no next section.
-    const endLine = luaEndLine !== undefined ? luaEndLine : textDocument.lineCount - 1;
-    foldingRegions.push(createFoldingRegion(currentFoldingName!, currentFoldingStartLine, endLine, tabNumber++));
-  }
-
-  // Close any remaining open #region markers at the end of the file
-  while (regionStack.length > 0) {
-    const startRegion = regionStack.pop()!;
-    foldingRegions.push({
-      name: startRegion.name,
-      startLine: startRegion.startLine,
-      endLine: textDocument.lineCount - 1, // Fold to the end of the file
     });
   }
 
-  // Sort the folding regions for consistent output
-  foldingRegions.sort((a, b) => {
-    if (a.startLine !== b.startLine) {
-      return a.startLine - b.startLine;
+  const openRegions: { startLine: number, label: string }[] = [];
+  for (const comment of sortedComments) {
+    const marker = regionMarkerOf(comment);
+    const line = comment.loc!.start.line - 1;
+    if (marker?.kind === 'start') {
+      openRegions.push({ startLine: line, label: marker.label });
+    } else if (marker?.kind === 'end') {
+      const start = openRegions.pop();
+      if (start) {
+        regions.push({ name: start.label || marker.label || 'region', startLine: start.startLine, endLine: line, kind: 'region' });
+      }
     }
-    return a.endLine - b.endLine;
-  });
+  }
+  for (const start of openRegions) {
+    regions.push({ name: start.label || 'region', startLine: start.startLine, endLine: codeEndLine, kind: 'region' });
+  }
 
-  return foldingRegions;
+  return regions.sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+}
+
+// PICO-8 shows the comment that starts a tab's first line as the name of the tab.
+function tabName(sortedComments: Comment_[], startLine: number): string {
+  const comment = sortedComments.find(c => c.loc!.start.line - 1 === startLine && c.startsLine && !isTabMarker(c));
+  return comment?.value.split(/\r\n|\r|\n/).map(line => line.trim()).find(line => line !== '') ?? 'tab';
 }

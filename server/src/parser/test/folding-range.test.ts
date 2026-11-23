@@ -11,6 +11,14 @@ function getFoldingRanges(code: string): FoldingRange[] {
   return visitor.ranges;
 }
 
+const lines = (...l: string[]) => l.join('\n');
+const P8 = 'pico-8 cartridge // http://www.pico-8.com\nversion 43\n__lua__\n';
+
+function foldingRegionsOf(filename: string, code: string) {
+  const textDocument = TextDocument.create(filename, filename.endsWith('.p8') ? 'pico-8' : 'pico-8-lua', 0, code);
+  return getFoldingRegions(textDocument, parse(code).comments || []);
+}
+
 describe('Folding Ranges', () => {
   it('creates a folding range for an if statement', () => {
     const code = `
@@ -317,7 +325,7 @@ local b = 2
     const regions = getFoldingRegions(textDocument, comments || []);
 
     deepEquals(regions, [
-      { name: 'UnclosedRegion', startLine: 1, endLine: 2 },
+      { name: 'UnclosedRegion', startLine: 0, endLine: 2 },
     ]);
   });
 
@@ -368,6 +376,77 @@ local b = 2
       .map(r => ({ startLine: r.startLine, endLine: r.endLine }));
 
     deepEquals(actualFoldingRanges, expectedFoldingRanges);
+  });
+
+  it('ends an unclosed #region at the end of the __lua__ section', () => {
+    deepEquals(foldingRegionsOf('test.p8', P8 + lines('function a() end', '-- #region open', 'function b() end', '__gfx__', '0000')), [
+      { name: 'open', startLine: 4, endLine: 5 },
+    ]);
+  });
+
+  it('names a tab after the comment on its first line only', () => {
+    deepEquals(foldingRegionsOf('test.p8', P8 + lines('-- main tab', 'f()', '-->8', 'function e() end', 'x = 1 -- later', '__gfx__')), [
+      { name: '0: main tab', startLine: 3, endLine: 4 },
+      { name: '1: tab', startLine: 6, endLine: 7 },
+    ]);
+  });
+
+  it('does not name a tab after a comment that follows code', () => {
+    deepEquals(foldingRegionsOf('test.lua', lines('x = 1 -- not a name', '-->8', 'y = 2 -- nor this')), [
+      { name: '0: tab', startLine: 0, endLine: 0 },
+      { name: '1: tab', startLine: 2, endLine: 2 },
+    ]);
+  });
+
+  it('names a tab after the first line of a long comment', () => {
+    deepEquals(foldingRegionsOf('test.p8', P8 + lines('f()', '-->8', '--[[ a', 'b ]]', 'g()', '__gfx__')), [
+      { name: '0: tab', startLine: 3, endLine: 3 },
+      { name: '1: a', startLine: 5, endLine: 7 },
+    ]);
+  });
+
+  it('names a tab after the first line of a long comment in a CRLF file', () => {
+    const code = [ 'pico-8 cartridge // http://www.pico-8.com', 'version 43', '__lua__', 'f()', '-->8', '--[[ third tab', 'comments', ']]', 'g()', '__gfx__' ].join('\r\n');
+    deepEquals(foldingRegionsOf('test.p8', code), [
+      { name: '0: tab', startLine: 3, endLine: 3 },
+      { name: '1: third tab', startLine: 5, endLine: 8 },
+    ]);
+  });
+
+  it('leaves out empty tabs but keeps counting', () => {
+    deepEquals(foldingRegionsOf('test.p8', P8 + lines('-->8', 'function a() end', '-->8', '-->8', 'function b() end', '__gfx__', '0000')), [
+      { name: '1: tab', startLine: 4, endLine: 4 },
+      { name: '3: tab', startLine: 7, endLine: 7 },
+    ]);
+  });
+
+  it('gives a .lua file a tab 0 before its first -->8', () => {
+    deepEquals(foldingRegionsOf('test.lua', lines('function f() end', '-->8', 'function g() end')), [
+      { name: '0: tab', startLine: 0, endLine: 0 },
+      { name: '1: tab', startLine: 2, endLine: 2 },
+    ]);
+  });
+
+  it('names tab 0 of a .lua file after its first line', () => {
+    deepEquals(foldingRegionsOf('test.lua', lines('-- setup', 'function f() end', '-->8', '-- enemies', 'function g() end')), [
+      { name: '0: setup', startLine: 0, endLine: 1 },
+      { name: '1: enemies', startLine: 3, endLine: 4 },
+    ]);
+  });
+
+  it('only counts region markers that start a line and are followed by a space', () => {
+    const code = lines('x = 1 -- #region trailing', 'y = 2', '-- #endregion', '--#regionfoo', 'z = 1', '--#endregion', '--#region ok', 'w = 1', '--#endregion');
+    deepEquals(foldingRegionsOf('test.lua', code), [
+      { name: 'ok', startLine: 6, endLine: 8 },
+    ]);
+  });
+
+  it('does not reorder the comments it is given', () => {
+    const code = '-- a\nx = 1\n-- b\n-->8\n-- c';
+    const c = parse(code).comments!;
+    const comments = [ c[2], c[0], c[3], c[1] ];
+    getFoldingRegions(TextDocument.create('test.lua', 'pico-8-lua', 0, code), comments);
+    deepEquals(comments.map(comment => comment.raw), [ '-->8', '-- a', '-- c', '-- b' ]);
   });
 });
 

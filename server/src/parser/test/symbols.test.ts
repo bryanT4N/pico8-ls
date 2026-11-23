@@ -233,6 +233,13 @@ describe('outline', () => {
         lines('obj [Table]', 'obj:a() [Method]'));
     });
 
+    it('does not treat trailing or unspaced region comments as boundaries', () => {
+      assert.strictEqual(outlineOf('obj = {}\nfunction obj:a() end -- #region trailing\nfunction obj:b() end'),
+        lines('obj [Table]', '  a() [Method]', '  b() [Method]'));
+      assert.strictEqual(outlineOf('obj = {}\nfunction obj:a() end\n--#regionfoo\nfunction obj:b() end'),
+        lines('obj [Table]', '  a() [Method]', '  b() [Method]'));
+    });
+
     it('groups methods of a local table inside a function', () => {
       assert.strictEqual(outlineOf(lines('function new_game()', '  local game = {}',
         '  function game.update() end', '  function game.draw() end', '  return game', 'end')),

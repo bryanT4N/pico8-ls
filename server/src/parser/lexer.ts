@@ -762,7 +762,8 @@ export default class Lexer {
       content = this.input.slice(commentStart, this.index);
     }
 
-    const node = AST.comment(content, this.input.slice(this.tokenStart, this.index));
+    const startsLine = /^[ \t\v\f]*$/.test(this.input.slice(this.tokenStartLineIdx, this.tokenStart));
+    const node = AST.comment(content, this.input.slice(this.tokenStart, this.index), startsLine);
 
     // `Marker`s depend on tokens available in the parser and as comments are
     // intercepted in the lexer all location data is set manually.

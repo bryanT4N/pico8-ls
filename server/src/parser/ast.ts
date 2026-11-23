@@ -316,11 +316,12 @@ export default class AST {
     };
   }
 
-  static comment(value: string, raw: string): Comment_ {
+  static comment(value: string, raw: string, startsLine: boolean): Comment_ {
     return {
       type: 'Comment',
       value: value,
       raw: raw,
+      startsLine: startsLine,
     };
   }
 }

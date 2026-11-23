@@ -1,11 +1,11 @@
 import {
-  DocumentSymbol, Range, SymbolKind,
+  DocumentSymbol, Position, Range, SymbolKind,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Bounds } from './parser/types';
 import { CodeSymbolType, CodeSymbol } from './parser/symbols';
 import { Chunk } from './parser/statements';
-import { getFoldingRegions } from './parser/folding-regions';
+import { FoldingRegion, getFoldingRegions } from './parser/folding-regions';
 
 const symbolTypeLookup: Record<CodeSymbolType, SymbolKind> = {
   [CodeSymbolType.Function]: SymbolKind.Function,
@@ -41,37 +41,52 @@ export function toDocumentSymbol(textDocument: TextDocument, symbol: CodeSymbol)
 }
 
 export function buildDocumentSymbols(textDocument: TextDocument, chunk: Chunk): DocumentSymbol[] {
-  const symbolInfo: DocumentSymbol[] = chunk.symbols.map(sym => toDocumentSymbol(textDocument, sym));
-  const foldingRegions = getFoldingRegions(textDocument, chunk.comments || []);
-  const rootSymbols: DocumentSymbol[] = [];
-  const regionSymbols: DocumentSymbol[] = foldingRegions.map(region => {
-    const range = Range.create(region.startLine, 0, region.endLine, 0);
-    const regionSymbol = DocumentSymbol.create(
-      region.name,
-      '',
-      SymbolKind.Namespace,
-      range,
-      range,
-    );
-    regionSymbol.children = [];
-    return regionSymbol;
+  const regions = getFoldingRegions(textDocument, chunk.comments || [])
+    .sort(outerFirst)
+    .map(region => {
+      const range = Range.create(Position.create(region.startLine, 0), endOfLine(textDocument, region.endLine));
+      return DocumentSymbol.create(region.name, '', SymbolKind.Namespace, range, range, []);
+    });
+
+  const topLevelRegions: DocumentSymbol[] = [];
+  regions.forEach((region, i) => {
+    const parent = regions.slice(0, i).reverse().find(outer => containsLines(outer, region));
+    (parent ? parent.children! : topLevelRegions).push(region);
   });
 
-  for (const symbol of symbolInfo) {
-    let parent: DocumentSymbol | undefined;
-    for (const regionSymbol of regionSymbols) {
-      if (regionSymbol.range.start.line <= symbol.range.start.line && regionSymbol.range.end.line >= symbol.range.end.line) {
-        parent = regionSymbol;
-        break;
+  const outsideRegions: DocumentSymbol[] = [];
+  for (const entry of chunk.symbols.map(symbol => toDocumentSymbol(textDocument, symbol))) {
+    let innermost: DocumentSymbol | undefined;
+    for (const region of regions) {
+      // Of two regions over the same lines, the later one is inside the other.
+      if (containsLines(region, entry) && (!innermost || lineSpan(region) <= lineSpan(innermost))) {
+        innermost = region;
       }
     }
-
-    if (parent) {
-      parent.children!.push(symbol);
-    } else {
-      rootSymbols.push(symbol);
-    }
+    (innermost ? innermost.children! : outsideRegions).push(entry);
   }
 
-  return rootSymbols.concat(regionSymbols);
+  for (const region of regions) {
+    region.children!.sort((a, b) => a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character);
+  }
+  return outsideRegions.concat(topLevelRegions);
+}
+
+// Outer regions first. A #region over the same lines as a tab goes inside the tab.
+function outerFirst(a: FoldingRegion, b: FoldingRegion): number {
+  const kindOrder = { tab: 0, region: 1 };
+  return a.startLine - b.startLine || b.endLine - a.endLine || kindOrder[a.kind] - kindOrder[b.kind];
+}
+
+function endOfLine(textDocument: TextDocument, line: number): Position {
+  const text = textDocument.getText(Range.create(line, 0, line + 1, 0));
+  return Position.create(line, text.replace(/[\r\n]+$/, '').length);
+}
+
+function containsLines(outer: DocumentSymbol, inner: DocumentSymbol): boolean {
+  return outer.range.start.line <= inner.range.start.line && inner.range.end.line <= outer.range.end.line;
+}
+
+function lineSpan(symbol: DocumentSymbol): number {
+  return symbol.range.end.line - symbol.range.start.line;
 }

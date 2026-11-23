@@ -204,6 +204,8 @@ export type Comment_ = ASTNode & {
   type: 'Comment',
   value: string,
   raw: string,
+  // Only whitespace comes before the comment on the line where it starts.
+  startsLine: boolean,
 };
 
 export type Whitespace = ASTNode & {

@@ -1,4 +1,5 @@
 import { Comment_ } from '../expressions';
+import { isTabMarker, regionMarkerOf } from '../region-markers';
 import { Statement } from '../statements';
 import { Bounds } from '../types';
 import { moveEntry, OutlineEntry } from './model';
@@ -11,7 +12,7 @@ export type StatementInfo = { about?: OutlineEntry, defines?: OutlineEntry, meth
 
 export function findBoundaryLines(comments: Comment_[]): number[] {
   return comments
-    .filter(comment => comment.raw === '-->8' || /^#(end)?region/.test(comment.value.trim()))
+    .filter(comment => isTabMarker(comment) || regionMarkerOf(comment) !== undefined)
     .map(comment => comment.loc!.start.line);
 }
 
