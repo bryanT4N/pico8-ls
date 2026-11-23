@@ -288,8 +288,22 @@ describe('outline', () => {
     });
 
     it('does not resolve self in a callback that has its own self parameter', () => {
-      assert.strictEqual(outlineOf('function f()\n  foreach(es, function(self) self.x = 1 end)\nend'),
-        lines('f() [Function]', '  <anonymous function>(self) [Function]'));
+      assert.strictEqual(outlineOf('player = {}\nfunction player:update()\n  foreach(es, function(self) self.x = 1 end)\nend'),
+        lines('player [Table]', '  update() [Method]', '    <anonymous function>(self) [Function]'));
+    });
+
+    it('creates the deeper table of a method only when self assigns to it', () => {
+      assert.strictEqual(outlineOf('game = {}\nfunction game.state:update() end'),
+        lines('game [Table]', 'game.state:update() [Method]'));
+      assert.strictEqual(outlineOf('game = {}\nfunction game.state:update()\n  self.t = 0\nend'),
+        lines('game [Table]', '  state [Table]', '    t [Field]', 'game.state:update() [Method]'));
+    });
+
+    it('resolves self the same way in every deeper method form', () => {
+      assert.strictEqual(outlineOf('T = {}\nfunction T.a.m(self)\n  self.x = 1\nend'),
+        lines('T [Table]', '  a [Table]', '    x [Field]', 'T.a.m(self) [Method]'));
+      assert.strictEqual(outlineOf('T = {}\nT.a.m = function(self) self.x = 1 end'),
+        lines('T [Table]', '  a [Table]', '    x [Field]', 'T.a.m(self) [Method]'));
     });
 
     it('does not list self fields outside methods', () => {

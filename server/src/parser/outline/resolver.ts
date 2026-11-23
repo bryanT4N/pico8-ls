@@ -19,8 +19,12 @@ type Decl = {
 // What a name refers to at some point: its innermost declaration, or else the global.
 type Binding = Decl | { kind: 'global', entry?: OutlineEntry };
 
+// For a deeper method path (e.g. T.a:m), the last intermediate table may not exist yet;
+// selfPath holds the info to create it on the first self.k = v that needs it.
+type SelfPath = { root: OutlineEntry, segments: Identifier[], stmt: Statement };
+
 type ValueTarget =
-  | { kind: 'entry', entry: OutlineEntry, selfTable?: OutlineEntry }  // value defines or supplements entry
+  | { kind: 'entry', entry: OutlineEntry, selfTable?: OutlineEntry | null, selfPath?: SelfPath }
   | { kind: 'flat', owner: Owner, name: string }                      // rule 7, unnamed table (Task 8)
   | { kind: 'anonymous', owner: Owner };                              // Task 8
 
@@ -28,6 +32,7 @@ class ResolverScope {
   decls = new Map<string, Decl>();
   // undefined = inherit from enclosing scope; null = self is used but the table is not known
   selfTable?: OutlineEntry | null;
+  selfPath?: SelfPath;
   constructor(public owner: Owner, public block?: Block) {}
 }
 
@@ -96,8 +101,8 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
     if (isColonMethod || firstParamIsSelf) {
       if (target?.kind === 'entry' && target.selfTable !== undefined) {
         scope.selfTable = target.selfTable;
-      } else if (isColonMethod) {
-        scope.selfTable = this.resolveSelfTableFromColonIdentifier(node.identifier as MemberExpression, node);
+      } else if (target?.kind === 'entry' && target.selfPath) {
+        scope.selfPath = target.selfPath;
       } else {
         scope.selfTable = null;
       }
@@ -268,11 +273,7 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
 
     if (root.name === 'self') {
       if (value?.type === 'FunctionDeclaration') {
-        const key = segments[segments.length - 1];
-        const name = [ 'self', ...segments.slice(0, -1).map(s => s.name) ].join('.') + variable.indexer + key.name;
-        const entry = addEntry(this.topScope().owner, name, CodeSymbolType.Method, statement.loc!, key.loc!);
-        this.targets.set(value, { kind: 'entry', entry });
-        return undefined;
+        return this.addMethod(value, root, segments, variable.indexer, undefined, statement);
       }
       const selfTable = this.resolveSelfTable();
       if (!selfTable) {
@@ -328,45 +329,43 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
     const key = segments[segments.length - 1];
     const name = [ root, ...segments.slice(0, -1) ].map(id => id.name).join('.') + indexer + key.name;
     const entry = addEntry(this.topScope().owner, name, CodeSymbolType.Method, statement.loc!, key.loc!);
+    const intermediates = segments.slice(0, -1);
+    const firstParam = fn.parameters[0];
+    const isSelfMethod = indexer === ':' || (firstParam?.type === 'Identifier' && firstParam.name === 'self');
+    if (isSelfMethod) {
+      if (intermediates.length === 0) {
+        this.targets.set(fn, { kind: 'entry', entry, selfTable: table ?? null });
+      } else if (table) {
+        this.targets.set(fn, { kind: 'entry', entry, selfPath: { root: table, segments: intermediates, stmt: statement } });
+      } else {
+        this.targets.set(fn, { kind: 'entry', entry, selfTable: null });
+      }
+    } else {
+      this.targets.set(fn, { kind: 'entry', entry });
+    }
     if (table && segments.length === 1) {
-      this.targets.set(fn, { kind: 'entry', entry, selfTable: table });
       return { about: table, methods: [{ entry, key: key.name }] };
     }
-    this.targets.set(fn, { kind: 'entry', entry });
     return table && { about: table };
   }
 
   private resolveSelfTable(): OutlineEntry | null | undefined {
     for (let i = this.scopeStack.length - 1; i >= 0; i--) {
-      const { selfTable } = this.scopeStack[i];
-      if (selfTable !== undefined) {
-        return selfTable;
+      const scope = this.scopeStack[i];
+      if (scope.selfTable !== undefined) {
+        return scope.selfTable;
+      }
+      if (scope.selfPath) {
+        let entry = scope.selfPath.root;
+        for (const seg of scope.selfPath.segments) {
+          entry = getOrAddMember(entry, seg.name, CodeSymbolType.Table, scope.selfPath.stmt.loc!, seg.loc!);
+        }
+        scope.selfTable = entry;
+        scope.selfPath = undefined;
+        return entry;
       }
     }
     return undefined;
-  }
-
-  private resolveSelfTableFromColonIdentifier(identifier: MemberExpression, fnNode: FunctionDeclaration): OutlineEntry | null {
-    const segments: Identifier[] = [ identifier.identifier ];
-    let base: Expression = identifier.base;
-    while (base.type === 'MemberExpression') {
-      segments.unshift((base as MemberExpression).identifier);
-      base = (base as MemberExpression).base;
-    }
-    if (base.type !== 'Identifier') {
-      return null;
-    }
-    const root = base as Identifier;
-    const binding = this.resolve(root.name);
-    let entry = binding.entry;
-    if (!entry) {
-      return null;
-    }
-    for (let i = 0; i < segments.length - 1; i++) {
-      const seg = segments[i];
-      entry = getOrAddMember(entry, seg.name, CodeSymbolType.Table, fnNode.loc!, seg.loc!);
-    }
-    return entry;
   }
 
   private resolve(name: string): Binding {
