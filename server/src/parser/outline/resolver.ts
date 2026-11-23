@@ -1,6 +1,7 @@
 ﻿import { Expression, Identifier, Indexer, MemberExpression, TableConstructorExpression, Variable } from '../expressions';
 import { AnonymousFunctionName, AssignmentStatement, Block, Chunk, ForGenericStatement, ForNumericStatement,
   FunctionDeclaration, isStatementWithBody, LabelStatement, LocalStatement, Statement } from '../statements';
+import { Bounds } from '../types';
 import { ASTVisitor, VisitableASTNode } from '../visitor';
 import { addEntry, CodeSymbolType, OutlineEntry, Owner, signatureOf } from './model';
 import { getOrAddMember, receiveTable, tableTypeOf, unwrapValue } from './members';
@@ -25,7 +26,7 @@ type SelfPath = { root: OutlineEntry, segments: Identifier[], stmt: Statement };
 
 type ValueTarget =
   | { kind: 'entry', entry: OutlineEntry, selfTable?: OutlineEntry | null, selfPath?: SelfPath }
-  | { kind: 'flat', owner: Owner, name: string }                      // rule 7, unnamed table (Task 8)
+  | { kind: 'flat', owner: Owner, name: string, loc?: Bounds, selectionLoc?: Bounds } // rule 7, unnamed table (Task 8)
   | { kind: 'anonymous', owner: Owner };                              // Task 8
 
 class ResolverScope {
@@ -87,7 +88,8 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       target.entry.detail = signatureOf(node);
       owner = target.entry;
     } else if (target?.kind === 'flat') {
-      owner = addEntry(target.owner, target.name, CodeSymbolType.Method, node.loc!, node.loc!, signatureOf(node));
+      owner = addEntry(target.owner, target.name, CodeSymbolType.Method, target.loc ?? node.loc!, target.selectionLoc ?? node.loc!,
+        signatureOf(node));
     } else if (target?.kind === 'anonymous') {
       owner = addEntry(target.owner, AnonymousFunctionName, CodeSymbolType.Function, node.loc!, node.loc!, signatureOf(node));
     } else if (!node.identifier) {
@@ -197,7 +199,8 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       for (const field of node.fields) {
         if (field.type === 'TableKeyString') {
           if (field.value.type === 'FunctionDeclaration') {
-            this.targets.set(field.value, { kind: 'flat', owner, name: prefix ? `${prefix}.${field.key.name}` : field.key.name });
+            this.targets.set(field.value, { kind: 'flat', owner, name: prefix ? `${prefix}.${field.key.name}` : field.key.name,
+              loc: field.loc!, selectionLoc: field.key.loc! });
           } else {
             const unwrapped = unwrapValue(field.value);
             if (unwrapped?.type === 'TableConstructorExpression') {

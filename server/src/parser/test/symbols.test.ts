@@ -376,6 +376,12 @@ describe('outline', () => {
         '  has_finished() [Method]', '  _draw() [Method]'));
     });
 
+    it('ranges and selects a function of an unnamed table from its key', () => {
+      const [ f ] = parse('function f()\n  return {\n    has_finished = function() end,\n  }\nend').symbols;
+      const { name, loc, selectionLoc } = f.children[0];
+      assert.deepStrictEqual([ name, loc.start.column, selectionLoc.start.column ], [ 'has_finished', 4, 4 ]);
+    });
+
     it('lists functions of tables nested in unnamed tables by key name', () => {
       assert.strictEqual(outlineOf('function f()\n  return { a = { g = function() end }, n = 1 }\nend'),
         lines('f() [Function]', '  g() [Method]'));
