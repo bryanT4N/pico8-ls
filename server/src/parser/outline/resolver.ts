@@ -86,6 +86,10 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
     if (target?.kind === 'entry') {
       target.entry.detail = signatureOf(node);
       owner = target.entry;
+    } else if (target?.kind === 'flat') {
+      owner = addEntry(target.owner, target.name, CodeSymbolType.Method, node.loc!, node.loc!, signatureOf(node));
+    } else if (target?.kind === 'anonymous') {
+      owner = addEntry(target.owner, AnonymousFunctionName, CodeSymbolType.Function, node.loc!, node.loc!, signatureOf(node));
     } else if (!node.identifier) {
       owner = addEntry(this.topScope().owner, AnonymousFunctionName, CodeSymbolType.Function,
         node.loc!, node.loc!, signatureOf(node));
@@ -168,22 +172,54 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
     if (target?.kind === 'entry') {
       const tableEntry = target.entry;
       for (const field of node.fields) {
-        if (field.type !== 'TableKeyString') {
-          continue;
+        if (field.type === 'TableKeyString') {
+          if (field.value.type === 'FunctionDeclaration') {
+            const method = addEntry(tableEntry, field.key.name, CodeSymbolType.Method, field.loc!, field.key.loc!);
+            this.targets.set(field.value, { kind: 'entry', entry: method, selfTable: tableEntry });
+            continue;
+          }
+          const unwrapped = unwrapValue(field.value);
+          if (unwrapped?.type === 'TableConstructorExpression') {
+            const innerCtor = unwrapped as TableConstructorExpression;
+            const member = getOrAddMember(tableEntry, field.key.name, tableTypeOf(innerCtor), field.loc!, field.key.loc!);
+            receiveTable(member, innerCtor);
+            this.targets.set(innerCtor, { kind: 'entry', entry: member });
+          } else {
+            getOrAddMember(tableEntry, field.key.name, CodeSymbolType.Field, field.loc!, field.key.loc!);
+          }
+        } else if (field.type === 'TableValue' || field.type === 'TableKey') {
+          if (field.value.type === 'FunctionDeclaration') {
+            this.targets.set(field.value, { kind: 'anonymous', owner: tableEntry });
+          } else {
+            const unwrapped = unwrapValue(field.value);
+            if (unwrapped?.type === 'TableConstructorExpression') {
+              this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: tableEntry, name: '' });
+            }
+          }
         }
-        if (field.value.type === 'FunctionDeclaration') {
-          const method = addEntry(tableEntry, field.key.name, CodeSymbolType.Method, field.loc!, field.key.loc!);
-          this.targets.set(field.value, { kind: 'entry', entry: method, selfTable: tableEntry });
-          continue;
-        }
-        const unwrapped = unwrapValue(field.value);
-        if (unwrapped?.type === 'TableConstructorExpression') {
-          const innerCtor = unwrapped as TableConstructorExpression;
-          const member = getOrAddMember(tableEntry, field.key.name, tableTypeOf(innerCtor), field.loc!, field.key.loc!);
-          receiveTable(member, innerCtor);
-          this.targets.set(innerCtor, { kind: 'entry', entry: member });
-        } else {
-          getOrAddMember(tableEntry, field.key.name, CodeSymbolType.Field, field.loc!, field.key.loc!);
+      }
+    } else {
+      const owner = target?.kind === 'flat' ? target.owner : this.topScope().owner;
+      const prefix = target?.kind === 'flat' ? target.name : '';
+      for (const field of node.fields) {
+        if (field.type === 'TableKeyString') {
+          if (field.value.type === 'FunctionDeclaration') {
+            this.targets.set(field.value, { kind: 'flat', owner, name: prefix ? `${prefix}.${field.key.name}` : field.key.name });
+          } else {
+            const unwrapped = unwrapValue(field.value);
+            if (unwrapped?.type === 'TableConstructorExpression') {
+              this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner, name: prefix ? `${prefix}.${field.key.name}` : '' });
+            }
+          }
+        } else if (field.type === 'TableValue' || field.type === 'TableKey') {
+          if (field.value.type === 'FunctionDeclaration') {
+            this.targets.set(field.value, { kind: 'anonymous', owner });
+          } else {
+            const unwrapped = unwrapValue(field.value);
+            if (unwrapped?.type === 'TableConstructorExpression') {
+              this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner, name: '' });
+            }
+          }
         }
       }
     }
@@ -195,8 +231,10 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       return this.assignName(variable, value, statement);
     } else if (variable.type === 'MemberExpression') {
       return this.assignMember(variable, value, statement);
+    } else {
+      this.registerTargetForValue(value);
+      return undefined;
     }
-    return undefined;
   }
 
   // A statement is about a table only when all of its targets are.
@@ -267,16 +305,22 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       base = base.base;
     }
     if (base.type !== 'Identifier') {
+      this.registerTargetForValue(value);
       return;
     }
     const root = base as Identifier;
 
-    if (root.name === 'self') {
+    if (root.name === 'self' && this.resolveSelfBinding() !== 'local-or-loopvar') {
       if (value?.type === 'FunctionDeclaration') {
         return this.addMethod(value, root, segments, variable.indexer, undefined, statement);
       }
       const selfTable = this.resolveSelfTable();
       if (!selfTable) {
+        const unwrapped = unwrapValue(value);
+        if (unwrapped?.type === 'TableConstructorExpression') {
+          const pathName = [ root, ...segments ].map(id => id.name).join('.');
+          this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: this.topScope().owner, name: pathName });
+        }
         return undefined;
       }
       return this.addMemberField(selfTable, segments, value, statement);
@@ -284,7 +328,15 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
 
     const binding = this.resolve(root.name);
     if (binding.kind === 'param' || binding.kind === 'loopvar') {
-      return; // the outline can't know which table was passed in
+      if (value?.type === 'FunctionDeclaration') {
+        return this.addMethod(value, root, segments, variable.indexer, undefined, statement);
+      }
+      const unwrapped = unwrapValue(value);
+      if (unwrapped?.type === 'TableConstructorExpression') {
+        const pathName = [ root, ...segments ].map(id => id.name).join('.');
+        this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: this.topScope().owner, name: pathName });
+      }
+      return undefined;
     }
 
     if (value?.type === 'FunctionDeclaration') {
@@ -347,6 +399,31 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       return { about: table, methods: [{ entry, key: key.name }] };
     }
     return table && { about: table };
+  }
+
+  private registerTargetForValue(value: Expression | undefined): void {
+    if (value?.type === 'FunctionDeclaration') {
+      this.targets.set(value, { kind: 'anonymous', owner: this.topScope().owner });
+    } else {
+      const unwrapped = unwrapValue(value);
+      if (unwrapped?.type === 'TableConstructorExpression') {
+        this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: this.topScope().owner, name: '' });
+      }
+    }
+  }
+
+  private resolveSelfBinding(): 'local-or-loopvar' | 'other' {
+    for (let i = this.scopeStack.length - 1; i >= 0; i--) {
+      const scope = this.scopeStack[i];
+      const decl = scope.decls.get('self');
+      if (decl) {
+        return (decl.kind === 'local' || decl.kind === 'loopvar') ? 'local-or-loopvar' : 'other';
+      }
+      if (scope.selfTable !== undefined || scope.selfPath !== undefined) {
+        return 'other';
+      }
+    }
+    return 'other';
   }
 
   private resolveSelfTable(): OutlineEntry | null | undefined {

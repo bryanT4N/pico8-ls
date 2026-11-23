@@ -310,4 +310,67 @@ describe('outline', () => {
       assert.strictEqual(outlineOf('function f()\n  self.x = 1\nend'), 'f() [Function]');
     });
   });
+
+  describe('fields of parameters and unnamed tables', () => {
+    it('does not list fields set through parameters or loop variables', () => {
+      assert.strictEqual(outlineOf(lines('function _update()', '  for e in all(enemies) do', '    e.x -= 1',
+        '  end', 'end', 'function hit(p) p.hp = 0 end')),
+      lines('_update() [Function]', 'hit(p) [Function]'));
+    });
+
+    it('lists functions set through parameters by their path', () => {
+      assert.strictEqual(outlineOf(lines('function init(p)', '  p.update = function() end',
+        '  function p.draw() end', '  p.h = { on = function() end, n = 1 }', 'end')),
+      lines('init(p) [Function]', '  p.update() [Method]', '  p.draw() [Method]', '  p.h.on() [Method]'));
+    });
+
+    it('lists functions set on fields of indexed tables as anonymous, and their tables by key', () => {
+      assert.strictEqual(outlineOf(lines('function init()', '  for i = 1, #btns do',
+        '    btns[i].press = function() local t = 0 end', '    btns[i].pos = { x = 0, f = function() end }',
+        '  end', 'end')),
+      lines('init() [Function]', '  <anonymous function>() [Function]', '    t [Variable]', '  f() [Method]'));
+    });
+
+    it('handles such a function before anything else is listed', () => {
+      assert.strictEqual(outlineOf('es[1].draw = function() end'), '<anonymous function>() [Function]');
+      assert.strictEqual(outlineOf('print("hi")\nbtns[1].press = function() end'), '<anonymous function>() [Function]');
+    });
+
+    it('lists only the functions of unnamed tables, by key name', () => {
+      assert.strictEqual(outlineOf(lines('function new_bullet(start)', '  local speed = 2',
+        '  local m = make_movement { angle = .25 }', '  return {', '    has_finished = function() return false end,',
+        '    _update = m._update,', '    _draw = function() end,', '  }', 'end')),
+      lines('new_bullet(start) [Function]', '  speed [Variable]', '  m [Variable]',
+        '  has_finished() [Method]', '  _draw() [Method]'));
+    });
+
+    it('lists functions of tables nested in unnamed tables by key name', () => {
+      assert.strictEqual(outlineOf('function f()\n  return { a = { g = function() end }, n = 1 }\nend'),
+        lines('f() [Function]', '  g() [Method]'));
+    });
+
+    it('lists functions of tables passed as arguments, without resolving self', () => {
+      assert.strictEqual(outlineOf('function spawn()\n  add(enemies, { hp = 3, update = function(self) self.hp -= 1 end })\nend'),
+        lines('spawn() [Function]', '  update(self) [Method]'));
+    });
+
+    it('lists functions with positional or computed keys as anonymous', () => {
+      assert.strictEqual(outlineOf('states = { function() end, [2] = function() end }\nhandlers = { function() end }'),
+        lines('states [Table]', '  <anonymous function>() [Function]', '  <anonymous function>() [Function]',
+          'handlers [Array]', '  <anonymous function>() [Function]'));
+    });
+
+    it('lists functions of tables nested in a known table under that table', () => {
+      assert.strictEqual(outlineOf(lines('levels = {', '  { name = "a", init = function() end },',
+        '  { name = "b", init = function() end },', '}')),
+      lines('levels [Array]', '  init() [Method]', '  init() [Method]'));
+    });
+
+    it('treats a local or loop variable named self as an ordinary name', () => {
+      assert.strictEqual(outlineOf('function new_enemy()\n  local self = { x = 1 }\n  self.hp = 3\n  return self\nend'),
+        lines('new_enemy() [Function]', '  self [Table]', '    x [Field]', '    hp [Field]'));
+      assert.strictEqual(outlineOf('player = {}\nfunction player:update()\n  for self in all(xs) do self.y = 1 end\nend'),
+        lines('player [Table]', '  update() [Method]'));
+    });
+  });
 });
