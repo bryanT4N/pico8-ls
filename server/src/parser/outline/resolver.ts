@@ -257,7 +257,9 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
     }
 
     if (value?.type === 'FunctionDeclaration') {
-      const entry = addEntry(this.root, name.name, CodeSymbolType.Function, statement.loc!, name.loc!);
+      // Listed under the enclosing function, if any: its range lies inside that function's, and breadcrumbs
+      // only follow entries whose ranges contain the cursor.
+      const entry = addEntry(this.topScope().owner, name.name, CodeSymbolType.Function, statement.loc!, name.loc!);
       this.targets.set(value, { kind: 'entry', entry });
       if (!binding.entry) {
         this.globals.set(name.name, entry);

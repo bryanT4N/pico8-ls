@@ -21,9 +21,11 @@ describe('outline', () => {
         lines('x(a) [Function]', 'x(b) [Function]', 'y [Variable]', 'y() [Function]'));
     });
 
-    it('puts a global function declared inside a function at the top level', () => {
+    it('lists a global function declared inside a function under that function', () => {
       assert.strictEqual(outlineOf('function _init()\n  function helper() end\nend'),
-        lines('_init() [Function]', 'helper() [Function]'));
+        lines('_init() [Function]', '  helper() [Function]'));
+      assert.strictEqual(outlineOf('function _init()\n  helper2 = function(a) end\nend'),
+        lines('_init() [Function]', '  helper2(a) [Function]'));
     });
 
     it('formats varargs in signatures', () => {
@@ -97,7 +99,7 @@ describe('outline', () => {
       assert.strictEqual(outlineOf('local co = cocreate(function()\n  co = nil\nend)'),
         lines('co [Variable]', '<anonymous function>() [Function]', 'co [Variable]'));
       assert.strictEqual(outlineOf('local f = function()\n  f = function() end\nend'),
-        lines('f() [Function]', 'f() [Function]'));
+        lines('f() [Function]', '  f() [Function]'));
     });
 
     it('falls back to the local it shadows in the same scope', () => {
