@@ -26,6 +26,8 @@ type ValueTarget =
 
 class ResolverScope {
   decls = new Map<string, Decl>();
+  // undefined = inherit from enclosing scope; null = self is used but the table is not known
+  selfTable?: OutlineEntry | null;
   constructor(public owner: Owner, public block?: Block) {}
 }
 
@@ -87,6 +89,22 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
     }
 
     const scope = new ResolverScope(owner, node.block);
+
+    const firstParam = node.parameters[0];
+    const firstParamIsSelf = firstParam?.type === 'Identifier' && firstParam.name === 'self';
+    const isColonMethod = node.identifier?.type === 'MemberExpression' && node.identifier.indexer === ':';
+    if (isColonMethod || firstParamIsSelf) {
+      if (target?.kind === 'entry' && target.selfTable !== undefined) {
+        scope.selfTable = target.selfTable;
+      } else if (isColonMethod) {
+        scope.selfTable = this.resolveSelfTableFromColonIdentifier(node.identifier as MemberExpression, node);
+      } else {
+        scope.selfTable = null;
+      }
+    } else if (node.parameters.some(p => p.type === 'Identifier' && p.name === 'self')) {
+      scope.selfTable = null;
+    }
+
     for (const param of node.parameters) {
       if (param.type === 'Identifier') {
         scope.decls.set(param.name, { kind: 'param' });
@@ -249,7 +267,18 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
     const root = base as Identifier;
 
     if (root.name === 'self') {
-      return;
+      if (value?.type === 'FunctionDeclaration') {
+        const key = segments[segments.length - 1];
+        const name = [ 'self', ...segments.slice(0, -1).map(s => s.name) ].join('.') + variable.indexer + key.name;
+        const entry = addEntry(this.topScope().owner, name, CodeSymbolType.Method, statement.loc!, key.loc!);
+        this.targets.set(value, { kind: 'entry', entry });
+        return undefined;
+      }
+      const selfTable = this.resolveSelfTable();
+      if (!selfTable) {
+        return undefined;
+      }
+      return this.addMemberField(selfTable, segments, value, statement);
     }
 
     const binding = this.resolve(root.name);
@@ -261,7 +290,6 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       return this.addMethod(value, root, segments, variable.indexer, binding.entry, statement);
     }
 
-    const unwrapped = unwrapValue(value);
     let rootEntry = binding.entry;
     if (!rootEntry) {
       if (binding.kind !== 'global') {
@@ -272,23 +300,20 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       this.globals.set(root.name, rootEntry);
     }
 
+    return this.addMemberField(rootEntry, segments, value, statement);
+  }
+
+  private addMemberField(rootEntry: OutlineEntry, segments: Identifier[], value: Expression | undefined, statement: Statement): StatementInfo {
+    const unwrapped = unwrapValue(value);
     let tableEntry = rootEntry;
     for (let i = 0; i < segments.length - 1; i++) {
       const seg = segments[i];
       tableEntry = getOrAddMember(tableEntry, seg.name, CodeSymbolType.Table, statement.loc!, seg.loc!);
     }
-
     const lastSeg = segments[segments.length - 1];
-
-    let memberType: CodeSymbolType;
-    if (unwrapped?.type === 'TableConstructorExpression') {
-      memberType = tableTypeOf(unwrapped as TableConstructorExpression);
-    } else {
-      memberType = CodeSymbolType.Field;
-    }
-
+    const memberType = unwrapped?.type === 'TableConstructorExpression'
+      ? tableTypeOf(unwrapped as TableConstructorExpression) : CodeSymbolType.Field;
     const member = getOrAddMember(tableEntry, lastSeg.name, memberType, statement.loc!, lastSeg.loc!);
-
     if (unwrapped?.type === 'TableConstructorExpression') {
       const ctor = unwrapped as TableConstructorExpression;
       receiveTable(member, ctor);
@@ -309,6 +334,39 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
     }
     this.targets.set(fn, { kind: 'entry', entry });
     return table && { about: table };
+  }
+
+  private resolveSelfTable(): OutlineEntry | null | undefined {
+    for (let i = this.scopeStack.length - 1; i >= 0; i--) {
+      const { selfTable } = this.scopeStack[i];
+      if (selfTable !== undefined) {
+        return selfTable;
+      }
+    }
+    return undefined;
+  }
+
+  private resolveSelfTableFromColonIdentifier(identifier: MemberExpression, fnNode: FunctionDeclaration): OutlineEntry | null {
+    const segments: Identifier[] = [ identifier.identifier ];
+    let base: Expression = identifier.base;
+    while (base.type === 'MemberExpression') {
+      segments.unshift((base as MemberExpression).identifier);
+      base = (base as MemberExpression).base;
+    }
+    if (base.type !== 'Identifier') {
+      return null;
+    }
+    const root = base as Identifier;
+    const binding = this.resolve(root.name);
+    let entry = binding.entry;
+    if (!entry) {
+      return null;
+    }
+    for (let i = 0; i < segments.length - 1; i++) {
+      const seg = segments[i];
+      entry = getOrAddMember(entry, seg.name, CodeSymbolType.Table, fnNode.loc!, seg.loc!);
+    }
+    return entry;
   }
 
   private resolve(name: string): Binding {

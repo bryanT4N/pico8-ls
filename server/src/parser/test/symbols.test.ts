@@ -259,4 +259,41 @@ describe('outline', () => {
         lines('vector [Table]', '  len() [Method]', 'count [Variable]'));
     });
   });
+
+  describe('self', () => {
+    it('puts self fields in colon methods under the table', () => {
+      assert.strictEqual(outlineOf('player = {}\nfunction player:update()\n  self.x = 1\nend'),
+        lines('player [Table]', '  update() [Method]', '  x [Field]'));
+    });
+
+    it('treats an explicit self parameter the same way', () => {
+      assert.strictEqual(outlineOf('player = {}\nfunction player.update(self)\n  self.x = 1\nend'),
+        lines('player [Table]', '  update(self) [Method]', '  x [Field]'));
+    });
+
+    it('resolves self in a function assigned to a field', () => {
+      assert.strictEqual(outlineOf('player = {}\nplayer.update = function(self) self.x = 1 end'),
+        lines('player [Table]', '  update(self) [Method]', '  x [Field]'));
+    });
+
+    it('resolves self in a method written in the constructor', () => {
+      assert.strictEqual(outlineOf('player = { update = function(self) self.x = 1 end }'),
+        lines('player [Table]', '  update(self) [Method]', '  x [Field]'));
+    });
+
+    it('resolves self inside a callback in a method', () => {
+      assert.strictEqual(outlineOf(lines('player = {}', 'function player:update()',
+        '  foreach(enemies, function(e) self.hits = 1 end)', 'end')),
+      lines('player [Table]', '  update() [Method]', '    <anonymous function>(e) [Function]', '  hits [Field]'));
+    });
+
+    it('does not resolve self in a callback that has its own self parameter', () => {
+      assert.strictEqual(outlineOf('function f()\n  foreach(es, function(self) self.x = 1 end)\nend'),
+        lines('f() [Function]', '  <anonymous function>(self) [Function]'));
+    });
+
+    it('does not list self fields outside methods', () => {
+      assert.strictEqual(outlineOf('function f()\n  self.x = 1\nend'), 'f() [Function]');
+    });
+  });
 });
