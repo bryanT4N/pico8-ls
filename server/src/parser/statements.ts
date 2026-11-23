@@ -171,6 +171,5 @@ export type Chunk = {
   errors: ParseError[],
   symbols: CodeSymbol[],
   comments?: Comment_[],
-  globals?: Identifier[],
   includes?: Include[],
 };

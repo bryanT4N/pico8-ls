@@ -4,7 +4,6 @@ import { ASTNode } from './types';
 export type Identifier = ASTNode & {
   type: 'Identifier',
   name: string,
-  isLocal?: boolean,
 };
 
 export type Variable = Identifier | MemberExpression | IndexExpression;

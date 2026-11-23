@@ -12,7 +12,6 @@ describe('Parser', () => {
         variables: [{
           type: 'Identifier',
           name: 'i',
-          isLocal: false,
           loc: bounds(1, 0, 1, 1),
         }],
         init: [{
@@ -55,7 +54,6 @@ describe('Parser', () => {
                   loc: bounds(1, 9, 1, 10),
                   type: 'Identifier',
                   name: 't',
-                  isLocal: false,
                 },
                 right: {
                   loc: bounds(1, 13, 1, 14),
@@ -329,7 +327,6 @@ end`.trim();
         variables: [{
           type: 'Identifier',
           name: 'i',
-          isLocal: false,
         }],
         init: [{
           type: 'NumericLiteral',
@@ -356,7 +353,6 @@ end`.trim();
         variables: [{
           type: 'Identifier',
           name: 'i',
-          isLocal: false,
         }],
         init: [{
           type: 'NumericLiteral',

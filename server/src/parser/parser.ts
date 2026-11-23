@@ -42,12 +42,9 @@ import {
 } from './statements';
 import { findSymbols } from './symbols';
 import { Token, TokenType } from './tokens';
-import { indexOfObject } from './util';
 import * as path from 'path';
 import { ASTNode, Bounds, CodeLocation, codeLocationsEqual } from './types';
 import Operators from './operators';
-
-export type Scope = string[];
 
 type UnderIndentedClose = { opener: Bounds, word: string, closer: 'end' | 'until', closedAt: number };
 
@@ -83,14 +80,6 @@ export default class Parser {
   // `loc` and `range` data. Once a `Marker` is popped off the stack an end
   // location is pushed and the data is attached to a syntax node.
   locations: Marker[] = [];
-
-  // Store each block scope as a an array of identifier names. Each scope is
-  // stored in a stack.
-  scopes: Scope[] = [[]];
-  // The current scope index
-  scopeDepth = 0;
-  // A list of all global identifier nodes.
-  globals: Identifier[] = [];
 
   // Keep track of all errors that occurred while parsing.
   errors: errors.ParseError[] = [];
@@ -251,51 +240,6 @@ export default class Parser {
     return this.locations.pop();
   }
 
-  // Scope
-  // -----
-
-  // Create a new scope inheriting all declarations from the previous scope.
-  createScope() {
-    // copy current scope
-    const scope = this.scopes[this.scopeDepth].slice();
-    this.scopeDepth++;
-    this.scopes.push(scope);
-  }
-
-  // Exit and remove the current scope.
-  destroyScope() {
-    --this.scopeDepth;
-  }
-
-  // Add identifier name to the current scope if it doesn't already exist.
-  scopeIdentifierName(name: string) {
-    if (-1 !== this.scopes[this.scopeDepth].indexOf(name)) {
-      return;
-    }
-    this.scopes[this.scopeDepth].push(name);
-  }
-
-  // Add identifier to the current scope
-  scopeIdentifier(node: Identifier) {
-    this.scopeIdentifierName(node.name);
-    this.attachScope(node, true);
-  }
-
-  // Attach scope information to node. If the node is global, store it in the
-  // globals array so we can return the information to the user.
-  attachScope(node: Identifier, isLocal: boolean) {
-    if (!isLocal && -1 === indexOfObject(this.globals, 'name', node.name)) {
-      this.globals.push(node);
-    }
-
-    node.isLocal = isLocal;
-  }
-
-  // Is the identifier name available in this scope.
-  scopeHasName(name: string) {
-    return (this.scopes[this.scopeDepth].indexOf(name) !== -1);
-  }
-
   // Parse functions
   // ---------------
 
@@ -306,13 +250,11 @@ export default class Parser {
   parseChunk(): Chunk {
     this.lexerNext();
     this.markLocation();
-    this.createScope();
     const flowContext = new FlowContext(this.errors);
     flowContext.allowVararg = true;
     flowContext.pushScope();
     const body = this.parseBlock(flowContext, isEndOfFile);
     flowContext.popScope();
-    this.destroyScope();
 
     if (this.token.type !== TokenType.EOF) {
       this.errors.push(this.getUnexpectedTokenErr(this.token));
@@ -372,7 +314,6 @@ export default class Parser {
     while (!endingFunction(this.token)) {
       const startToken = this.token;
       const locationDepth = this.locations.length;
-      const scopeDepth = this.scopeDepth;
       const flowDepth = flowContext.scopes.length;
 
       try {
@@ -408,12 +349,11 @@ export default class Parser {
       } catch (e) {
         if (errors.isParseError(e)) {
           // A statement that throws part-way through leaves its location
-          // markers, scope depth and flow scopes behind: the nodes around it
-          // would get the wrong start, and later names, breaks and labels would
-          // count as inside it. Its flow scopes are popped, not dropped, so the
-          // gotos in them are still checked.
+          // markers and flow scopes behind: the nodes around it would get the
+          // wrong start, and later breaks and labels would count as inside it.
+          // Its flow scopes are popped, not dropped, so the gotos in them are
+          // still checked.
           this.locations.length = locationDepth;
-          this.scopeDepth = scopeDepth;
           while (flowContext.scopes.length > flowDepth) {
             flowContext.popScope();
           }
@@ -505,12 +445,9 @@ export default class Parser {
       includeStatement: statement,
     });
 
-    // A statement that throws part-way through leaves its location marker and
-    // scope depth behind; restoring both keeps that out of the including file.
-    // this.scopes is not cut back: destroyScope never shrinks it, so doing that
-    // would change what later valid code sees as local.
+    // A statement that throws part-way through leaves its location marker
+    // behind; restoring it keeps that out of the including file.
     const locationDepth = this.locations.length;
-    const scopeDepth = this.scopeDepth;
 
     try {
       newLexer.next();
@@ -518,7 +455,6 @@ export default class Parser {
     } finally {
       this.lexerStack.pop();
       this.locations.length = locationDepth;
-      this.scopeDepth = scopeDepth;
       this.addLexerErrors(newLexer);
     }
   }
@@ -692,9 +628,6 @@ export default class Parser {
     const nameToken = this.token;
     const label = this.parseIdentifier();
 
-    this.scopeIdentifierName('::' + nameToken.value + '::');
-    this.attachScope(label, true);
-
     this.lexer.expect('::');
 
     flowContext.addLabel(nameToken.value as string, nameToken);
@@ -724,11 +657,9 @@ export default class Parser {
   parseDoStatement(flowContext: FlowContext): DoStatement {
     const opener = this.locations[this.locations.length - 1].loc;
     const headerEnd = this.previousToken.bounds.end;
-    this.createScope();
     flowContext.pushScope();
     const body = this.parseBlock(flowContext);
     flowContext.popScope();
-    this.destroyScope();
     const truncatedEnd = this.expectBlockEnd('end', opener, 'do', body, headerEnd);
     return endAt(this.finishNode(AST.doStatement(body)), truncatedEnd);
   }
@@ -763,11 +694,9 @@ export default class Parser {
   }
 
   parseWhileStatementBody(flowContext: FlowContext, endingFunction?: (token: Token) => boolean) {
-    this.createScope();
     flowContext.pushScope(true);
     const body = this.parseBlock(flowContext, endingFunction);
     flowContext.popScope();
-    this.destroyScope();
 
     return body;
   }
@@ -777,7 +706,6 @@ export default class Parser {
   parseRepeatStatement(flowContext: FlowContext): RepeatStatement {
     const opener = this.locations[this.locations.length - 1].loc;
     const headerEnd = this.previousToken.bounds.end;
-    this.createScope();
     flowContext.pushScope(true);
     const body = this.parseBlock(flowContext);
     const truncatedEnd = this.expectBlockEnd('until', opener, 'repeat', body, headerEnd);
@@ -789,7 +717,6 @@ export default class Parser {
       condition = AST.literal(TokenType.NilLiteral, null, 'nil');
     }
     flowContext.popScope();
-    this.destroyScope();
     return endAt(this.finishNode(AST.repeatStatement(condition, body)), truncatedEnd);
   }
 
@@ -844,14 +771,12 @@ export default class Parser {
         // every statement up to the end of the line (or the `else`).
         let truncatedEnd: CodeLocation | null = null;
         this.lexer.withSignificantNewline((cancelSignificantNewline) => {
-          this.createScope();
           flowContext.pushScope();
           const block = this.parseBlock(flowContext, isEndOfLine);
           if (block.body.length === 0) {
             errors.raiseUnexpectedToken('statement', this.token);
           }
           flowContext.popScope();
-          this.destroyScope();
           clauses.push(this.finishNode(AST.ifClause(condition, block)));
 
           if (this.lexer.consume('else')) {
@@ -871,7 +796,6 @@ export default class Parser {
             }
             const headerEnd = this.previousToken.bounds.end;
 
-            this.createScope();
             flowContext.pushScope();
             // For a multi-line `else`, it's a regular block ending with an `end`.
             // Otherwise it ends at the end of the line.
@@ -882,7 +806,6 @@ export default class Parser {
               errors.raiseUnexpectedToken('statement', this.token);
             }
             flowContext.popScope();
-            this.destroyScope();
             clauses.push(endAt(this.finishNode(AST.elseClause(elseBlock), true), truncatedEnd));
           }
         });
@@ -894,11 +817,9 @@ export default class Parser {
     }
 
     let headerEnd = this.previousToken.bounds.end;
-    this.createScope();
     flowContext.pushScope();
     body = this.parseBlock(flowContext);
     flowContext.popScope();
-    this.destroyScope();
     clauses.push(this.finishNode(AST.ifClause(condition, body), true));
     marker = this.createLocationMarker();
 
@@ -911,11 +832,9 @@ export default class Parser {
       }
 
       headerEnd = this.previousToken.bounds.end;
-      this.createScope();
       flowContext.pushScope();
       body = this.parseBlock(flowContext);
       flowContext.popScope();
-      this.destroyScope();
       clauses.push(this.finishNode(AST.elseifClause(condition, body), true));
       marker = this.createLocationMarker();
     }
@@ -925,11 +844,9 @@ export default class Parser {
       marker = new Marker(this.previousToken);
       this.pushLocation(marker);
       headerEnd = this.previousToken.bounds.end;
-      this.createScope();
       flowContext.pushScope();
       body = this.parseBlock(flowContext);
       flowContext.popScope();
-      this.destroyScope();
       clauses.push(this.finishNode(AST.elseClause(body), true));
     }
 
@@ -950,9 +867,6 @@ export default class Parser {
     let variable = this.parseIdentifier();
     let body;
 
-    this.createScope();
-    this.scopeIdentifier(variable);
-
     // If the first expression is followed by a `=` punctuator, this is a
     // Numeric For Statement.
     if (this.lexer.consume('=')) {
@@ -970,7 +884,6 @@ export default class Parser {
       body = this.parseBlock(flowContext);
       flowContext.popScope();
       const truncatedEnd = this.expectBlockEnd('end', opener, 'for', body, headerEnd);
-      this.destroyScope();
 
       return endAt(this.finishNode(AST.forNumericStatement(variable, start, end, step, body)), truncatedEnd);
     // If not, it's a Generic For Statement
@@ -979,8 +892,6 @@ export default class Parser {
       const variables = [ variable ];
       while (this.lexer.consume(',')) {
         variable = this.parseIdentifier();
-        // Each variable in the namelist is locally scoped.
-        this.scopeIdentifier(variable);
         variables.push(variable);
       }
       this.lexer.expect('in');
@@ -998,7 +909,6 @@ export default class Parser {
       body = this.parseBlock(flowContext);
       flowContext.popScope();
       const truncatedEnd = this.expectBlockEnd('end', opener, 'for', body, headerEnd);
-      this.destroyScope();
 
       return endAt(this.finishNode(AST.forGenericStatement(variables, iterators, body)), truncatedEnd);
     }
@@ -1040,25 +950,11 @@ export default class Parser {
         } while (this.lexer.consume(','));
       }
 
-      // Declarations doesn't exist before the statement has been evaluated.
-      // Therefore assignments can't use their declarator. And the identifiers
-      // shouldn't be added to the scope until the statement is complete.
-      {
-        for (let i = 0, l = variables.length; i < l; ++i) {
-          this.scopeIdentifier(variables[i]);
-        }
-      }
-
       return this.finishNode(AST.localStatement(variables, operator, init));
     }
     if (this.lexer.consume('function')) {
       name = this.parseIdentifier();
       flowContext.addLocal(name.name, declToken);
-
-      {
-        this.scopeIdentifier(name);
-        this.createScope();
-      }
 
       // MemberExpressions are not allowed in local statements.
       return this.parseFunctionDeclaration(name, true);
@@ -1079,7 +975,7 @@ export default class Parser {
     // Keep a reference to the previous this.token for better error messages in case
     // of invalid statement
     let marker: Marker;
-    let lvalue, base, name;
+    let lvalue, base;
 
     const targets = [];
 
@@ -1089,10 +985,7 @@ export default class Parser {
       marker = this.createLocationMarker();
 
       if (this.token.type === TokenType.Identifier) {
-        name = this.token.value;
         base = this.parseIdentifier();
-        // Set the parent scope.
-        this.attachScope(base, this.scopeHasName(name as string));
         lvalue = true;
       } else if ('(' === this.token.value) {
         this.lexerNext();
@@ -1251,8 +1144,6 @@ export default class Parser {
       do {
         if (this.token.type === TokenType.Identifier) {
           const parameter = this.parseIdentifier();
-          // parameters are local.
-          this.scopeIdentifier(parameter);
           parameters.push(parameter);
         } else if (this.token.type === TokenType.VarargLiteral) {
           flowContext.allowVararg = true;
@@ -1288,7 +1179,6 @@ export default class Parser {
     const body = this.parseBlock(flowContext);
     flowContext.popScope();
     const truncatedEnd = this.expectBlockEnd('end', opener, 'function', body, headerEnd);
-    this.destroyScope();
 
     isLocal = isLocal || false;
     return endAt(this.finishNode(AST.functionStatement(name, parameters, isLocal, body)), truncatedEnd);
@@ -1304,9 +1194,6 @@ export default class Parser {
     const marker = this.createLocationMarker();
     base = this.parseIdentifier();
 
-    this.attachScope(base, this.scopeHasName(base.name));
-    this.createScope();
-
     while (this.lexer.consume('.')) {
       this.pushLocation(marker);
       name = this.parseIdentifier();
@@ -1317,7 +1204,6 @@ export default class Parser {
       this.pushLocation(marker);
       name = this.parseIdentifier();
       base = this.finishNode(AST.memberExpression(base, ':', name));
-      this.scopeIdentifierName('self');
     }
 
     return base;
@@ -1516,10 +1402,7 @@ export default class Parser {
 
     // The prefix
     if (TokenType.Identifier === this.token.type) {
-      const name = this.token.value as string;
       base = this.parseIdentifier();
-      // Set the parent scope.
-      this.attachScope(base, this.scopeHasName(name));
     } else if (this.lexer.consume('(')) {
       // Parentheses surrounding a new expression.
       base = this.parseExpectedExpression(flowContext);
@@ -1604,7 +1487,6 @@ export default class Parser {
       }
       this.pushLocation(marker);
       this.lexerNext();
-      this.createScope();
       return this.parseFunctionDeclaration(null, false);
     } else if (this.lexer.consume('{')) {
       this.pushLocation(marker);

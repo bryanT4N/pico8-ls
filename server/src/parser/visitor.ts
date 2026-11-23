@@ -241,20 +241,14 @@ export abstract class ASTVisitor<T> {
       break;
     }
 
+    // Lua evaluates the header of a for loop outside the loop, before its
+    // variables exist.
     case 'ForGenericStatement': {
       const result = this.visitForGenericStatement(node);
-
       this.nodeStack.push({ node });
+      this.visitAll(node.iterators);
       this.pushScope(result, node);
-
-      // Visit the variables and their initializers in order (var1, init1, var2, init2)
-      for (let i = 0; i < node.variables.length; i++) {
-        this.visitNode(node.variables[i]);
-        if (node.iterators[i]) {
-          this.visitNode(node.iterators[i]);
-        }
-      }
-
+      this.visitAll(node.variables);
       this.visitBlock(node.block);
       this.popScope();
       this.nodeStack.pop();
@@ -264,13 +258,13 @@ export abstract class ASTVisitor<T> {
     case 'ForNumericStatement': {
       const result = this.visitForNumericStatement(node);
       this.nodeStack.push({ node });
-      this.pushScope(result, node);
-      this.visitNode(node.variable);
       this.visitNode(node.start);
       this.visitNode(node.end);
       if (node.step) {
         this.visitNode(node.step);
       }
+      this.pushScope(result, node);
+      this.visitNode(node.variable);
       this.visitBlock(node.block);
       this.popScope();
       this.nodeStack.pop();
@@ -371,10 +365,9 @@ export abstract class ASTVisitor<T> {
       this.nodeStack.push({ node });
       this.pushScope(result, node);
       this.visitBlock(node.block);
-      this.popScope();
-
-      // Condition gets visited afterwards since it's `repeat ... until <condition>`
+      // In Lua the condition can see the locals of the loop body.
       this.visitNode(node.condition);
+      this.popScope();
       this.nodeStack.pop();
       break;
     }

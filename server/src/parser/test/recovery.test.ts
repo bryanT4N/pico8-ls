@@ -268,11 +268,12 @@ describe('Parser recovery', () => {
     assert.deepStrictEqual(block.body.map(s => s.type + (s.included ? '*' : '')), [ 'IncludeStatement', 'FunctionDeclaration*', 'FunctionDeclaration' ]);
   });
 
-  it('does not keep the loop variable of a broken for statement in scope', () => {
+  it('parses the statement after a broken for statement into the function', () => {
     const { errors, block } = parse(lines('function f()', '  for i=1,10 x', '  i = 5', 'end'));
     assert.deepStrictEqual(errors.map(formatError), [ 'main_test_file 2:13 \'do\' expected near \'x\'' ]);
-    const assignment = (block.body[0] as FunctionDeclaration).block.body[0] as AssignmentStatement;
-    assert.strictEqual((assignment.variables[0] as Identifier).isLocal, false);
+    const statement = (block.body[0] as FunctionDeclaration).block.body[0];
+    assert.strictEqual(statement.type, 'AssignmentStatement');
+    assert.strictEqual(((statement as AssignmentStatement).variables[0] as Identifier).name, 'i');
   });
 
   const AROUND_OPEN_FUNCTION: [string, string, string[], string[]][] = [

@@ -116,7 +116,7 @@ describe('#include', function () {
     assert.strictEqual(block.loc!.start.filename.path, 'main_test_file');
     const assignment = block.body.find((s): s is AssignmentStatement => s.type === 'AssignmentStatement')!;
     const target = assignment.variables[0] as Identifier;
-    assert.deepStrictEqual([ target.name, target.isLocal ], [ 'a', false ]);
+    assert.strictEqual(target.name, 'a');
   });
 
   it('keeps an #include whose file starts with a lexical error', () => {
