@@ -184,4 +184,60 @@ describe('outline', () => {
         lines('t [Table]', '  p [Array]'));
     });
   });
+
+  describe('functions in tables', () => {
+    it('lists functions written in a table constructor under the table, as methods', () => {
+      assert.strictEqual(outlineOf('player = { x = 64, update = function(self) end }'),
+        lines('player [Table]', '  x [Field]', '  update(self) [Method]'));
+    });
+
+    it('groups methods written right after their table', () => {
+      assert.strictEqual(outlineOf(lines('vector = {}', 'function vector:len() return 0 end',
+        'function vector.add(a, b) return a end', 'vector.zero = 0', 'function vector:norm() end')),
+      lines('vector [Table]', '  len() [Method]', '  add(a,b) [Method]', '  zero [Field]', '  norm() [Method]'));
+    });
+
+    it('stretches the table range over its grouped methods', () => {
+      const [ vector ] = parse('vector = {}\nfunction vector:len() return 0 end\nfunction vector:add(b) return b end').symbols;
+      assert.deepStrictEqual([ vector.loc.start.line, vector.loc.end.line, vector.selectionLoc.start.line ], [ 1, 3, 1 ]);
+    });
+
+    it('keeps methods in place when other code sits between them and their table', () => {
+      assert.strictEqual(outlineOf('player = { x = 64 }\nenemies = {}\nfunction player:update() end'),
+        lines('player [Table]', '  x [Field]', 'enemies [Table]', 'player:update() [Method]'));
+    });
+
+    it('keeps methods in place across a tab or region boundary', () => {
+      assert.strictEqual(outlineOf('obj = {}\nfunction obj:a() end\n-->8\nfunction obj:b() end'),
+        lines('obj [Table]', 'obj:a() [Method]', 'obj:b() [Method]'));
+      assert.strictEqual(outlineOf('obj = {}\n-- #region\nfunction obj:a() end\n-- #endregion'),
+        lines('obj [Table]', 'obj:a() [Method]'));
+    });
+
+    it('groups methods of a local table inside a function', () => {
+      assert.strictEqual(outlineOf(lines('function new_game()', '  local game = {}',
+        '  function game.update() end', '  function game.draw() end', '  return game', 'end')),
+      lines('new_game() [Function]', '  game [Table]', '    update() [Method]', '    draw() [Method]'));
+    });
+
+    it('groups methods assigned with = and lists each definition', () => {
+      assert.strictEqual(outlineOf('t = {}\nt.f = function(a) end\nfunction t.f() end'),
+        lines('t [Table]', '  f(a) [Method]', '  f() [Method]'));
+    });
+
+    it('keeps methods on deeper paths in place', () => {
+      assert.strictEqual(outlineOf('t = { a = {} }\nfunction t.a.f() end'),
+        lines('t [Table]', '  a [Table]', 't.a.f() [Method]'));
+    });
+
+    it('keeps methods in place when the table was first defined somewhere else', () => {
+      assert.strictEqual(outlineOf('function _init()\n  t = {}\nend\nt = {}\nfunction t:a() end'),
+        lines('_init() [Function]', 't [Table]', 't:a() [Method]'));
+    });
+
+    it('lists methods of a table that is not defined in this file', () => {
+      assert.strictEqual(outlineOf('function player:draw() end\nplayer.speed = 2'),
+        lines('player:draw() [Method]', 'player [Table]', '  speed [Field]'));
+    });
+  });
 });

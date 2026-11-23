@@ -1,9 +1,10 @@
-﻿import { Expression, Identifier, MemberExpression, TableConstructorExpression } from '../expressions';
-import { AnonymousFunctionName, AssignmentStatement, Chunk, ForGenericStatement, ForNumericStatement,
-  FunctionDeclaration, LabelStatement, LocalStatement, Statement } from '../statements';
-import { ASTVisitor } from '../visitor';
+﻿import { Expression, Identifier, Indexer, MemberExpression, TableConstructorExpression, Variable } from '../expressions';
+import { AnonymousFunctionName, AssignmentStatement, Block, Chunk, ForGenericStatement, ForNumericStatement,
+  FunctionDeclaration, isStatementWithBody, LabelStatement, LocalStatement, Statement } from '../statements';
+import { ASTVisitor, VisitableASTNode } from '../visitor';
 import { addEntry, CodeSymbolType, OutlineEntry, Owner, signatureOf } from './model';
 import { getOrAddMember, receiveTable, tableTypeOf, unwrapValue } from './members';
+import { findBoundaryLines, groupMethodRuns, StatementInfo } from './method-runs';
 
 type Decl = {
   kind: 'local' | 'param' | 'loopvar',
@@ -25,7 +26,7 @@ type ValueTarget =
 
 class ResolverScope {
   decls = new Map<string, Decl>();
-  constructor(public owner: Owner) {}
+  constructor(public owner: Owner, public block?: Block) {}
 }
 
 class OutlineResolver extends ASTVisitor<ResolverScope> {
@@ -34,45 +35,58 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
   private readonly globals = new Map<string, OutlineEntry>();
   // For each expression value, where to attach it in the outline.
   private readonly targets = new Map<Expression, ValueTarget>();
+  private readonly statementInfo = new Map<Statement, StatementInfo>();
+
+  constructor(private readonly boundaryLines: number[]) {
+    super();
+  }
+
+  override visit(chunk: Chunk): void {
+    super.visit(chunk);
+    groupMethodRuns(chunk.block.body, this.statementInfo, this.boundaryLines);
+  }
+
+  override onExitScope(scope: ResolverScope): void {
+    if (scope.block) {
+      groupMethodRuns(scope.block.body, this.statementInfo, this.boundaryLines);
+    }
+  }
 
   override startingScope(): ResolverScope {
     return new ResolverScope(this.root);
   }
 
-  createDefaultScope(): ResolverScope {
-    return new ResolverScope(this.topScope().owner);
+  createDefaultScope(scopeNode: VisitableASTNode | null): ResolverScope {
+    return new ResolverScope(this.topScope().owner, isStatementWithBody(scopeNode) ? scopeNode.block : undefined);
   }
 
   override visitFunctionDeclaration(node: FunctionDeclaration): ResolverScope {
-    if (node.identifier?.type === 'Identifier') {
-      if (node.isLocal) {
-        // local function name() end — declare in the enclosing scope before entering body
-        const outer = this.topScope();
-        const entry = addEntry(outer.owner, node.identifier.name, CodeSymbolType.Function,
-          node.loc!, node.identifier.loc!);
-        this.targets.set(node, { kind: 'entry', entry });
-        outer.decls.set(node.identifier.name, { kind: 'local', entry });
-      } else {
-        // function name() end — same as name = function() end
-        this.assignName(node.identifier, node, node);
-      }
+    if (node.identifier?.type === 'Identifier' && node.isLocal) {
+      // local function name() end — declare in the enclosing scope before entering body
+      const outer = this.topScope();
+      const entry = addEntry(outer.owner, node.identifier.name, CodeSymbolType.Function,
+        node.loc!, node.identifier.loc!);
+      this.targets.set(node, { kind: 'entry', entry });
+      outer.decls.set(node.identifier.name, { kind: 'local', entry });
+      this.statementInfo.set(node, { about: entry, defines: entry });
+    } else if (node.identifier) {
+      // function f() end and function t.f() end — same as f = function() end and t.f = function() end
+      this.recordStatement(node, [ this.assign(node.identifier, node, node) ]);
     }
 
     const target = this.targets.get(node);
-    let scope: ResolverScope;
+    let owner: Owner;
     if (target?.kind === 'entry') {
       target.entry.detail = signatureOf(node);
-      scope = new ResolverScope(target.entry);
+      owner = target.entry;
     } else if (!node.identifier) {
-      // Anonymous function expression (no identifier at all)
-      const entry = addEntry(this.topScope().owner, AnonymousFunctionName, CodeSymbolType.Function,
+      owner = addEntry(this.topScope().owner, AnonymousFunctionName, CodeSymbolType.Function,
         node.loc!, node.loc!, signatureOf(node));
-      scope = new ResolverScope(entry);
     } else {
-      // MemberExpression identifier (a.b, a:b) — Task 6, leave unchanged
-      scope = this.createDefaultScope();
+      owner = this.topScope().owner;
     }
 
+    const scope = new ResolverScope(owner, node.block);
     for (const param of node.parameters) {
       if (param.type === 'Identifier') {
         scope.decls.set(param.name, { kind: 'param' });
@@ -82,49 +96,40 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
   }
 
   override visitAssignmentStatement(node: AssignmentStatement): void {
-    node.variables.forEach((variable, i) => {
-      if (variable.type === 'Identifier') {
-        this.assignName(variable, node.init[i], node);
-      } else if (variable.type === 'MemberExpression') {
-        this.assignMember(variable, node.init[i], node);
-      }
-    });
+    this.recordStatement(node, node.variables.map((variable, i) => this.assign(variable, node.init[i], node)));
   }
 
   override visitLocalStatement(node: LocalStatement): void {
-    node.variables.forEach((variable, i) => {
+    this.recordStatement(node, node.variables.map((variable, i) => {
       if (variable.type !== 'Identifier') {
-        return;
+        return undefined;
       }
       const value = node.init[i];
       const previous = this.topScope().decls.get(variable.name);
       const unwrapped = unwrapValue(value);
+      let entry: OutlineEntry;
       if (value?.type === 'FunctionDeclaration') {
-        const entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Function,
-          node.loc!, variable.loc!);
+        entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Function, node.loc!, variable.loc!);
         this.targets.set(value, { kind: 'entry', entry });
-        this.topScope().decls.set(variable.name, { kind: 'local', entry, stmt: node, previous });
       } else if (unwrapped?.type === 'TableConstructorExpression') {
-        const ctor = unwrapped as TableConstructorExpression;
-        const entry = addEntry(this.topScope().owner, variable.name, tableTypeOf(ctor), node.loc!, variable.loc!);
-        this.targets.set(ctor, { kind: 'entry', entry });
-        this.topScope().decls.set(variable.name, { kind: 'local', entry, stmt: node, previous });
+        entry = addEntry(this.topScope().owner, variable.name, tableTypeOf(unwrapped), node.loc!, variable.loc!);
+        this.targets.set(unwrapped, { kind: 'entry', entry });
       } else {
-        const entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Variable,
-          node.loc!, variable.loc!);
-        this.topScope().decls.set(variable.name, { kind: 'local', entry, stmt: node, previous });
+        entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Variable, node.loc!, variable.loc!);
       }
-    });
+      this.topScope().decls.set(variable.name, { kind: 'local', entry, stmt: node, previous });
+      return { about: entry, defines: entry };
+    }));
   }
 
   override visitForNumericStatement(node: ForNumericStatement): ResolverScope {
-    const scope = this.createDefaultScope();
+    const scope = this.createDefaultScope(node);
     scope.decls.set(node.variable.name, { kind: 'loopvar' });
     return scope;
   }
 
   override visitForGenericStatement(node: ForGenericStatement): ResolverScope {
-    const scope = this.createDefaultScope();
+    const scope = this.createDefaultScope(node);
     for (const variable of node.variables) {
       scope.decls.set(variable.name, { kind: 'loopvar' });
     }
@@ -144,6 +149,8 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
           continue;
         }
         if (field.value.type === 'FunctionDeclaration') {
+          const method = addEntry(tableEntry, field.key.name, CodeSymbolType.Method, field.loc!, field.key.loc!);
+          this.targets.set(field.value, { kind: 'entry', entry: method, selfTable: tableEntry });
           continue;
         }
         const unwrapped = unwrapValue(field.value);
@@ -157,10 +164,32 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
         }
       }
     }
-    return this.createDefaultScope();
+    return this.createDefaultScope(node);
   }
 
-  private assignName(name: Identifier, value: Expression | undefined, statement: Statement): void {
+  private assign(variable: Variable, value: Expression | undefined, statement: Statement): StatementInfo | undefined {
+    if (variable.type === 'Identifier') {
+      return this.assignName(variable, value, statement);
+    } else if (variable.type === 'MemberExpression') {
+      return this.assignMember(variable, value, statement);
+    }
+    return undefined;
+  }
+
+  // A statement is about a table only when all of its targets are.
+  private recordStatement(statement: Statement, perTarget: Array<StatementInfo | undefined>): void {
+    const about = perTarget[0]?.about;
+    if (!about || perTarget.some(info => info?.about !== about)) {
+      return;
+    }
+    this.statementInfo.set(statement, {
+      about,
+      defines: perTarget.some(info => info?.defines) ? about : undefined,
+      methods: perTarget.flatMap(info => info?.methods ?? []),
+    });
+  }
+
+  private assignName(name: Identifier, value: Expression | undefined, statement: Statement): StatementInfo | undefined {
     const binding = this.resolve(name.name);
     const unwrapped = unwrapValue(value);
 
@@ -174,7 +203,7 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
         receiveTable(binding.entry, ctor);
         this.targets.set(ctor, { kind: 'entry', entry: binding.entry });
       }
-      return;
+      return binding.entry && { about: binding.entry, defines: binding.entry };
     }
 
     if (value?.type === 'FunctionDeclaration') {
@@ -203,9 +232,11 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
         this.globals.set(name.name, addEntry(this.root, name.name, CodeSymbolType.Variable, statement.loc!, name.loc!));
       }
     }
+    const table = this.globals.get(name.name)!;
+    return { about: table, defines: table };
   }
 
-  private assignMember(variable: MemberExpression, value: Expression | undefined, statement: Statement): void {
+  private assignMember(variable: MemberExpression, value: Expression | undefined, statement: Statement): StatementInfo | undefined {
     const segments: Identifier[] = [ variable.identifier ];
     let base: Expression = variable.base;
     while (base.type === 'MemberExpression') {
@@ -226,28 +257,22 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       return; // the outline can't know which table was passed in
     }
 
-    const unwrapped = unwrapValue(value);
-    if (unwrapped?.type === 'FunctionDeclaration') {
-      return;
+    if (value?.type === 'FunctionDeclaration') {
+      return this.addMethod(value, root, segments, variable.indexer, binding.entry, statement);
     }
 
-    let tableEntry: OutlineEntry;
-    if (binding.kind === 'global') {
-      if (binding.entry) {
-        tableEntry = binding.entry;
-      } else {
-        const entry = addEntry(this.root, root.name, CodeSymbolType.Table, statement.loc!, root.loc!);
-        entry.implicit = true;
-        this.globals.set(root.name, entry);
-        tableEntry = entry;
-      }
-    } else {
-      if (!binding.entry) {
+    const unwrapped = unwrapValue(value);
+    let rootEntry = binding.entry;
+    if (!rootEntry) {
+      if (binding.kind !== 'global') {
         return;
       }
-      tableEntry = binding.entry;
+      rootEntry = addEntry(this.root, root.name, CodeSymbolType.Table, statement.loc!, root.loc!);
+      rootEntry.implicit = true;
+      this.globals.set(root.name, rootEntry);
     }
 
+    let tableEntry = rootEntry;
     for (let i = 0; i < segments.length - 1; i++) {
       const seg = segments[i];
       tableEntry = getOrAddMember(tableEntry, seg.name, CodeSymbolType.Table, statement.loc!, seg.loc!);
@@ -269,6 +294,21 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       receiveTable(member, ctor);
       this.targets.set(ctor, { kind: 'entry', entry: member });
     }
+    return { about: rootEntry };
+  }
+
+  // A method written as its own statement: function a.b(), function a:b() or a.b = function() end.
+  private addMethod(fn: FunctionDeclaration, root: Identifier, segments: Identifier[], indexer: Indexer,
+    table: OutlineEntry | undefined, statement: Statement): StatementInfo | undefined {
+    const key = segments[segments.length - 1];
+    const name = [ root, ...segments.slice(0, -1) ].map(id => id.name).join('.') + indexer + key.name;
+    const entry = addEntry(this.topScope().owner, name, CodeSymbolType.Method, statement.loc!, key.loc!);
+    if (table && segments.length === 1) {
+      this.targets.set(fn, { kind: 'entry', entry, selfTable: table });
+      return { about: table, methods: [{ entry, key: key.name }] };
+    }
+    this.targets.set(fn, { kind: 'entry', entry });
+    return table && { about: table };
   }
 
   private resolve(name: string): Binding {
@@ -289,7 +329,7 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
 }
 
 export function resolveOutline(chunk: Chunk): OutlineEntry[] {
-  const resolver = new OutlineResolver();
+  const resolver = new OutlineResolver(findBoundaryLines(chunk.comments ?? []));
   resolver.visit(chunk);
   return resolver.root.children;
 }
