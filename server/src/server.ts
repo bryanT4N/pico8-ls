@@ -26,7 +26,7 @@ import * as path from 'path';
 import { buildDocumentSymbols } from './document-symbols';
 import { computeFoldingRanges } from './folding-ranges';
 
-console.log('PICO-8 Language Server starting.');
+console.log('PICO-8-LS language server starting.');
 
 const connection = createConnection(ProposedFeatures.all);
 

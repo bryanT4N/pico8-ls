@@ -7,6 +7,9 @@
 **/tsconfig.base.json
 scripts/**
 testfiles/**
+.superpowers/**
+docs/**
+server/src/test/goldens/**
 .eslintignore
 .eslintrc.js
 .gitignore
