@@ -167,5 +167,21 @@ describe('outline', () => {
       assert.strictEqual(outlineOf('t = {}\na, t.k = function() end, { n = 1 }'),
         lines('t [Table]', '  k [Table]', '    n [Field]', 'a() [Function]'));
     });
+
+    it('moves an implicit table to its first assignment of any value', () => {
+      assert.strictEqual(outlineOf('function move()\n  player.x = 1\nend\nfunction _init()\n  player = new_player()\nend'),
+        lines('move() [Function]', '_init() [Function]', 'player [Table]', '  x [Field]'));
+    });
+
+    it('does not create tables for a path that is assigned a function', () => {
+      const outline = outlineOf('function _init()\nend\nui.on_click = function() end\ngame = {}\ngame.state.update = function() end');
+      assert.ok(!outline.includes('ui ['), outline);
+      assert.ok(!outline.includes('state ['), outline);
+    });
+
+    it('upgrades an existing field that receives a constructor in a constructor', () => {
+      assert.strictEqual(outlineOf('t = { p = 1 }\nt = { p = { 1, 2 } }'),
+        lines('t [Table]', '  p [Array]'));
+    });
   });
 });

@@ -2,7 +2,6 @@ import { Expression, TableConstructorExpression } from '../expressions';
 import { Bounds } from '../types';
 import { addEntry, CodeSymbolType, OutlineEntry } from './model';
 
-// setmetatable(<ctor>, ...) returns the ctor; everything else passes through unchanged.
 export function unwrapValue(value: Expression | undefined): Expression | undefined {
   if (value?.type === 'CallExpression') {
     if (value.base.type === 'Identifier' && value.base.name === 'setmetatable') {
@@ -15,7 +14,6 @@ export function unwrapValue(value: Expression | undefined): Expression | undefin
   return value;
 }
 
-// At least one field and all fields are positional (TableValue) → Array; otherwise Table.
 export function tableTypeOf(ctor: TableConstructorExpression): CodeSymbolType {
   const fields = ctor.fields.filter(f => f.type !== 'Whitespace');
   if (fields.length > 0 && fields.every(f => f.type === 'TableValue')) {
@@ -24,8 +22,6 @@ export function tableTypeOf(ctor: TableConstructorExpression): CodeSymbolType {
   return CodeSymbolType.Table;
 }
 
-// Return the existing member for key, or create a new one.
-// Also upgrades the parent table's type from Variable/Field/Array to Table.
 export function getOrAddMember(
   table: OutlineEntry,
   key: string,
@@ -47,7 +43,6 @@ export function getOrAddMember(
   return member;
 }
 
-// Adjust entry's type when it receives a table constructor.
 export function receiveTable(entry: OutlineEntry, ctor: TableConstructorExpression): void {
   if (entry.type === CodeSymbolType.Variable || entry.type === CodeSymbolType.Field) {
     entry.type = tableTypeOf(ctor);

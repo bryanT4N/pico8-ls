@@ -144,12 +144,13 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
           continue;
         }
         if (field.value.type === 'FunctionDeclaration') {
-          continue; // Task 6
+          continue;
         }
         const unwrapped = unwrapValue(field.value);
         if (unwrapped?.type === 'TableConstructorExpression') {
           const innerCtor = unwrapped as TableConstructorExpression;
           const member = getOrAddMember(tableEntry, field.key.name, tableTypeOf(innerCtor), field.loc!, field.key.loc!);
+          receiveTable(member, innerCtor);
           this.targets.set(innerCtor, { kind: 'entry', entry: member });
         } else {
           getOrAddMember(tableEntry, field.key.name, CodeSymbolType.Field, field.loc!, field.key.loc!);
@@ -182,28 +183,29 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       if (!binding.entry) {
         this.globals.set(name.name, entry);
       }
-    } else if (unwrapped?.type === 'TableConstructorExpression') {
-      const ctor = unwrapped as TableConstructorExpression;
-      if (binding.entry) {
-        if (binding.entry.implicit) {
-          binding.entry.loc = statement.loc!;
-          binding.entry.selectionLoc = name.loc!;
-          binding.entry.implicit = false;
-        }
-        receiveTable(binding.entry, ctor);
-        this.targets.set(ctor, { kind: 'entry', entry: binding.entry });
-      } else {
-        const entry = addEntry(this.root, name.name, tableTypeOf(ctor), statement.loc!, name.loc!);
-        this.globals.set(name.name, entry);
-        this.targets.set(ctor, { kind: 'entry', entry });
+    } else {
+      if (binding.entry?.implicit) {
+        binding.entry.loc = statement.loc!;
+        binding.entry.selectionLoc = name.loc!;
+        binding.entry.implicit = false;
       }
-    } else if (!binding.entry) {
-      this.globals.set(name.name, addEntry(this.root, name.name, CodeSymbolType.Variable, statement.loc!, name.loc!));
+      if (unwrapped?.type === 'TableConstructorExpression') {
+        const ctor = unwrapped as TableConstructorExpression;
+        if (binding.entry) {
+          receiveTable(binding.entry, ctor);
+          this.targets.set(ctor, { kind: 'entry', entry: binding.entry });
+        } else {
+          const entry = addEntry(this.root, name.name, tableTypeOf(ctor), statement.loc!, name.loc!);
+          this.globals.set(name.name, entry);
+          this.targets.set(ctor, { kind: 'entry', entry });
+        }
+      } else if (!binding.entry) {
+        this.globals.set(name.name, addEntry(this.root, name.name, CodeSymbolType.Variable, statement.loc!, name.loc!));
+      }
     }
   }
 
   private assignMember(variable: MemberExpression, value: Expression | undefined, statement: Statement): void {
-    // Collect the dotted path segments in order: innermost last.
     const segments: Identifier[] = [ variable.identifier ];
     let base: Expression = variable.base;
     while (base.type === 'MemberExpression') {
@@ -211,17 +213,22 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       base = base.base;
     }
     if (base.type !== 'Identifier') {
-      return; // Not a pure dotted path
+      return;
     }
     const root = base as Identifier;
 
     if (root.name === 'self') {
-      return; // Task 7
+      return;
     }
 
     const binding = this.resolve(root.name);
     if (binding.kind === 'param' || binding.kind === 'loopvar') {
-      return; // Task 7
+      return; // the outline can't know which table was passed in
+    }
+
+    const unwrapped = unwrapValue(value);
+    if (unwrapped?.type === 'FunctionDeclaration') {
+      return;
     }
 
     let tableEntry: OutlineEntry;
@@ -241,18 +248,12 @@ class OutlineResolver extends ASTVisitor<ResolverScope> {
       tableEntry = binding.entry;
     }
 
-    // Walk intermediate segments, creating Table members as needed.
     for (let i = 0; i < segments.length - 1; i++) {
       const seg = segments[i];
       tableEntry = getOrAddMember(tableEntry, seg.name, CodeSymbolType.Table, statement.loc!, seg.loc!);
     }
 
     const lastSeg = segments[segments.length - 1];
-    const unwrapped = unwrapValue(value);
-
-    if (unwrapped?.type === 'FunctionDeclaration') {
-      return; // Task 6
-    }
 
     let memberType: CodeSymbolType;
     if (unwrapped?.type === 'TableConstructorExpression') {
