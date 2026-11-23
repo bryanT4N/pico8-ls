@@ -25,11 +25,13 @@ export type FileDiagnostics = { uri: string, diagnostics: Diagnostic[] };
 
 // Returns one entry per unique URI: first the URIs from uris (deduplicated, in
 // order of first appearance), then any additional URIs that appear only in
-// warnings. Each entry lists the file's parse errors first, then its warnings.
+// warnings. Each entry lists the file's parse errors first, then its warnings,
+// up to maxPerFile in all.
 export function mergeDiagnostics(
   uris: string[],
   parseErrors: ReadonlyMap<string, ParseError[]>,
   warnings: Warning[],
+  maxPerFile?: number,
 ): FileDiagnostics[] {
   const seen = new Set<string>();
   const orderedUris: string[] = [];
@@ -57,7 +59,7 @@ export function mergeDiagnostics(
       diagnostics: [
         ...errors.map(toDiagnostic),
         ...fileWarnings.map(toDiagnostic),
-      ],
+      ].slice(0, maxPerFile),
     };
   });
 }

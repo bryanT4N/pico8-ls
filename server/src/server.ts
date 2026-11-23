@@ -25,7 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { buildDocumentSymbols } from './document-symbols';
 import { computeFoldingRanges } from './folding-ranges';
-import { errorsInFile, mergeDiagnostics, toDiagnostic } from './diagnostics';
+import { errorsInFile, mergeDiagnostics } from './diagnostics';
 
 console.log('PICO-8-LS language server starting.');
 
@@ -93,7 +93,7 @@ connection.onInitialized(() => {
     });
   }
 
-  rescanEverything();
+  void fetchGlobalSettings().then(rescanEverything);
 });
 
 function rescanEverything() {
@@ -226,7 +226,7 @@ function findDefUsagesForProject(project: Project) {
     }
   }
 
-  for (const { uri, diagnostics } of mergeDiagnostics(getProjectFiles(project), parseErrorsByUri, warnings)) {
+  for (const { uri, diagnostics } of mergeDiagnostics(getProjectFiles(project), parseErrorsByUri, warnings, globalSettings.maxNumberOfProblems)) {
     connection.sendDiagnostics({ uri, diagnostics });
   }
 }
@@ -266,11 +266,24 @@ interface DocumentSettings {
   maxNumberOfProblems: number;
 }
 
-// The global settings, used when the `workspace/configuration` request is not
-// supported by the client. Note that this isn't the case with VSCode but could
-// happen with other clients.
-const defaultSettings: DocumentSettings = { maxNumberOfProblems: 1000 };
+// The settings for every file. A client without the `workspace/configuration`
+// request can't be asked for them, so it sends them with each change instead.
+const defaultSettings: DocumentSettings = { maxNumberOfProblems: 100 };
 let globalSettings: DocumentSettings = defaultSettings;
+
+// Diagnostics are sent synchronously after each parse, so the settings they
+// need are fetched before a scan rather than for each file.
+async function fetchGlobalSettings() {
+  if (!hasConfigurationCapability) {
+    return;
+  }
+  try {
+    const settings = await connection.workspace.getConfiguration('pico-8-ls') as Partial<DocumentSettings> | null;
+    globalSettings = { ...defaultSettings, ...settings };
+  } catch (e) {
+    console.error('Failed to get the pico-8-ls settings', e);
+  }
+}
 
 // Set up validation handler for when document changes
 documents.onDidChangeContent(change => {
@@ -316,8 +329,8 @@ documents.onDidChangeContent(change => {
         console.error('error reparsing project files: ', e);
       });
     } else {
-      const errors = parseErrorsByUri.get(document.uri) ?? [];
-      connection.sendDiagnostics({ uri: document.uri, diagnostics: errors.map(toDiagnostic) });
+      const [ fileDiagnostics ] = mergeDiagnostics([ document.uri ], parseErrorsByUri, [], globalSettings.maxNumberOfProblems);
+      connection.sendDiagnostics(fileDiagnostics);
     }
   }
 });
@@ -355,7 +368,8 @@ const documentSettings: Map<string, Thenable<DocumentSettings>> = new Map<string
 // When a document is closed, purge its entry from the cache
 documents.onDidClose(e => documentSettings.delete(e.document.uri));
 
-// Parse errors keyed by URI, written by parseTextDocument and read by findDefUsagesForProject
+// A file's parse errors wait here for its warnings from the project's analysis:
+// sent as two lists, the later one would replace the earlier one.
 const parseErrorsByUri = new Map<string, ParseError[]>();
 
 // Text for open documents
@@ -377,7 +391,7 @@ connection.onDidChangeConfiguration(change => {
     globalSettings = change.settings['pico-8-ls'] || defaultSettings;
   }
 
-  rescanEverything();
+  void fetchGlobalSettings().then(rescanEverything);
 });
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
