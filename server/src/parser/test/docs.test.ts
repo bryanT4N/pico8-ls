@@ -44,6 +44,14 @@ describe('doc comments', () => {
     strictEqual(text(docAt(lines('-- #region player', '-- makes a player', 'function make_player() end'), 3, 9)), 'makes a player');
   });
 
+  it('does not take a one-line heading between two runs of separators', () => {
+    strictEqual(text(docAt(lines('x = 1', '-- ==== player ====', 'function make_player() end'), 3, 9)), undefined);
+    strictEqual(text(docAt(lines('x = 1', '-- ---- enemies ----', 'enemy = {}'), 3, 0)), undefined);
+    strictEqual(text(docAt(lines('x = 1', '---- enemies ----', 'enemy = {}'), 3, 0)), undefined);
+    strictEqual(text(docAt(lines('x = 1', '-- waits --- then fires', 'function fire() end'), 3, 9)), 'waits --- then fires');
+    strictEqual(text(docAt(lines('x = 1', '-- - then waits...', 'function wait() end'), 3, 9)), '- then waits...');
+  });
+
   it('takes a comment block after leading #include lines, which are code', () => {
     strictEqual(text(docAt(lines('#include lib.lua', '-- adds two numbers', 'function add(a, b) return a + b end'), 3, 9,
       { 'lib.lua': 'x = 1' })), 'adds two numbers');

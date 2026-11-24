@@ -178,7 +178,7 @@ function docAbove(analysis: Analysis, node: ASTNode): Doc | undefined {
 
 // The text of a block, unless it is a title, a section heading or commented-out code.
 function blockText(block: Block): string | undefined {
-  if (block.title) {
+  if (block.title || isBanner(block)) {
     return undefined;
   }
   const lines = block.comments.flatMap(linesOf);
@@ -215,6 +215,18 @@ function isLong(comment: Comment_): boolean {
 // A row of dashes, = signs and the like, as around a section heading.
 function isSeparator(line: string): boolean {
   return /^[\s\-=*#~_+.]*$/.test(line) && line.replace(/\s/g, '').length >= 3;
+}
+
+// A heading on one line, such as -- ==== player ====: text between two runs of such characters. The dashes that open
+// the comment belong to the run they touch, as in ---- enemies ----, but not across a space, as in -- - then waits...
+function isBanner(block: Block): boolean {
+  const [ comment ] = block.comments;
+  if (block.comments.length > 1 || comment.loc!.start.line !== comment.loc!.end.line) {
+    return false;
+  }
+  const line = isLong(comment) ? comment.value : comment.raw.replace(/^--(?=\s)|^\/\//, '');
+  const [ , before, text, after ] = /^([\s\-=*#~_+.]*)([\s\S]*?)([\s\-=*#~_+.]*)$/.exec(line)!;
+  return text !== '' && isSeparator(before) && isSeparator(after);
 }
 
 const COMMENT_FILE = new ResolvedFile('comment', 'comment');
