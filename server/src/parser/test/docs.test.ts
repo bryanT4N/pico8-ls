@@ -52,6 +52,11 @@ describe('doc comments', () => {
     strictEqual(text(docAt(lines('x = 1', '-- - then waits...', 'function wait() end'), 3, 9)), '- then waits...');
   });
 
+  it('reads a long run of separators inside a line quickly', () => {
+    const long = 'a' + '-'.repeat(100000) + 'b';
+    strictEqual(text(docAt(lines('x = 1', '-- ' + long, 'function f() end'), 3, 9)), long);
+  });
+
   it('takes a comment block after leading #include lines, which are code', () => {
     strictEqual(text(docAt(lines('#include lib.lua', '-- adds two numbers', 'function add(a, b) return a + b end'), 3, 9,
       { 'lib.lua': 'x = 1' })), 'adds two numbers');

@@ -225,8 +225,13 @@ function isBanner(block: Block): boolean {
     return false;
   }
   const line = isLong(comment) ? comment.value : comment.raw.replace(/^--(?=\s)|^\/\//, '');
-  const [ , before, text, after ] = /^([\s\-=*#~_+.]*)([\s\S]*?)([\s\-=*#~_+.]*)$/.exec(line)!;
-  return text !== '' && isSeparator(before) && isSeparator(after);
+  const before = /^[\s\-=*#~_+.]*/.exec(line)![0];
+  // A loop, not a regular expression anchored at the end, which takes quadratic time on a long run inside the text.
+  let end = line.length;
+  while (end > before.length && /[\s\-=*#~_+.]/.test(line[end - 1])) {
+    end--;
+  }
+  return end > before.length && isSeparator(before) && isSeparator(line.slice(end));
 }
 
 const COMMENT_FILE = new ResolvedFile('comment', 'comment');
