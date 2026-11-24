@@ -227,6 +227,23 @@ describe('ProjectIndex', () => {
     deepStrictEqual(outlineLines(index.outline(uriOf('a.lua'))), [ 'fa() [Function]' ]);
   });
 
+  it('makes each file of a cycle that nothing else includes the root of its own project', () => {
+    const files = { 'a.lua': '#include b.lua\nfunction fa() end\nfa()', 'b.lua': '#include a.lua\nfunction fb() end' };
+    const index = scanned(files);
+    deepStrictEqual(outlineLines(index.outline(uriOf('a.lua'))), [ 'fa() [Function]' ]);
+    deepStrictEqual(outlineLines(index.outline(uriOf('b.lua'))), [ 'fb() [Function]' ]);
+    deepStrictEqual(index.definitions(uriOf('a.lua'), offsetIn(files, 'a.lua', 3, 0)).map(loc), [ 'a.lua 2:9-2:11' ]);
+    deepStrictEqual(index.document(uriOf('a.lua'))!.errors.map(formatError),
+      [ 'a.lua 1:0 Can\'t #include a.lua from b.lua, which is #included from a.lua: Circular #includes detected!' ]);
+    deepStrictEqual(index.update(uriOf('b.lua')).sort(), [ uriOf('a.lua'), uriOf('b.lua') ].sort());
+    deepStrictEqual(outlineLines(index.outline(uriOf('b.lua'))), [ 'fb() [Function]' ]);
+  });
+
+  it('keeps an included file in its includer\'s project only', () => {
+    const index = scanned({ 'main.p8': '#include lib.lua\nx = 1', 'lib.lua': 'y = 2' });
+    eq(index.analyses(uriOf('lib.lua')).length, 1);
+  });
+
   it('goes from an #include line to the file', () => {
     const files = { 'main.p8': '#include lib.lua', 'lib.lua': 'x = 1' };
     const found = scanned(files).definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 1, 3));

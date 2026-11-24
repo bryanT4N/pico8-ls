@@ -238,7 +238,15 @@ export class ProjectIndex {
   }
 
   private buildProjects(): void {
-    this.projects = findProjects(this.documents)
+    const trees = findProjects(this.documents);
+    const covered = new Set(trees.flatMap(project => getProjectFiles(project)));
+    // A file in no project, like one in a cycle of #includes that nothing else includes, is the root of its own.
+    for (const uri of this.documents.keys()) {
+      if (!covered.has(uri)) {
+        trees.push({ root: findProjectsRecursive(uri, new Map(), this.documents)! });
+      }
+    }
+    this.projects = trees
       .map(project => ({
         root: project.root.document.textDocument.uri, files: getProjectFiles(project), analysis: emptyAnalysis(), warnings: [],
       }))
