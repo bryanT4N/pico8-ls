@@ -117,6 +117,8 @@ export type ChildParseResult = {
   statements: string[],
   outline: string[],
   invalid: string[],
+  // How many queries ran, analyze among them.
+  queries: number,
 };
 
 export function parseManyInChild(jobs: ChildParseJob[], timeoutMs: number): ChildParseResult[] {

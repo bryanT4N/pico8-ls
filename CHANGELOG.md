@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+- The outline, Go to Definition, Find References, completion and "undefined variable" warnings now come from one analysis of the whole project, so they agree with each other.
+- Go to Definition and Find References:
+  - Names follow Lua's scoping: a `local` is found only where it is visible, a loop variable only inside its loop, and in `local x = x` the right-hand `x` is the outer one.
+  - Fields and methods are found through their table: `player.x` goes to `x = 64` in `player = { x = 64 }`, and `a:update()` no longer lists `b:update`.
+  - A field read such as `x = player.hp` is found, and `self` works in callbacks inside a method.
+  - Labels are matched within their function.
+  - Go to Definition goes where the outline lists a name: its first definition in each file, plus every function definition. A method call on a table that has no such method, for example one inherited through `extend`, lists every method of that name.
+  - Find References honours "include declaration".
+- Completion:
+  - It offers the locals visible at the cursor, the project's globals and the built-in functions, with kinds and signatures.
+  - After `player.`, `player:`, `self.` or `self:` it offers the table's fields and methods, only the methods after a colon.
+  - It works on the line being typed, also in a function whose `end` is not written yet, and after `..`.
+- Warnings:
+  - New warnings where Lua would read an undefined global: a local function called from another function, a loop variable used after its loop, and a global that is only ever changed with `+=` and the like.
+  - No false warning for a `repeat … until` condition that reads a local of the loop.
+  - Names like `constructor` or `toString` no longer break the analysis.
+  - A file included by several carts shows only the warnings that hold in every one of them.
+- `#include` follows PICO-8's pasting: a `local` declared before the `#include` is visible in the included file, one declared after it is not, and an `#include` inside a function sees that function's locals. Unsaved edits to an included file show up in the files that include it.
+- Outline:
+  - Each file lists a global or field at its own first definition, also when another file defines it first.
+  - Callbacks written in a variable's value are listed under it, so the breadcrumbs reach them.
+  - `local f` followed by `function f()` lists only the function.
+  - With several names in one assignment, each name gets its own range.
+  - `x = x or { ... }` counts as a table, and `T[k] = v` between a table and its methods no longer keeps the methods from being grouped under it.
+- Changes made outside VS Code, for example saving from PICO-8 or deleting a file, are picked up, and a file closed without saving goes back to its saved text.
+- A new file, or one opened outside the workspace folders, gets Go to Definition and completion straight away, and an `#include` written before the file existed works as soon as it is created.
+- Fixed: setting `pico-8-ls.maxNumberOfProblems` to null hid every problem, and a negative number dropped some of them. Now null means the default of 100 and a negative number means 0. The settings editor asks for a whole number of at least 0.
+
 ## 0.2.0 (unreleased)
 
 - Fixed: the language server hung or crashed, and then kept restarting, when an included file's last line was an `#include` leading back to a file already being included, or when a file ended with an unfinished parameter list like `function foo(`.

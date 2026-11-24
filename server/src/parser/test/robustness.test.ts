@@ -42,6 +42,7 @@ describe('robustness on half-typed lines', function () {
         assert.ok(r.ms < MAX_MS, `version ${i}: ${r.ms} ms`);
         assert.deepStrictEqual(r.invalid, [], `version ${i}: invalid outline entries`);
       });
+      assert.ok(results.reduce((sum, r) => sum + r.queries, 0) > 0, 'no queries ran');
     });
   }
 });

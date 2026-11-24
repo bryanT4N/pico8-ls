@@ -3,10 +3,16 @@ import { performance } from 'perf_hooks';
 import ResolvedFile from '../file-resolver';
 import Parser from '../parser';
 import { analyze } from '../analysis/binder';
+import { Analysis } from '../analysis/model';
+import { definitionsAt, membersAt, referenceAt, referencesOf, visibleAt, warningsOf } from '../analysis/queries';
 import { outlineFor, CodeSymbol } from '../symbols';
 import { Chunk } from '../statements';
+import { codeLocationToString } from '../types';
+import { completionItems, completionRequestAt } from '../../completion';
 import { outlineLines } from './outline-utils';
 import { ChildParseJob, ChildParseResult, formatError, TestFilesResolver } from './test-utils';
+
+const PLACES = 25;
 
 function collectInvalid(syms: CodeSymbol[], mainFile: ResolvedFile): string[] {
   const invalid: string[] = [];
@@ -30,6 +36,34 @@ function collectInvalid(syms: CodeSymbol[], mainFile: ResolvedFile): string[] {
   return invalid;
 }
 
+// The lookups the editor asks for while code is being typed. Returns how many ran.
+function runQueries(analysis: Analysis, file: ResolvedFile, code: string): number {
+  let queries = 0;
+  for (const reference of analysis.referencesByFile.get(file.path) ?? []) {
+    const found = referenceAt(analysis, file, reference.loc.start.index);
+    if (!found) {
+      throw new Error(`no reference at ${codeLocationToString(reference.loc.start)}`);
+    }
+    definitionsAt(analysis, found);
+    referencesOf(found.symbol, true);
+    queries += 3;
+  }
+  warningsOf(analysis);
+  queries++;
+  const lines = code.split('\n');
+  for (let k = 0; k < PLACES; k++) {
+    const index = Math.floor(k * code.length / (PLACES - 1));
+    const before = code.slice(0, index).split('\n');
+    const line = before.length - 1;
+    const column = before[line].length;
+    visibleAt(analysis, file, index);
+    membersAt(analysis, file, index, [ 'self' ], false);
+    completionItems([ analysis ], file, index, completionRequestAt(lines[line], column), line, column);
+    queries += 3;
+  }
+  return queries;
+}
+
 function parseJob(job: ChildParseJob): ChildParseResult {
   const mainFile = new ResolvedFile('main_test_file', 'main_test_file');
   const parser = new Parser(mainFile, job.code, {
@@ -47,14 +81,19 @@ function parseJob(job: ChildParseJob): ChildParseResult {
       statements: [],
       outline: [],
       invalid: [],
+      queries: 0,
     };
   }
 
-  // A throw in the analysis shows up in `threw` too, along with what the parse
-  // found.
+  // A throw in the analysis or in a query shows up in `threw` too, along with
+  // what the parse found.
   let symbols: CodeSymbol[];
+  let queries = 0;
   try {
-    symbols = outlineFor(analyze(chunk), mainFile);
+    const analysis = analyze(chunk);
+    queries++;
+    symbols = outlineFor(analysis, mainFile);
+    queries += runQueries(analysis, mainFile, job.code);
   } catch (e) {
     return {
       ms: performance.now() - start,
@@ -63,6 +102,7 @@ function parseJob(job: ChildParseJob): ChildParseResult {
       statements: chunk.block.body.map(s => s.type + (s.included ? '*' : '')),
       outline: [],
       invalid: [],
+      queries,
     };
   }
 
@@ -74,6 +114,7 @@ function parseJob(job: ChildParseJob): ChildParseResult {
     statements: chunk.block.body.map(s => s.type + (s.included ? '*' : '')),
     outline: outlineLines(symbols),
     invalid: collectInvalid(symbols, mainFile),
+    queries,
   };
 }
 
