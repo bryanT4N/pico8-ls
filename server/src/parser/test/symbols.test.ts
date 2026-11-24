@@ -125,6 +125,31 @@ describe('outline', () => {
         lines('f() [Function]', '  co [Variable]', '    <anonymous function>() [Function]'));
     });
 
+    it('puts a callback back under its function when an entry above it does not contain it', () => {
+      assert.strictEqual(outlineOf(lines('function make_enemy()', '  local e = {}', '  e.co = cocreate(function()', '    yield()', '  end)',
+        '  return e', 'end')),
+      lines('make_enemy() [Function]', '  e [Table]', '    co [Field]', '  <anonymous function>() [Function]'));
+      assert.strictEqual(outlineOf(lines('t = {}', 't.co = cocreate(function()', '  yield()', 'end)')),
+        lines('t [Table]', '  co [Field]', '<anonymous function>() [Function]'));
+      assert.strictEqual(outlineOf(lines('function f()', '  local p = {}', '  p = { co = cocreate(function()', '    yield()', '  end) }', 'end')),
+        lines('f() [Function]', '  p [Table]', '    co [Field]', '  <anonymous function>() [Function]'));
+      assert.strictEqual(outlineOf(lines('t = {}', 't = { co = cocreate(function()', '  yield()', 'end) }')),
+        lines('t [Table]', '  co [Field]', '<anonymous function>() [Function]'));
+      assert.strictEqual(outlineOf(lines('function new_game()', '  local game = {}', '  game.player = new_player {',
+        '    on_damaged = function() end,', '  }', '  game.hooks = wrap({ function() end })', 'end')),
+      lines('new_game() [Function]', '  game [Table]', '    player [Field]', '    hooks [Field]', '  on_damaged() [Method]',
+        '  <anonymous function>() [Function]'));
+    });
+
+    it('lifts such a callback only up to a table that grouping stretched over it', () => {
+      const { symbols } = parse(lines('game = {}', 'game.state = {}', 'game.state.co = cocreate(function()', '  yield()', 'end)',
+        'function game:update() end'));
+      assert.deepStrictEqual(outlineLinesWithRanges(symbols), [
+        'game [Table] 1:0-6:26 1:0-1:4', '  state [Table] 2:0-2:15 2:5-2:10', '    co [Field] 3:0-5:4 3:11-3:13',
+        '  <anonymous function>() [Function] 3:25-5:3 3:25-5:3', '  update() [Method] 6:0-6:26 6:14-6:20',
+      ]);
+    });
+
     it('puts the locals of a function assigned to a global under it', () => {
       assert.strictEqual(outlineOf('x = function()\n  local y = 1\nend'), lines('x() [Function]', '  y [Variable]'));
     });

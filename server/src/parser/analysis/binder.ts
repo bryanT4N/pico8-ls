@@ -4,7 +4,7 @@ import { AnonymousFunctionName, AssignmentStatement, Block, Chunk, ForGenericSta
 import { resolveIncludeFile } from '../file-resolver';
 import { ASTNode, Bounds, boundsContain, CodeLocation } from '../types';
 import { ASTVisitor, VisitableASTNode } from '../visitor';
-import { addEntry, CodeSymbolType, OutlineEntry, Owner, signatureOf } from '../outline/model';
+import { addEntry, CodeSymbolType, moveEntry, OutlineEntry, Owner, signatureOf } from '../outline/model';
 import { defineMember, pathMember, receiveTable, tableTypeOf, unwrapValue } from '../outline/members';
 import { findBoundaryLines, groupMethodRuns, StatementInfo } from '../outline/method-runs';
 import { Analysis, LuaSymbol, Reference, Scope } from './model';
@@ -30,11 +30,12 @@ type Binding = Decl | { kind: 'global', symbol: LuaSymbol, entry?: OutlineEntry 
 type SelfPath = { root: OutlineEntry, segments: Identifier[], loc: Bounds };
 
 // selfSymbol is the table self means in a method, as far as names tell. A flat target's symbol is the member a
-// function defines, or the variable that holds a table.
+// function defines, or the variable that holds a table. natural: the function or file a function is in, when
+// callbackOwner put it under an entry there instead.
 type ValueTarget =
   | { kind: 'entry', entry: OutlineEntry, selfTable?: OutlineEntry | null, selfPath?: SelfPath, selfSymbol?: LuaSymbol }
-  | { kind: 'flat', owner: Owner, name: string, loc?: Bounds, selectionLoc?: Bounds, symbol?: LuaSymbol } // rule 7, unnamed table
-  | { kind: 'anonymous', owner: Owner };
+  | { kind: 'flat', owner: Owner, natural?: Owner, name: string, loc?: Bounds, selectionLoc?: Bounds, symbol?: LuaSymbol } // rule 7, unnamed table
+  | { kind: 'anonymous', owner: Owner, natural?: Owner };
 
 // order: taken where the goto is, though the label it goes to may come later.
 type PendingGoto = { label: Identifier, blocks: BinderScope[], order: number };
@@ -80,6 +81,8 @@ class Binder extends ASTVisitor<BinderScope> {
   // The entry each value was listed with, recorded by the statement and constructor hooks: the callbacks in a value
   // can go under it.
   private readonly valueEntries = new Map<ASTNode, OutlineEntry>();
+  // The function entries that callbackOwner put under an entry, with the function or file they are in.
+  private readonly nestedCallbacks: Array<{ entry: OutlineEntry, natural: Owner }> = [];
 
   constructor(private readonly boundaryLines: Map<string, number[]>) {
     super();
@@ -91,6 +94,7 @@ class Binder extends ASTVisitor<BinderScope> {
     this.closeIncludes();
     this.resolveGotos(this.scopeStack[0]);
     groupMethodRuns(chunk.block.body, this.statementInfo, this.boundaryLines);
+    this.liftUnreachableCallbacks();
   }
 
   override onExitScope(scope: BinderScope): void {
@@ -188,19 +192,22 @@ class Binder extends ASTVisitor<BinderScope> {
       this.recordStatement(node, [ this.assign(node.identifier, node, node, node.loc!, false) ]);
     }
 
-    const target = this.targets.get(node);
+    // A function value that nothing gave a target, such as a callback, is listed as anonymous.
+    const target: ValueTarget | undefined = this.targets.get(node)
+      ?? (node.identifier ? undefined : { kind: 'anonymous', ...this.callbackOwner() });
     let owner: Owner;
     if (target?.kind === 'entry') {
       target.entry.detail = signatureOf(node);
       owner = target.entry;
-    } else if (target?.kind === 'flat') {
-      owner = this.link(addEntry(target.owner, target.name, CodeSymbolType.Method, target.loc ?? node.loc!, target.selectionLoc ?? node.loc!,
-        signatureOf(node)), target.symbol);
-    } else if (target?.kind === 'anonymous') {
-      owner = addEntry(target.owner, AnonymousFunctionName, CodeSymbolType.Function, node.loc!, node.loc!, signatureOf(node));
-    } else if (!node.identifier) {
-      owner = addEntry(this.callbackOwner(), AnonymousFunctionName, CodeSymbolType.Function,
-        node.loc!, node.loc!, signatureOf(node));
+    } else if (target) {
+      const entry = target.kind === 'flat'
+        ? this.link(addEntry(target.owner, target.name, CodeSymbolType.Method, target.loc ?? node.loc!, target.selectionLoc ?? node.loc!,
+          signatureOf(node)), target.symbol)
+        : addEntry(target.owner, AnonymousFunctionName, CodeSymbolType.Function, node.loc!, node.loc!, signatureOf(node));
+      if (target.natural) {
+        this.nestedCallbacks.push({ entry, natural: target.natural });
+      }
+      owner = entry;
     } else {
       owner = this.topScope().owner;
     }
@@ -389,7 +396,7 @@ class Binder extends ASTVisitor<BinderScope> {
         }
       }
     } else {
-      const owner = target?.kind === 'flat' ? target.owner : this.callbackOwner();
+      const { owner, natural } = target?.kind === 'flat' ? target : this.callbackOwner();
       const prefix = target?.kind === 'flat' ? target.name : '';
       const named = target?.kind === 'flat' ? target.symbol : undefined;
       // The keys of a table that no name holds still get symbols, so that a method call on some other table
@@ -400,17 +407,17 @@ class Binder extends ASTVisitor<BinderScope> {
           const member = table.member(field.key.name);
           this.define(member, field.key, field.loc!, field, field.value);
           if (field.value.type === 'FunctionDeclaration') {
-            this.targets.set(field.value, { kind: 'flat', owner, name: prefix ? `${prefix}.${field.key.name}` : field.key.name,
+            this.targets.set(field.value, { kind: 'flat', owner, natural, name: prefix ? `${prefix}.${field.key.name}` : field.key.name,
               loc: field.loc!, selectionLoc: field.key.loc!, symbol: named && member });
           } else {
             const unwrapped = unwrapValue(field.value);
             if (unwrapped?.type === 'TableConstructorExpression') {
-              this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner, name: prefix ? `${prefix}.${field.key.name}` : '',
-                symbol: named && member });
+              this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner, natural,
+                name: prefix ? `${prefix}.${field.key.name}` : '', symbol: named && member });
             }
           }
         } else if (field.type === 'TableValue' || field.type === 'TableKey') {
-          this.registerPositionalTarget(field.value, owner);
+          this.registerPositionalTarget(field.value, owner, natural);
         }
       }
     }
@@ -634,13 +641,13 @@ class Binder extends ASTVisitor<BinderScope> {
     }
   }
 
-  private registerPositionalTarget(value: Expression, owner: Owner): void {
+  private registerPositionalTarget(value: Expression, owner: Owner, natural?: Owner): void {
     if (value.type === 'FunctionDeclaration') {
-      this.targets.set(value, { kind: 'anonymous', owner });
+      this.targets.set(value, { kind: 'anonymous', owner, natural });
     } else {
       const unwrapped = unwrapValue(value);
       if (unwrapped?.type === 'TableConstructorExpression') {
-        this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner, name: '' });
+        this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner, natural, name: '' });
       }
     }
   }
@@ -701,31 +708,55 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   // Where a callback or a function listed flat goes: under the innermost entry, in the function being visited, whose
-  // value holds it, as in local co = cocreate(function() end); otherwise under that function, or at the top level. The
-  // entry must be listed under that function too: a global first assigned in _init is listed at the top level, and a
-  // cursor in a callback listed there would no longer find _init.
-  private callbackOwner(): Owner {
-    const owner = this.topScope().owner;
+  // value holds it, as in local co = cocreate(function() end), and then natural is that function, or the root at the top
+  // level; otherwise under the function or the root itself. The entry must be listed under that function too: a global
+  // first assigned in _init is listed at the top level, and a cursor in a callback listed there would no longer find _init.
+  private callbackOwner(): { owner: Owner, natural?: Owner } {
+    const natural = this.topScope().owner;
     for (let i = this.nodeStack.length - 1; i >= 0; i--) {
       const { node } = this.nodeStack[i];
       if (node.type === 'FunctionDeclaration') {
         break;
       }
       const entry = this.valueEntries.get(node);
-      if (entry && boundsContain(entry.loc, node.loc!) && this.isUnder(entry, owner)) {
-        return entry;
+      if (entry && boundsContain(entry.loc, node.loc!) && this.entriesAbove(entry, natural) !== undefined) {
+        return { owner: entry, natural };
       }
     }
-    return owner;
+    return { owner: natural };
   }
 
-  // The root, where every chain of parents ends, holds every entry.
-  private isUnder(entry: OutlineEntry, owner: Owner): boolean {
-    let parent = entry.parent;
-    while (parent !== owner && parent !== this.root) {
-      parent = (parent as OutlineEntry).parent;
+  // Breadcrumbs descend into the first entry whose range contains the cursor, and the range of a member can lie outside
+  // its table's: local e = {}, then e.co = cocreate(function() end). So a callback that callbackOwner put under an entry
+  // goes up to the lowest entry the descent reaches it through: the entries from the function it is in down to there all
+  // contain it. With none, it goes back to that function. This waits for the last grouping, which stretches tables over
+  // their methods.
+  private liftUnreachableCallbacks(): void {
+    for (const { entry, natural } of this.nestedCallbacks) {
+      let place: Owner = natural;
+      for (const above of (this.entriesAbove(entry, natural) ?? []).reverse()) {
+        if (!boundsContain(above.loc, entry.loc)) {
+          break;
+        }
+        place = above;
+      }
+      if (place !== entry.parent) {
+        moveEntry(entry, place);
+      }
     }
-    return parent === owner;
+  }
+
+  // The entries from entry's parent up to owner, owner left out, nearest first; undefined when owner does not hold entry.
+  // The root, where every chain of parents ends, holds every entry.
+  private entriesAbove(entry: OutlineEntry, owner: Owner): OutlineEntry[] | undefined {
+    const entries: OutlineEntry[] = [];
+    for (let parent = entry.parent; parent !== owner; parent = (parent as OutlineEntry).parent) {
+      if (parent === this.root) {
+        return undefined;
+      }
+      entries.push(parent as OutlineEntry);
+    }
+    return entries;
   }
 
   // The symbol whose members base.k names: self stands for its method's table. A base that is not a name or a
