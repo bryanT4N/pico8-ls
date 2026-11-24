@@ -17,7 +17,7 @@
   - A method that the table itself does not define, for example one inherited through `extend`, shows every method of that name with its table.
   - When several functions may be called, the first whose parameters take the arguments typed so far is selected.
 - Parameter hints, also for PICO-8's built-in functions, now find the call when it is inside another call, contains strings or comments, or runs over several lines.
-  - None are shown in the body of a function passed as an argument, as in `foreach(t, function(e)`, or in a call on something other than a name, such as `f(x)(` or `get():hit(`.
+  - Inside the body of a function passed as an argument, as in `foreach(t, function(e)`, the call it is passed to shows no hint; calls written in the body show theirs. A call on something other than a name, such as `f(x)(` or `get():hit(`, shows none.
 - Fixed: a file that an `#include` read from disk before you opened it, for example in a folder outside the workspace or in a folder whose name starts with a dot, showed its old text in its outline and Go to Definition until you edited it.
 - Fixed: after a folder of included files was deleted, its files, also those included only from other files in the folder, kept their own warnings, and when the files were created again the `#include` kept reporting a missing file until the including file was edited.
 - Fixed: fields that an included file sets on a function of the including file were listed without the function's name in the included file's outline.
