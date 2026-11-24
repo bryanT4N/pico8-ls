@@ -38,18 +38,33 @@ export function fileURLToPath(fileUrl: string): string {
   return url.fileURLToPath(fileUrl);
 }
 
+// The URI as VS Code writes it, which is how the editor and the file watcher name the file: every character but
+// letters, digits, - . _ ~ and the slashes is percent-encoded, the drive's colon too. Node's url.pathToFileURL leaves
+// ( ) ' ! & and others as they are. Unlike VS Code, the drive letter keeps its case, so that the URI reads back to
+// the same path; the paths here come from VS Code's URIs, where it is lower case.
 export function pathToFileURL(filePath: string): string {
-  let uri = url.pathToFileURL(filePath).toString();
-
-  const match = /^file:\/\/\/(\w):\/(.*)$/.exec(uri);
-  if (match) {
-    // For Windows URIs we need to urlencode the colon in "c:/" or whatever
-    const driveLetter = match[1];
-    const rest = match[2];
-    uri = `file:///${driveLetter}%3A/${rest}`;
+  let rest = path.resolve(filePath);
+  let authority = '';
+  if (path.sep === '\\') {
+    rest = rest.replace(/\\/g, '/');
+    if (rest.startsWith('//')) {
+      // A UNC path: \\server\share\...
+      const end = rest.indexOf('/', 2);
+      authority = (end === -1 ? rest.slice(2) : rest.slice(2, end)).toLowerCase();
+      rest = end === -1 ? '/' : rest.slice(end);
+    } else {
+      rest = '/' + rest;
+    }
   }
+  return `file://${percentEncode(authority, /[\w.~:[\]-]/)}${percentEncode(rest, /[\w.~/-]/)}`;
+}
 
-  return uri;
+function percentEncode(text: string, keep: RegExp): string {
+  let encoded = '';
+  for (const char of text) {
+    encoded += keep.test(char) ? char : [ ...Buffer.from(char) ].map(byte => '%' + byte.toString(16).toUpperCase().padStart(2, '0')).join('');
+  }
+  return encoded;
 }
 
 export function resolveIncludeFile(currFile: ResolvedFile, includeFilename: string): ResolvedFile {

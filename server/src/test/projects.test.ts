@@ -4,7 +4,7 @@ import * as url from 'url';
 import { Location } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import Parser from '../parser/parser';
-import ResolvedFile, { FileResolver } from '../parser/file-resolver';
+import ResolvedFile, { FileResolver, fileURLToPath, pathToFileURL } from '../parser/file-resolver';
 import { outlineLines } from '../parser/test/outline-utils';
 import { deepEquals, formatError } from '../parser/test/test-utils';
 import { findProjects, isTrackedPath, makeFileResolver, ParsedDocumentsMap, ProjectDocument, ProjectIndex } from '../projects';
@@ -60,6 +60,20 @@ describe('isTrackedPath', () => {
 
   it('tracks any .p8/.lua file when no roots are given', () => {
     eq(isTrackedPath(path.join(path.resolve('/anywhere'), '.x', 'a.lua'), []), true);
+  });
+});
+
+describe('pathToFileURL', () => {
+  it('writes a URI as VS Code does, and reads it back', () => {
+    const name = 'lib(2) it\'s!&+,;=@[x]~.lua';
+    const encoded = 'lib%282%29%20it%27s%21%26%2B%2C%3B%3D%40%5Bx%5D~.lua';
+    // A path from a URI that VS Code gave, whose drive letter is lower case.
+    const [ filePath, uri ] = path.sep === '\\'
+      ? [ `c:\\Users\\me\\My Carts\\${name}`, `file:///c%3A/Users/me/My%20Carts/${encoded}` ]
+      : [ `/home/me/My Carts/${name}`, `file:///home/me/My%20Carts/${encoded}` ];
+    eq(pathToFileURL(filePath), uri);
+    eq(fileURLToPath(uri), filePath);
+    eq(ResolvedFile.fromFileURL(uri).equals(ResolvedFile.fromPath(filePath)), true);
   });
 });
 
@@ -212,6 +226,29 @@ describe('ProjectIndex', () => {
     }, NO_DISK);
     eq(resolver.loadFileContents(path.join(ROOT, 'lib.lua')), 'x = 1');
     deepStrictEqual(asked, [ uriOf('lib.lua') ]);
+  });
+
+  it('knows an included file by the URI the editor gives it when its name has parentheses', () => {
+    const files: Record<string, string> = {
+      'main.p8': 'player = {}\n#include lib(2).lua\nprint(answer())',
+      'lib(2).lua': 'function answer() return player end',
+    };
+    const index = scanned(files);
+    // VS Code's URI for lib(2).lua: url.pathToFileURL leaves the parentheses as they are.
+    const lib = uriOf('lib.lua').replace(/lib\.lua$/, 'lib%282%29.lua');
+    const asked: string[] = [];
+    makeFileResolver(uri => {
+      asked.push(uri);
+      return '';
+    }, NO_DISK).loadFileContents(path.join(ROOT, 'lib(2).lua'));
+    deepStrictEqual(asked, [ lib ]);
+    // Opened in the editor, then edited without saving.
+    files['lib(2).lua'] = '\nfunction answer() return player end';
+    index.update(lib);
+    files['lib(2).lua'] = '\n\nfunction answer() return player end';
+    index.update(lib);
+    deepStrictEqual(index.warnings(lib), []);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 3, 6)).map(loc), [ 'lib(2).lua 3:9-3:15' ]);
   });
 
   it('moves a file into the project that starts including it', () => {
