@@ -11,6 +11,7 @@ import { definitionsAt, referenceAt, referencesOf, warningsOf } from './parser/a
 import { CodeSymbol, outlineFor } from './parser/symbols';
 import { Bounds, containsIndex } from './parser/types';
 import { errorsInFile, FileDiagnostics, inThisFile, mergeDiagnostics } from './diagnostics';
+import { rangeOf } from './ranges';
 
 export type ProjectDocument = { textDocument: TextDocument, chunk: Chunk, errors: ParseError[] };
 
@@ -184,6 +185,16 @@ export class ProjectIndex {
     return [ ...this.documents.keys(), uri, ...dropped ];
   }
 
+  // Re-parses every project root, rebuilds and re-analyses all projects. Use after a file is created to resolve
+  // #includes that named it before it existed. Returns every known URI (and dropped ones) for diagnostics.
+  refreshAll(): string[] {
+    const roots = this.projects.map(project => project.root);
+    const dropped = this.reparse(roots);
+    this.buildProjects();
+    this.projects.forEach(project => this.analyse(project));
+    return [ ...this.documents.keys(), ...dropped ];
+  }
+
   outline(uri: string): CodeSymbol[] {
     const [ first ] = this.projectsOf(uri);
     return first ? outlineFor(first.analysis, ResolvedFile.fromFileURL(uri)) : [];
@@ -318,9 +329,6 @@ function compare(a: string, b: string): number {
 function toLocation(bounds: Bounds): Location {
   return {
     uri: bounds.start.filename.fileURL,
-    range: {
-      start: { line: bounds.start.line - 1, character: bounds.start.column },
-      end: { line: bounds.end.line - 1, character: bounds.end.column },
-    },
+    range: rangeOf(bounds),
   };
 }

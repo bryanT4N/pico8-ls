@@ -40,7 +40,8 @@
 			"properties": {
 				"pico-8-ls.maxNumberOfProblems": {
 					"scope": "resource",
-					"type": "number",
+					"type": "integer",
+					"minimum": 0,
 					"default": 100,
 					"description": "Controls the maximum number of problems produced by the server."
 				},

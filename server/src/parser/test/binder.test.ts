@@ -216,7 +216,7 @@ describe('binder', () => {
 
 describe('binder on the test carts', () => {
   for (const name of TEST_CARTS) {
-    it(`links outline entries and symbols both ways in ${name}`, () => {
+    it(`keeps the analysis of ${name} consistent`, () => {
       const { analysis } = analyzeCode(getTestFileContents(name));
       const entries: OutlineEntry[] = [];
       const collect = (list: OutlineEntry[]) => list.forEach(entry => {

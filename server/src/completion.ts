@@ -5,6 +5,26 @@ import { BuiltinConstants, Builtins } from './parser/builtins';
 import ResolvedFile from './parser/file-resolver';
 import { isIdentifierPart, isIdentifierStart } from './parser/lexer';
 
+export function wordAt(lineText: string, character: number): string {
+  let i;
+  for (i = character; i >= 0; i--) {
+    if (!isIdentifierPart(lineText.charCodeAt(i))) {
+      i++;
+      break;
+    }
+  }
+  const begin = i;
+
+  for (i = character; i < lineText.length; i++) {
+    if (!isIdentifierPart(lineText.charCodeAt(i))) {
+      break;
+    }
+  }
+  const end = i;
+
+  return lineText.substring(begin, end);
+}
+
 // path: [] for a plain name; the names before the last . or : otherwise; null after a . or : that follows something
 // other than a name. start: the character where the word being typed begins.
 export type CompletionRequest = { path: string[] | null, colon: boolean, start: number };

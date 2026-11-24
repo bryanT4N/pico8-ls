@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-empty-function */
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { BinaryExpression, BooleanLiteral, CallExpression, Expression, GeneralTableField, getMemberExpressionName, Identifier, IndexExpression, LogicalExpression,
+import { BinaryExpression, BooleanLiteral, CallExpression, Expression, GeneralTableField, Identifier, IndexExpression, LogicalExpression,
   MemberExpression, NilLiteral, NumericLiteral, StringCallExpression, StringLiteral, TableCallExpression,
   TableConstructorExpression, TableKey, TableKeyString, TableValue, UnaryExpression, VarargLiteral,
 } from './expressions';
@@ -8,17 +8,11 @@ import { LabelStatement, BreakStatement, GotoStatement, ReturnStatement, IfState
   DoStatement, RepeatStatement, LocalStatement, AssignmentStatement, CallStatement, FunctionDeclaration,
   ForNumericStatement, ForGenericStatement, ElseClause, ElseifClause, IfClause, Chunk, GeneralIfClause, Statement, IncludeStatement, Block,
 } from './statements';
-import { logObj } from './util';
 
 export type VisitableASTNode = Statement | Expression | GeneralIfClause | GeneralTableField;
 
-export enum NodeVisitingFlags {
-  IsAssignmentTarget,
-}
-
 export type NodeGettingVisited = {
   node: VisitableASTNode,
-  flags?: NodeVisitingFlags[],
 };
 
 // Defines the visitor pattern for all nodes in the AST structure.
@@ -82,37 +76,6 @@ export abstract class ASTVisitor<T> {
   // Optional callback for executing logic when exiting a scope.
   // `value` is the scope that was just popped off the stack.
   onExitScope(value: T) {}
-
-  // helper functions
-
-  // Checks if the top 2 things on the stack are one of:
-  //   - actual assignment: (Identifier | MemberExpression) & (AssignmentStatement | LocalStatement)
-  //   - pseudo assignment: TableKeyString & TableConstructorExpression
-  isInAssignment(): boolean {
-    const previous = this.topNode();
-    const preprevious = this.topNode(1);
-
-    return previous && preprevious
-      && (
-        ((previous.node.type === 'Identifier' || previous.node.type === 'MemberExpression')
-          && (preprevious.node.type === 'AssignmentStatement' || preprevious.node.type === 'LocalStatement'))
-        || (previous.node.type === 'TableKeyString' && preprevious.node.type === 'TableConstructorExpression')
-      );
-  }
-
-  // Checks if the top thing on the stack has NodeVisitingFlags.IsAssignmentTarget set.
-  //
-  // Useful in situations like e.g.
-  //
-  //   a.b = c
-  //
-  // `b` and `c` will both get visited in visitIdentifier, and their parent will both be
-  // the member expression `a.b`. However, when c gets visited, isInAssignmentTarget()
-  // will return true.
-  isInAssignmentTarget(): boolean {
-    const previous = this.topNode();
-    return !! previous?.flags?.includes(NodeVisitingFlags.IsAssignmentTarget);
-  }
 
   // Scope-creating statements
   visitIfClause(node: IfClause): T {
@@ -208,12 +171,9 @@ export abstract class ASTVisitor<T> {
       // variable1, init1, variable2, init2, etc.
       for (let i = 0; i < node.variables.length; i++) {
         this.visitNode(node.variables[i]);
-        // The initializer can use the variable it's being assigned to as a parent
-        this.nodeStack.push({ node: node.variables[i], flags: [ NodeVisitingFlags.IsAssignmentTarget ] });
         if (node.init[i]) {
           this.visitNode(node.init[i]);
         }
-        this.nodeStack.pop();
       }
       this.nodeStack.pop();
       break;
@@ -350,12 +310,9 @@ export abstract class ASTVisitor<T> {
       // variable1, init1, variable2, init2, etc.
       for (let i = 0; i < node.variables.length; i++) {
         this.visitNode(node.variables[i]);
-        // The initializer can use the variable it's being assigned to as a parent
-        this.nodeStack.push({ node: node.variables[i], flags: [ NodeVisitingFlags.IsAssignmentTarget ] });
         if (node.init[i]) {
           this.visitNode(node.init[i]);
         }
-        this.nodeStack.pop();
       }
       this.nodeStack.pop();
       break;

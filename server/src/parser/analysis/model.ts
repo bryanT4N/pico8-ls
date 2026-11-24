@@ -1,5 +1,5 @@
 import ResolvedFile from '../file-resolver';
-import { OutlineEntry } from '../outline/model';
+import type { OutlineEntry } from '../outline/model';
 import { ASTNode, Bounds } from '../types';
 
 export type SymbolKind = 'global' | 'local' | 'param' | 'loopvar' | 'member' | 'label' | 'self' | 'value';
@@ -14,6 +14,7 @@ export type Reference = { symbol: LuaSymbol, loc: Bounds, read: boolean, write: 
 // A local, parameter or loop variable, visible in its scope from index visibleFrom of file on.
 export type Declared = { symbol: LuaSymbol, file: ResolvedFile, visibleFrom: number, order: number };
 
+// For a block whose closing keyword is missing, the end of loc is synthetic: only its index is meaningful.
 export type Scope = { kind: 'file' | 'function' | 'block', loc?: Bounds, parent?: Scope, children: Scope[], declarations: Declared[] };
 
 export class LuaSymbol {

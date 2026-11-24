@@ -76,9 +76,7 @@ function getClientOptions(): LanguageClientOptions {
       { scheme: 'file', language: 'pico-8-lua' },
     ],
     synchronize: {
-      // Notify the server about file changes to .pico8ls files in the workspace
-      // (we'll use that file for config later on)
-      fileEvents: workspace.createFileSystemWatcher('**/.pico8ls'),
+      fileEvents: workspace.createFileSystemWatcher('**/*.{p8,lua}'),
     },
 
     errorHandler: {

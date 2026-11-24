@@ -1,7 +1,7 @@
 import {
   CompletionItem, CompletionItemTag, createConnection, DefinitionParams,
   DidChangeConfigurationNotification, DocumentFormattingParams, DocumentSymbolParams,
-  ExecuteCommandParams, FoldingRange, FoldingRangeParams, HoverParams, InitializeParams, InitializeResult, Position, ProposedFeatures,
+  ExecuteCommandParams, FileChangeType, FoldingRange, FoldingRangeParams, HoverParams, InitializeParams, InitializeResult, Position, ProposedFeatures,
   ReferenceParams, SignatureHelpParams, SignatureInformation, TextDocumentPositionParams,
   TextDocuments, TextDocumentSyncKind, TextEdit, WorkspaceFolder,
 } from 'vscode-languageserver/node';
@@ -9,8 +9,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import Parser from './parser/parser';
 import { boundsToString } from './parser/types';
 import { isParseError } from './parser/errors';
-import { Builtins, BuiltinFunctionInfo } from './parser/builtins';
-import { isIdentifierPart } from './parser/lexer';
+import { builtinInfo } from './parser/builtins';
 import ResolvedFile, { pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
 import Formatter, { FormatterOptions } from './parser/formatter';
@@ -20,8 +19,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { buildDocumentSymbols } from './document-symbols';
 import { computeFoldingRanges } from './folding-ranges';
-import { errorsInFile } from './diagnostics';
-import { completionItems, completionRequestAt } from './completion';
+import { errorsInFile, maxProblems } from './diagnostics';
+import { completionItems, completionRequestAt, wordAt } from './completion';
 
 console.log('PICO-8-LS language server starting.');
 
@@ -204,20 +203,17 @@ interface DocumentSettings {
   maxNumberOfProblems: number;
 }
 
-// The settings for every file. A client without the `workspace/configuration`
-// request can't be asked for them, so it sends them with each change instead.
-const defaultSettings: DocumentSettings = { maxNumberOfProblems: 100 };
-let globalSettings: DocumentSettings = defaultSettings;
-
 // Diagnostics are sent synchronously after each parse, so the settings they
 // need are fetched before a scan rather than for each file.
+let globalSettings: DocumentSettings = { maxNumberOfProblems: maxProblems(undefined) };
+
 async function fetchGlobalSettings() {
   if (!hasConfigurationCapability) {
     return;
   }
   try {
-    const settings = await connection.workspace.getConfiguration('pico-8-ls') as Partial<DocumentSettings> | null;
-    globalSettings = { ...defaultSettings, ...settings };
+    const settings = await connection.workspace.getConfiguration('pico-8-ls') as { maxNumberOfProblems?: unknown } | null;
+    globalSettings = { maxNumberOfProblems: maxProblems(settings?.maxNumberOfProblems) };
   } catch (e) {
     console.error('Failed to get the pico-8-ls settings', e);
   }
@@ -228,38 +224,25 @@ documents.onDidChangeContent(change => {
   publish(index.update(change.document.uri));
 });
 
-// Cache the settings of all open documents
-const documentSettings: Map<string, Thenable<DocumentSettings>> = new Map<string, Thenable<DocumentSettings>>();
-// When a document is closed, purge its entry from the cache
-documents.onDidClose(e => documentSettings.delete(e.document.uri));
+documents.onDidClose(e => {
+  const uri = e.document.uri;
+  try {
+    const text = fs.readFileSync(url.fileURLToPath(uri)).toString();
+    diskText.set(uri, text);
+    publish(index.update(uri));
+  } catch {
+    diskText.delete(uri);
+    publish(index.remove(uri));
+  }
+});
 
 connection.onDidChangeConfiguration(change => {
-  if (hasConfigurationCapability) {
-    // reset all cached document settings
-    documentSettings.clear();
-  } else {
-    globalSettings = change.settings['pico-8-ls'] || defaultSettings;
+  if (!hasConfigurationCapability) {
+    globalSettings = { maxNumberOfProblems: maxProblems(change.settings?.['pico-8-ls']?.maxNumberOfProblems) };
   }
 
   void fetchGlobalSettings().then(rescanEverything);
 });
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function getDocumentSettings(resource: string): Thenable<DocumentSettings> {
-  if (!hasConfigurationCapability) {
-    return Promise.resolve(globalSettings);
-  }
-
-  let result = documentSettings.get(resource);
-  if (!result) {
-    result = connection.workspace.getConfiguration({
-      scopeUri: resource,
-      section: 'pico-8-ls',
-    });
-    documentSettings.set(resource, result);
-  }
-  return result;
-}
 
 connection.onDocumentSymbol((params: DocumentSymbolParams) => {
   const { uri } = params.textDocument;
@@ -289,9 +272,37 @@ connection.onReferences((params: ReferenceParams) => {
   return offset === undefined ? [] : index.references(params.textDocument.uri, offset, params.context.includeDeclaration);
 });
 
-connection.onDidChangeWatchedFiles(_change => {
-  // Monitored files have change in VS Code
-  connection.console.log('We received a file change event');
+connection.onDidChangeWatchedFiles(change => {
+  void (async () => {
+    const uris: string[] = [];
+    let anyCreated = false;
+    for (const { uri, type } of change.changes) {
+      if (type === FileChangeType.Deleted) {
+        diskText.delete(uri);
+      } else {
+        try {
+          diskText.set(uri, (await fs.promises.readFile(url.fileURLToPath(uri))).toString());
+        } catch (e) {
+          console.error('Error reading ' + uri, e);
+        }
+      }
+      if (documents.get(uri)) {
+        continue;
+      }
+      if (type === FileChangeType.Deleted) {
+        uris.push(...index.remove(uri));
+      } else {
+        uris.push(...index.update(uri));
+        if (type === FileChangeType.Created) {
+          anyCreated = true;
+        }
+      }
+    }
+    if (anyCreated) {
+      uris.push(...index.refreshAll());
+    }
+    publish(uris);
+  })();
 });
 
 // This handler provides the initial list of the completion items.
@@ -306,7 +317,7 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
   return completionItems(index.analyses(uri), ResolvedFile.fromFileURL(uri), offset, completionRequestAt(lineText, character), line, character);
 });
 
-function toDocumentationMarkdown(name: string, info: BuiltinFunctionInfo) : string {
+function toDocumentationMarkdown(name: string, info: { sig?: string, desc?: string, params?: string[] }): string {
   if (!info.sig) {
     return '';
   }
@@ -324,7 +335,7 @@ ${info.params?.map(p => ` - ${p}`).join('\n')}`;
 connection.onCompletionResolve((item: CompletionItem) => {
   const name = item.label;
 
-  const info = Builtins[name];
+  const info = builtinInfo(name);
   if (info) {
     item.detail = info.sig;
     item.documentation = {
@@ -338,27 +349,6 @@ connection.onCompletionResolve((item: CompletionItem) => {
 
   return item;
 });
-
-function identifierAtPosition(position: number, text: string) {
-  let i;
-  for (i = position; i >= 0; i--) {
-    if (!isIdentifierPart(text.charCodeAt(i))) {
-      i++;
-      break;
-    }
-  }
-  const begin = i;
-
-  for (i = position; i < text.length; i++) {
-    if (!isIdentifierPart(text.charCodeAt(i))) {
-      break;
-    }
-
-  }
-  const end = i;
-
-  return text.substring(begin, end);
-}
 
 function getTextOnLine(textDocumentUri: string, position: Position): string | undefined {
   const text = documents.get(textDocumentUri);
@@ -377,9 +367,9 @@ connection.onHover((params: HoverParams) => {
   if (!textOnLine) {
     return undefined;
   }
-  const identifier = identifierAtPosition(params.position.character, textOnLine);
+  const identifier = wordAt(textOnLine, params.position.character);
 
-  const info = Builtins[identifier];
+  const info = builtinInfo(identifier);
   if (info) {
     return {
       contents: toDocumentationMarkdown(identifier, info),
@@ -411,8 +401,8 @@ connection.onSignatureHelp((params: SignatureHelpParams) => {
   const startingParenPos = i;
 
   // get identifier before that
-  const identifier = identifierAtPosition(startingParenPos - 1, textOnLine);
-  const info = Builtins[identifier];
+  const identifier = wordAt(textOnLine, startingParenPos - 1);
+  const info = builtinInfo(identifier);
   if (!info || !info.sig || !info.params) {
     return undefined;
   }

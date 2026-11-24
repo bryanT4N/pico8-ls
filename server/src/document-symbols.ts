@@ -6,6 +6,7 @@ import { Bounds } from './parser/types';
 import { CodeSymbolType, CodeSymbol } from './parser/symbols';
 import { Comment_ } from './parser/expressions';
 import { FoldingRegion, getFoldingRegions, tabAt } from './parser/folding-regions';
+import { rangeOf } from './ranges';
 
 const symbolTypeLookup: Record<CodeSymbolType, SymbolKind> = {
   [CodeSymbolType.Function]: SymbolKind.Function,
@@ -22,11 +23,8 @@ export function symbolKindFor(type: CodeSymbolType): SymbolKind {
   return symbolTypeLookup[type];
 }
 
-export function boundsToRange(textDocument: TextDocument, bounds: Bounds): Range {
-  return {
-    start: textDocument.positionAt(bounds?.start?.index ?? 0),
-    end: textDocument.positionAt(bounds?.end?.index ?? 0),
-  };
+export function boundsToRange(_textDocument: TextDocument, bounds: Bounds): Range {
+  return rangeOf(bounds);
 }
 
 export function toDocumentSymbol(textDocument: TextDocument, symbol: CodeSymbol): DocumentSymbol {

@@ -1,8 +1,9 @@
 import * as assert from 'assert';
+import { strictEqual } from 'assert';
 import { ParseError, Warning } from '../parser/errors';
 import ResolvedFile from '../parser/file-resolver';
 import { Bounds } from '../parser/types';
-import { errorsInFile, FileDiagnostics, mergeDiagnostics } from '../diagnostics';
+import { errorsInFile, FileDiagnostics, maxProblems, mergeDiagnostics } from '../diagnostics';
 
 const at = (uri: string, line: number): Bounds => ({
   start: { line, column: 0, index: 0, filename: new ResolvedFile(uri, uri) },
@@ -59,5 +60,22 @@ describe('errorsInFile', () => {
   it('keeps only the errors that start in the file', () => {
     const errors = [ new ParseError('in a', at('a', 1)), new ParseError('in b', at('b', 1)) ];
     assert.deepStrictEqual(errorsInFile('a', errors).map(e => e.message), [ 'in a' ]);
+  });
+});
+
+describe('maxProblems', () => {
+  it('returns the value as an integer, clamped to 0', () => {
+    strictEqual(maxProblems(100), 100);
+    strictEqual(maxProblems(0), 0);
+    strictEqual(maxProblems(-1), 0);
+    strictEqual(maxProblems(2.5), 2);
+  });
+
+  it('returns 100 for non-finite numbers and non-numbers', () => {
+    strictEqual(maxProblems(null), 100);
+    strictEqual(maxProblems(undefined), 100);
+    strictEqual(maxProblems(NaN), 100);
+    strictEqual(maxProblems(Infinity), 100);
+    strictEqual(maxProblems('1'), 100);
   });
 });

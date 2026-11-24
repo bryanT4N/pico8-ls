@@ -1,4 +1,4 @@
-import { LuaSymbol } from '../analysis/model';
+import type { LuaSymbol } from '../analysis/model';
 import { FunctionDeclaration } from '../statements';
 import { Bounds } from '../types';
 

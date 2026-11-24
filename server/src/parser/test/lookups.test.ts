@@ -1,5 +1,5 @@
-import { deepStrictEqual, strictEqual } from 'assert';
-import { isBuiltinName } from '../builtins';
+import { deepStrictEqual, ok, strictEqual } from 'assert';
+import { builtinInfo, isBuiltinName } from '../builtins';
 import { outlineOf } from './outline-utils';
 import { analyzeCode, Analyzed, definitionsAtPos, describeSymbol, referencesAtPos, symbolAt, warningsIn } from './test-utils';
 
@@ -454,5 +454,15 @@ describe('isBuiltinName', () => {
     strictEqual(isBuiltinName('toString'), false);
     strictEqual(isBuiltinName('constructor'), false);
     strictEqual(isBuiltinName('hasOwnProperty'), false);
+  });
+
+  it('returns the info of a builtin', () => {
+    ok(builtinInfo('print')!.sig!.length > 0);
+  });
+
+  it('returns undefined for inherited property names', () => {
+    strictEqual(builtinInfo('constructor'), undefined);
+    strictEqual(builtinInfo('toString'), undefined);
+    strictEqual(builtinInfo('__proto__'), undefined);
   });
 });

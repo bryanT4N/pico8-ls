@@ -1,6 +1,6 @@
 import { deepStrictEqual, strictEqual } from 'assert';
 import { CompletionItem, CompletionItemKind } from 'vscode-languageserver/node';
-import { completionItems, completionRequestAt } from '../completion';
+import { completionItems, completionRequestAt, wordAt } from '../completion';
 import { analyzeCode, indexAt, testFile } from '../parser/test/test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
@@ -57,6 +57,13 @@ describe('completionRequestAt', () => {
 
   it('reads a path after ..', () => {
     deepStrictEqual(completionRequestAt('  print("hp: "..player.', 23), { path: [ 'player' ], colon: false, start: 23 });
+  });
+});
+
+describe('wordAt', () => {
+  it('extracts the word at a position', () => {
+    strictEqual(wordAt('  print(x)', 4), 'print');
+    strictEqual(wordAt('x = foo', 6), 'foo');
   });
 });
 

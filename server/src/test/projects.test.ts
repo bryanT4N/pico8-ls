@@ -314,4 +314,16 @@ describe('ProjectIndex', () => {
     deepStrictEqual(sent.map(({ uri, diagnostics }) => [ nameOf(uri), diagnostics.map(d => d.message) ]),
       [[ 'lib.lua', [ 'undefined variable: gravity' ]], [ 'main.p8', []]]);
   });
+
+  it('keeps the analysis of <cart> consistent', function () {
+    const files: Record<string, string> = { 'main.p8': '#include lib.lua\nhelper()' };
+    const index = indexOver(files);
+    index.scan([ uriOf('main.p8') ]);
+    eq(index.document(uriOf('main.p8'))!.errors.map(formatError).includes('main.p8 1:0 Can\'t #include lib.lua from main.p8: File does not exist'), true);
+    files['lib.lua'] = 'function helper() end';
+    index.update(uriOf('lib.lua'));
+    index.refreshAll();
+    deepStrictEqual(index.document(uriOf('main.p8'))!.errors, []);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 2, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
+  });
 });

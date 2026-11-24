@@ -25,16 +25,16 @@ export function referenceAt(analysis: Analysis, file: ResolvedFile, index: numbe
 export function definitionsAt(analysis: Analysis, reference: Reference): Bounds[] {
   const { symbol } = reference;
   if (symbol.kind === 'self' && symbol.table) {
-    return inOrder(targetsOf(symbol.table));
+    return uniqueInOrder(targetsOf(symbol.table));
   }
   const targets = targetsOf(symbol);
   if (targets.length === 0 && symbol.kind === 'member' && symbol.definitions.length === 0 && reference.isCall) {
     // The table may inherit the method (entity:extend and the like), so offer every method of that name.
     const methods = (analysis.membersByKey.get(symbol.name) ?? [])
       .filter(member => member.definitions.some(definition => definition.isFunction));
-    return inOrder(methods.flatMap(targetsOf));
+    return uniqueInOrder(methods.flatMap(targetsOf));
   }
-  return inOrder(targets);
+  return uniqueInOrder(targets);
 }
 
 // A local declared first and given a function later goes to the function, not to its declaration. Anything else goes
@@ -61,7 +61,7 @@ function targetsOf(symbol: LuaSymbol): Bounds[] {
 
 export function referencesOf(symbol: LuaSymbol, includeDeclaration: boolean): Bounds[] {
   const declarations = new Set(includeDeclaration ? [] : symbol.definitions.map(definition => placeOf(definition.nameLoc)));
-  return inOrder(symbol.references.map(reference => reference.loc).filter(loc => !declarations.has(placeOf(loc))));
+  return uniqueInOrder(symbol.references.map(reference => reference.loc).filter(loc => !declarations.has(placeOf(loc))));
 }
 
 export function warningsOf(analysis: Analysis): Warning[] {
@@ -71,7 +71,7 @@ export function warningsOf(analysis: Analysis): Warning[] {
     if (symbol.definitions.length > 0 || isBuiltinName(symbol.name) || symbol.name === 'self') {
       continue;
     }
-    const reads = inOrder(symbol.references.filter(reference => reference.read).map(reference => reference.loc));
+    const reads = uniqueInOrder(symbol.references.filter(reference => reference.read).map(reference => reference.loc));
     warnings.push(...reads.map(loc => createWarning(loc, errMessages.undefinedVariable, symbol.name)));
   }
   return warnings.sort((a, b) => byPlace(a.bounds, b.bounds));
@@ -161,8 +161,7 @@ function placeOf(bounds: Bounds): string {
   return `${bounds.start.filename.path}:${bounds.start.index}:${bounds.end.index}`;
 }
 
-// Each place once, by file path and then by start.
-function inOrder(list: Bounds[]): Bounds[] {
+function uniqueInOrder(list: Bounds[]): Bounds[] {
   const unique = new Map(list.map(bounds => [ placeOf(bounds), bounds ]));
   return [ ...unique.values() ].sort(byPlace);
 }

@@ -133,18 +133,6 @@ export function getFunctionDeclarationName(funcDeclaration: FunctionDeclaration)
   return getMemberExpressionName(funcDeclaration.identifier) || AnonymousFunctionName;
 }
 
-export function getBareFunctionDeclarationName(funcDeclaration: FunctionDeclaration): string {
-  if (!funcDeclaration.identifier) {
-    return AnonymousFunctionName;
-  }
-
-  if (funcDeclaration.identifier.type === 'Identifier') {
-    return funcDeclaration.identifier.name;
-  } else { // funcDeclaration.identifier.type === 'MemberExpression'
-    return funcDeclaration.identifier.identifier.name;
-  }
-}
-
 export type Statement = LabelStatement | BreakStatement | GotoStatement | ReturnStatement | IfStatement
   | WhileStatement | DoStatement | RepeatStatement | LocalStatement | AssignmentStatement | CallStatement
   | FunctionDeclaration | ForNumericStatement | ForGenericStatement | IncludeStatement | Comment_ | Whitespace;

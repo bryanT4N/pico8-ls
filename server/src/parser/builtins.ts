@@ -959,3 +959,7 @@ export const BuiltinConstants: Set<string> = new Set<string>([
 export function isBuiltinName(name: string): boolean {
   return Object.prototype.hasOwnProperty.call(Builtins, name) || BuiltinConstants.has(name);
 }
+
+export function builtinInfo(name: string): BuiltinFunctionInfo | undefined {
+  return Object.prototype.hasOwnProperty.call(Builtins, name) ? Builtins[name] : undefined;
+}

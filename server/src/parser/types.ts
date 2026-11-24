@@ -75,13 +75,6 @@ export function boundsToString(bounds: Bounds): string {
   return `${filenameStr} ${bounds.start.line}:${bounds.start.column}-${bounds.end.column} % ${bounds.start.index}-${bounds.end.index}`;
 }
 
-export function boundsSize(b: Bounds): number {
-  const lineSize = b.end.line - b.start.line;
-  const columnSize = b.end.column - b.start.column;
-
-  return columnSize + (10000 * lineSize);
-}
-
 export function boundsClone(bounds: Bounds): Bounds {
   return {
     start: {
