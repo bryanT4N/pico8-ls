@@ -7,6 +7,7 @@
   - Names follow Lua's scoping: a `local` is found only where it is visible, a loop variable only inside its loop, and in `local x = x` the right-hand `x` is the outer one.
   - Fields and methods are found through their table: `player.x` goes to `x = 64` in `player = { x = 64 }`, and `a:update()` no longer lists `b:update`.
   - A field read such as `x = player.hp` is found, and `self` works in callbacks inside a method.
+  - A field read through a parameter, like `p.health` in `function hurt(p)`, no longer goes to fields of the same name on other tables, such as `game.health` in another file.
   - Labels are matched within their function.
   - Go to Definition goes where the outline lists a name: its first definition in each file, plus every function definition. A method call on a table that has no such method, for example one inherited through `extend`, lists every method of that name.
   - Find References honours "include declaration".
@@ -29,6 +30,7 @@
 - Changes made outside VS Code, for example saving from PICO-8 or deleting a file, are picked up, and a file closed without saving goes back to its saved text.
 - A new file, or one opened outside the workspace folders, gets Go to Definition and completion straight away, and an `#include` written before the file existed works as soon as it is created.
 - Fixed: setting `pico-8-ls.maxNumberOfProblems` to null hid every problem, and a negative number dropped some of them. Now null means the default of 100 and a negative number means 0. The settings editor asks for a whole number of at least 0.
+- Fixed: hovering over a name like `constructor` or `toString` showed an empty box. Hover, completion details and signature help now look up only PICO-8's own built-in functions.
 
 ## 0.2.0 (unreleased)
 
