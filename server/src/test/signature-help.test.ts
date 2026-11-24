@@ -41,6 +41,24 @@ describe('signatureHelpAt', () => {
     strictEqual(helpAt(lines(outer, 'outer(make { x = 1 }(')), undefined);
   });
 
+  it('gives no signature for the call around a function body being written', () => {
+    const body = 'foreach(t, function(e)';
+    strictEqual(helpAt(lines(body, '  local a, b')), undefined);
+    const inBody = helpAt(lines(body, '  print(e'))!;
+    deepStrictEqual([ inBody.signatures[0].label, inBody.activeParameter ], [ builtinInfo('print')!.sig, 0 ]);
+    const after = 'foreach(t, function(e) end, ';
+    deepStrictEqual(callContextAt(after, after.length), { path: [ 'foreach' ], colon: false, argument: 2 });
+    // The parameter list is not the body.
+    const parameters = 'foreach(t, function(e, ';
+    deepStrictEqual(callContextAt(parameters, parameters.length), { path: [ 'foreach' ], colon: false, argument: 1 });
+  });
+
+  it('takes a block as closed at its end, and a one-line if or while as no block', () => {
+    const code = lines('foreach(t, function(e)', '  if e.x then', '    for i = 1, 3 do end', '  elseif e.y then', '    repeat until true', '  end',
+      '  if (e.z) e.z = nil', '  while (e.w) e.w -= 1', 'end, ');
+    deepStrictEqual(callContextAt(code, code.length), { path: [ 'foreach' ], colon: false, argument: 2 });
+  });
+
   it('shows a user function with its doc and parameter docs', () => {
     const code = lines('x = 1', '-- creates a deep copy', '-- @param obj the table to copy', '-- @return the copy', 'function deep_copy(obj, depth) return obj end',
       'deep_copy(t, ');

@@ -18,9 +18,18 @@ type Signature = SignatureInformation & { activeParameter: number };
 
 const LEXED_FILE = new ResolvedFile('signature-help', 'signature-help');
 
+type Callee = { path: string[], colon: boolean };
+// What a ( opens: the arguments of a call on a name path, or of a call on something else; the parameters of a function;
+// or a group.
+type Paren = Callee | 'unnamed call' | 'parameters' | 'group';
+// A function's body opens where its parameter list closes; the other blocks open at then, do and repeat, so that
+// PICO-8's one-line if (c) and while (c), which have neither, open none.
+type Open = { kind: '(', paren: Paren, commas: number } | { kind: '{' | '[', commas: number } | { kind: 'function' | 'then' | 'do' | 'repeat' };
+
 // The innermost call still open at offset. The tokens are read from the start of the text, so strings, comments,
 // nesting and calls over several lines count as Lua reads them. A grouping parenthesis and a function's parameter list
-// are looked past; inside a call on something other than a name path, such as get():hit( or f(x)(, there is none.
+// are looked past. There is none inside a call on something other than a name path, such as get():hit( or f(x)(, nor
+// in a block opened inside the call, such as the body of a function passed to it.
 export function callContextAt(text: string, offset: number): CallContext | undefined {
   const tokens: Token[] = [];
   try {
@@ -31,55 +40,99 @@ export function callContextAt(text: string, offset: number): CallContext | undef
   } catch {
     return undefined;
   }
-  // at: the bracket's place in tokens.
-  const open: Array<{ bracket: string, at: number, commas: number }> = [];
+  const open: Open[] = [];
   tokens.forEach((token, at) => {
-    if (token.type !== TokenType.Punctuator) {
-      return;
-    }
-    switch (token.value) {
-    case '(':
-    case '{':
-    case '[':
-      open.push({ bracket: token.value, at, commas: 0 });
-      break;
-    case ')':
-    case '}':
-    case ']':
-      open.pop();
-      break;
-    case ',':
-      if (open.length > 0) {
-        open[open.length - 1].commas++;
+    if (token.type === TokenType.Keyword) {
+      switch (token.value) {
+      case 'then':
+      case 'do':
+      case 'repeat':
+        open.push({ kind: token.value });
+        break;
+      case 'elseif':
+        close(open, [ 'then' ]);
+        break;
+      case 'end':
+        close(open, [ 'function', 'then', 'do' ]);
+        break;
+      case 'until':
+        close(open, [ 'repeat' ]);
+        break;
       }
-      break;
+    } else if (token.type === TokenType.Punctuator) {
+      switch (token.value) {
+      case '(':
+        open.push({ kind: '(', paren: parenAt(tokens, at), commas: 0 });
+        break;
+      case '{':
+      case '[':
+        open.push({ kind: token.value, commas: 0 });
+        break;
+      case ')': {
+        const closed = close(open, [ '(' ]);
+        if (closed?.kind === '(' && closed.paren === 'parameters') {
+          open.push({ kind: 'function' });
+        }
+        break;
+      }
+      case '}':
+        close(open, [ '{' ]);
+        break;
+      case ']':
+        close(open, [ '[' ]);
+        break;
+      case ',': {
+        const top = open[open.length - 1];
+        if (top && 'commas' in top) {
+          top.commas++;
+        }
+        break;
+      }
+      }
     }
   });
   let inside = false;
   for (let i = open.length - 1; i >= 0; i--) {
-    const { bracket, at, commas } = open[i];
-    const callee = bracket === '(' ? calleeBefore(tokens, at) : undefined;
-    if (callee === 'unnamed') {
+    const item = open[i];
+    if (item.kind === '{' || item.kind === '[') {
+      inside = true;
+    } else if (item.kind === '(') {
+      if (item.paren === 'unnamed call') {
+        return undefined;
+      }
+      if (typeof item.paren === 'object') {
+        return { ...item.paren, argument: inside ? null : item.commas };
+      }
+    } else {
       return undefined;
     }
-    if (callee) {
-      return { ...callee, argument: inside ? null : commas };
-    }
-    inside ||= bracket !== '(';
   }
   return undefined;
 }
 
-// What the ( at tokens[at] is called on: names separated by . or by a last :, as in a.b.c or obj:m; 'unnamed' when it is
-// a call on something else, as in get():hit( or f(x)( or f{}(; undefined when it is no call, but a grouping parenthesis
-// or the parameter list of a function, as in function f(.
-function calleeBefore(tokens: Token[], at: number): { path: string[], colon: boolean } | 'unnamed' | undefined {
+// Closes the innermost open item of one of kinds, and whatever is still open inside it.
+function close(open: Open[], kinds: Array<Open['kind']>): Open | undefined {
+  for (let i = open.length - 1; i >= 0; i--) {
+    if (kinds.includes(open[i].kind)) {
+      return open.splice(i)[0];
+    }
+  }
+  return undefined;
+}
+
+// The ( at tokens[at] calls the names before it, separated by . or by a last :, as in a.b.c( or obj:m(, unless function
+// comes before them, as in function f(. A call on anything else comes after ), ], } or a string, as in f(x)( or f{}(,
+// or after names that follow one, as in get():hit(.
+function parenAt(tokens: Token[], at: number): Paren {
   const previous = tokens[at - 1];
   if (previous?.type === TokenType.StringLiteral || (previous?.type === TokenType.Punctuator && [ ')', ']', '}' ].includes(previous.value as string))) {
-    return 'unnamed';
+    return 'unnamed call';
+  }
+  if (previous?.type === TokenType.Keyword && previous.value === 'function') {
+    return 'parameters';
   }
   if (previous?.type !== TokenType.Identifier) {
-    return undefined;
+    return 'group';
   }
   const path: string[] = [];
   let colon = false;
@@ -92,17 +145,17 @@ function calleeBefore(tokens: Token[], at: number): { path: string[], colon: boo
     }
     if (separator.value === ':') {
       if (path.length > 1) {
-        return 'unnamed';
+        return 'unnamed call';
       }
       colon = true;
     }
     i -= 2;
     if (tokens[i]?.type !== TokenType.Identifier) {
-      return 'unnamed';
+      return 'unnamed call';
     }
   }
   const before = tokens[i - 1];
-  return before?.type === TokenType.Keyword && before.value === 'function' ? undefined : { path, colon };
+  return before?.type === TokenType.Keyword && before.value === 'function' ? 'parameters' : { path, colon };
 }
 
 // The signatures of the functions the call at offset may go to, from the first analysis that finds one. A plain name
