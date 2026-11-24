@@ -590,4 +590,9 @@ describe('ProjectIndex', () => {
     const files = { 'a.p8': 'x = 1\n-- from a\nplayer = {}\n#include common.lua', 'b.p8': 'x = 1\n-- from b\nplayer = {}\n#include common.lua', 'common.lua': 'print(player)' };
     eq(scanned(files).hover(uriOf('common.lua'), offsetIn(files, 'common.lua', 1, 6)), '```pico-8-lua\n(global) player = {\u2026}\n```\n\nfrom a');
   });
+
+  it('hovers from a later project when the first has nothing to show', () => {
+    const files = { 'a.p8': '#include common.lua', 'b.p8': 'x = 1\n-- from b\nplayer = {}\n#include common.lua', 'common.lua': 'print(player)' };
+    eq(scanned(files).hover(uriOf('common.lua'), offsetIn(files, 'common.lua', 1, 6)), '```pico-8-lua\n(global) player = {\u2026}\n```\n\nfrom b');
+  });
 });

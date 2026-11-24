@@ -4,8 +4,8 @@ import { analyzeCode, referenceAtPos } from '../parser/test/test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
 const block = (declaration: string) => '```pico-8-lua\n' + declaration + '\n```';
-function hoverAt(code: string, line: number, column: number): string | undefined {
-  const a = analyzeCode(code);
+function hoverAt(code: string, line: number, column: number, files?: Record<string, string>): string | undefined {
+  const a = analyzeCode(code, files);
   return hoverMarkdown(a.analysis, referenceAtPos(a, line, column)!);
 }
 
@@ -33,12 +33,16 @@ describe('hoverMarkdown', () => {
     strictEqual(hoverAt(code, 7, 29), block('(global) long'));
     strictEqual(hoverAt(code, 7, 35), block('(global) player = {\u2026}'));
     strictEqual(hoverAt(code, 7, 43), block('(global) entity'));
+    // A string on several lines would break the code block.
+    strictEqual(hoverAt(lines('s = [[', '```', ']]', 'print(s)'), 4, 6), block('(global) s'));
   });
 
-  it('shows no value for a field that only a compound assignment sets', () => {
+  it('takes the value from a plain assignment, never from a compound one', () => {
     // Go to Definition goes nowhere for ent.vel, so no definition is shown either.
     strictEqual(hoverAt(lines('function move(ent)', '  ent.vel += 1', 'end'), 2, 6), block('(field) ent.vel'));
     strictEqual(hoverAt(lines('t.k += 1', 'print(t.k)'), 2, 8), block('(field) t.k'));
+    const lib = { 'lib.lua': 'function hit() g.hp -= 1 end' };
+    strictEqual(hoverAt(lines('#include lib.lua', 'g = {}', 'g.hp = 3', 'print(g.hp)'), 4, 8, lib), block('(field) g.hp = 3'));
   });
 
   it('shows locals, fields, parameters, loop variables and labels', () => {
@@ -81,5 +85,9 @@ describe('hoverMarkdown', () => {
     // The empty @return is left out.
     strictEqual(hoverAt(code, 8, 9),
       block('function move(p, dx)') + '\n\nMoves a thing.\n\n*@param* `p` \u2014 the thing  \n\n*@param* `dx`  \nhow far,\nin pixels  \n\n*@return* \u2014 the new x');
+  });
+
+  it('renders an @param with no name as the tag alone', () => {
+    strictEqual(hoverAt(lines('x = 1', '-- moves', '-- @param', 'function move(p) end'), 4, 9), block('function move(p)') + '\n\nmoves\n\n*@param*');
   });
 });

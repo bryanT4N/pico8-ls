@@ -4,7 +4,7 @@ import { methodsNamed } from './parser/analysis/queries';
 import { BuiltinFunctionInfo } from './parser/builtins';
 import { Expression } from './parser/expressions';
 import { unwrapValue } from './parser/outline/members';
-import { FunctionDeclaration } from './parser/statements';
+import { isColonMethod, parameterNames } from './parser/outline/model';
 
 // Undefined when the reference names nothing the user defined, so that a builtin can answer. A method call that its
 // table does not define shows each method of that name, as Go to Definition offers them all.
@@ -71,14 +71,6 @@ export function pathOf(symbol: LuaSymbol): string | undefined {
   return names.join('.');
 }
 
-export function parameterNames(fn: FunctionDeclaration): string[] {
-  return fn.parameters.map(parameter => parameter.type === 'Identifier' ? parameter.name : '...');
-}
-
-export function isColonMethod(fn: FunctionDeclaration): boolean {
-  return fn.identifier?.type === 'MemberExpression' && fn.identifier.indexer === ':';
-}
-
 // PICO-8 code often keeps its constants in globals, so a value written as a literal is worth showing.
 function literalOf(value: Expression | undefined): string {
   switch (value?.type) {
@@ -87,7 +79,8 @@ function literalOf(value: Expression | undefined): string {
   case 'UnaryExpression':
     return value.operator === '-' && value.argument.type === 'NumericLiteral' ? ` = -${value.argument.raw}` : '';
   case 'StringLiteral':
-    return value.raw.length <= 40 ? ` = ${value.raw}` : '';
+    // A string on several lines would end the code block early, or carry a \r into it.
+    return value.raw.length <= 40 && !/[\r\n]/.test(value.raw) ? ` = ${value.raw}` : '';
   case 'BooleanLiteral':
     return ` = ${value.value}`;
   case 'NilLiteral':
@@ -103,7 +96,7 @@ export function renderDoc(doc: Doc): string {
 }
 
 function renderTag(tag: DocTag): string {
-  const label = tag.name === 'param' ? `*@param* \`${tag.param}\`` : `*@${tag.name}*`;
+  const label = tag.name === 'param' && tag.param ? `*@param* \`${tag.param}\`` : `*@${tag.name}*`;
   if (tag.text === '') {
     return label;
   }

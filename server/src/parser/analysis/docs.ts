@@ -32,8 +32,8 @@ export function documentationOf(analysis: Analysis, symbol: LuaSymbol): Document
       return { definition, doc };
     }
   }
-  // f = nil, then function f(a): f shows as the function.
-  return { definition: sites.find(definition => definition.isFunction) ?? sites[0] };
+  // f = nil, then function f(a): f shows as the function. The value of hp -= 1 says nothing of what hp holds.
+  return { definition: sites.find(definition => definition.isFunction) ?? sites.find(definition => !definition.compound) ?? sites[0] };
 }
 
 // The definitions Go to Definition goes to, in the order the analysis came to them. An outline entry that no

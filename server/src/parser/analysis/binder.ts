@@ -4,7 +4,7 @@ import { AnonymousFunctionName, AssignmentStatement, Block, Chunk, ForGenericSta
 import { resolveIncludeFile } from '../file-resolver';
 import { ASTNode, Bounds, boundsContain, CodeLocation } from '../types';
 import { ASTVisitor, VisitableASTNode } from '../visitor';
-import { addEntry, CodeSymbolType, moveEntry, OutlineEntry, Owner, signatureOf } from '../outline/model';
+import { addEntry, CodeSymbolType, isColonMethod, moveEntry, OutlineEntry, Owner, signatureOf } from '../outline/model';
 import { defineMember, pathMember, receiveTable, tableTypeOf, unwrapValue } from '../outline/members';
 import { findBoundaryLines, groupMethodRuns, StatementInfo } from '../outline/method-runs';
 import { Analysis, LuaSymbol, Reference, Scope } from './model';
@@ -216,9 +216,9 @@ class Binder extends ASTVisitor<BinderScope> {
 
     const firstParam = node.parameters[0];
     const firstParamIsSelf = firstParam?.type === 'Identifier' && firstParam.name === 'self';
-    const isColonMethod = node.identifier?.type === 'MemberExpression' && node.identifier.indexer === ':';
+    const colonMethod = isColonMethod(node);
     let selfSymbol: LuaSymbol | undefined;
-    if (isColonMethod || firstParamIsSelf) {
+    if (colonMethod || firstParamIsSelf) {
       if (target?.kind === 'entry' && target.selfTable !== undefined) {
         scope.selfTable = target.selfTable;
       } else if (target?.kind === 'entry' && target.selfPath) {
@@ -234,7 +234,7 @@ class Binder extends ASTVisitor<BinderScope> {
     // The syntax tree has no place for the closing parenthesis, so the parameters count from the end of the last one,
     // or of the name.
     const parametersEnd = (node.parameters[node.parameters.length - 1] ?? node.identifier)?.loc!.end ?? node.loc!.start;
-    if (isColonMethod) {
+    if (colonMethod) {
       const self = new LuaSymbol('self', 'self');
       self.table = selfSymbol;
       scope.decls.set('self', { kind: 'param', symbol: self });

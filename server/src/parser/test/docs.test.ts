@@ -111,7 +111,7 @@ describe('doc comments', () => {
     strictEqual(definition!.nameLoc.start.line, 4);
   });
 
-  it('gives the function definition, or else the first place Go to Definition goes to, when there is no doc', () => {
+  it('gives the function definition, or else the first plain place Go to Definition goes to, when there is no doc', () => {
     const defined = documentationAt(lines('x = 1', 'f = nil', 'function f(a) end', 'f(1)'), 4, 0);
     strictEqual(defined.doc, undefined);
     strictEqual(defined.definition!.nameLoc.start.line, 3);

@@ -65,5 +65,13 @@ export function moveEntry(entry: OutlineEntry, newParent: Owner): void {
 }
 
 export function signatureOf(fn: FunctionDeclaration): string {
-  return '(' + fn.parameters.map(param => param.type === 'Identifier' ? param.name : '...').join(',') + ')';
+  return '(' + parameterNames(fn).join(',') + ')';
+}
+
+export function parameterNames(fn: FunctionDeclaration): string[] {
+  return fn.parameters.map(parameter => parameter.type === 'Identifier' ? parameter.name : '...');
+}
+
+export function isColonMethod(fn: FunctionDeclaration): boolean {
+  return fn.identifier?.type === 'MemberExpression' && fn.identifier.indexer === ':';
 }
