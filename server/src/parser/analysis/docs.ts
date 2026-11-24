@@ -225,7 +225,8 @@ const EVERY_FILE_EMPTY: FileResolver = { doesFileExist: () => true, isFile: () =
 // throws on, such as thousands of nested brackets, is not code.
 function isCode(text: string): boolean {
   const t = text.trim().replace(/[,;]$/, '');
-  if (!/[=(){}]|\bend\b|^\s*#include/m.test(t)) {
+  // Not a call with no brackets, such as print "dbg": a one-line doc such as calls "update" parses as one too.
+  if (!/[=(){}]|\bend\b|^\s*(#include|\?|local\b|return\b)/m.test(t)) {
     return false;
   }
   const parse = (code: string) => new Parser(COMMENT_FILE, code, { includeFileResolver: EVERY_FILE_EMPTY }).parseChunk();

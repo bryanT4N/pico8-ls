@@ -54,8 +54,13 @@ describe('doc comments', () => {
     strictEqual(text(docAt(lines('x = 1', '-- speed = 3', 'speed = 2'), 3, 0)), undefined);
     strictEqual(text(docAt(lines('x = 1', 't = {', '  -- DEBUG:', '  --frames = 0,', '  speed = 2,', '}'), 5, 2)), undefined);
     strictEqual(text(docAt(lines('x = 1', '--#include other.lua', 'y = 2'), 3, 0)), undefined);
+    strictEqual(text(docAt(lines('x = 1', '--?x', 'function f() end'), 3, 9)), undefined);
+    strictEqual(text(docAt(lines('x = 1', '--?"hi"', 'function f() end'), 3, 9)), undefined);
+    strictEqual(text(docAt(lines('x = 1', '--local y', 'function f() end'), 3, 9)), undefined);
+    strictEqual(text(docAt(lines('x = 1', '--return', 'function f() end'), 3, 9)), undefined);
     strictEqual(text(docAt(lines('x = 1', '-- calls fn for each item', '-- e.g. each(t, print)', 'function each(t, fn) end'), 4, 9)),
       'calls fn for each item\ne.g. each(t, print)');
+    strictEqual(text(docAt(lines('x = 1', '-- calls "update"', 'function f() end'), 3, 9)), 'calls "update"');
   });
 
   it('uses the same rule in function bodies, but not for the function itself', () => {
