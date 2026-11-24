@@ -2,7 +2,7 @@ import ResolvedFile from '../file-resolver';
 import { CodeSymbol, CodeSymbolType, OutlineEntry } from './model';
 
 export function projectToFile(entries: OutlineEntry[], file: ResolvedFile): CodeSymbol[] {
-  return entries.flatMap(entry => {
+  return listedOnce(entries.flatMap(entry => {
     const children = projectToFile(entry.children, file);
     if (entry.loc.start.filename.equals(file)) {
       const { name, detail, type, loc, selectionLoc } = entry;
@@ -14,10 +14,23 @@ export function projectToFile(entries: OutlineEntry[], file: ResolvedFile): Code
       return [{ name: entry.name, detail: undefined, type: CodeSymbolType.Table, loc, selectionLoc, children }];
     }
     return [];
-  }).sort(bySourcePosition);
+  }).sort(bySourcePosition));
 }
 
 // Entries defined by the same statement share loc.start, so where their names sit breaks the tie.
 function bySourcePosition(a: CodeSymbol, b: CodeSymbol): number {
   return a.loc.start.index - b.loc.start.index || a.selectionLoc.start.index - b.selectionLoc.start.index;
+}
+
+// A file included twice is in the analysis twice, so each of its entries comes twice.
+function listedOnce(symbols: CodeSymbol[]): CodeSymbol[] {
+  const listed = new Set<string>();
+  return symbols.filter(({ name, type, loc }) => {
+    const key = JSON.stringify([ name, type, loc.start.filename.path, loc.start.index, loc.end.index ]);
+    if (listed.has(key)) {
+      return false;
+    }
+    listed.add(key);
+    return true;
+  });
 }

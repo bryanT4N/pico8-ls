@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { outlineOf } from './outline-utils';
+import { outlineLinesWithRanges, outlineOf } from './outline-utils';
 import { parse, deepEquals, bounds, MockFileResolver } from './test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
@@ -479,6 +479,24 @@ describe('outline', () => {
       resolver.loadFileContents = () => 'vector = {}';
       assert.strictEqual(outlineOf('#include other.lua\nfunction vector:len() end', { includeFileResolver: resolver }),
         'vector:len() [Method]');
+    });
+
+    it('lists a global where this file first assigns it', () => {
+      const resolver = new MockFileResolver();
+      resolver.loadFileContents = () => 'shared = 0';
+      assert.strictEqual(outlineOf('#include lib.lua\nshared = 5', { includeFileResolver: resolver }), 'shared [Variable]');
+      resolver.loadFileContents = () => 'player = { x = 1 }';
+      const { symbols } = parse('#include lib.lua\nplayer.hp = 3\nplayer = { y = 2 }', { includeFileResolver: resolver });
+      assert.deepStrictEqual(outlineLinesWithRanges(symbols),
+        [ 'player [Table] 3:0-3:18 3:0-3:6', '  hp [Field] 2:0-2:13 2:7-2:9', '  y [Field] 3:11-3:16 3:11-3:12' ]);
+    });
+
+    it('still lists self fields that a method adds to a table from another file', () => {
+      const resolver = new MockFileResolver();
+      resolver.loadFileContents = () => 'player = {}';
+      const { symbols } = parse('#include lib.lua\nfunction player:draw()\n  self.x = 1\nend', { includeFileResolver: resolver });
+      assert.deepStrictEqual(outlineLinesWithRanges(symbols),
+        [ 'player:draw() [Method] 2:0-4:3 2:16-2:20', 'player [Table] 3:2-3:12 3:7-3:8', '  x [Field] 3:2-3:12 3:7-3:8' ]);
     });
 
     it('handles assignments with missing or extra values', () => {

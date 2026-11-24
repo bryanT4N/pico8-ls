@@ -8,7 +8,6 @@ import Parser, { ParserOptions } from '../parser';
 import { Token, TokenType, TokenValue } from '../tokens';
 import { Bounds, codeLocationToString } from '../types';
 import ResolvedFile, { FileResolver } from '../file-resolver';
-import { DefinitionsUsagesResult, DefsUsagesOptions, findDefinitionsUsages } from '../definitions-usages';
 import { CodeProblem, ParseError } from '../errors';
 import { Comment_ } from '../expressions';
 import { Chunk } from '../statements';
@@ -47,22 +46,16 @@ export function lexWithErrors(input: string): { tokens: Token[], errors: ParseEr
   return { tokens, errors: lexer.errors, comments: lexer.comments };
 }
 
-export type TestParseOptions = ParserOptions & DefsUsagesOptions & { filename?: string };
+export type TestParseOptions = ParserOptions & { filename?: string };
 
-export type ParsedForTest = Chunk & DefinitionsUsagesResult & { symbols: CodeSymbol[] };
+export type ParsedForTest = Chunk & { symbols: CodeSymbol[] };
 
 export function parse(input: string, opts: TestParseOptions = {}): ParsedForTest {
   // If a filename is given, resolve it the same way #include'd files are
   // resolved, so they can be compared
   const file = opts?.filename ? ResolvedFile.fromPath(opts.filename) : testFile();
   const chunk = new Parser(file, input, opts).parseChunk();
-  const symbols = outlineFor(analyze(chunk), file);
-  const defUsResult = findDefinitionsUsages(chunk, opts);
-  return {
-    ...chunk,
-    ...defUsResult,
-    symbols,
-  };
+  return { ...chunk, symbols: outlineFor(analyze(chunk), file) };
 }
 
 export type Analyzed = { chunk: Chunk, analysis: Analysis, texts: Record<string, string> };

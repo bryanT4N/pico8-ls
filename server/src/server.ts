@@ -1,33 +1,27 @@
 import {
   CompletionItem, CompletionItemTag, createConnection, DefinitionParams,
-  DidChangeConfigurationNotification, DocumentFormattingParams, DocumentSymbol, DocumentSymbolParams,
-  ExecuteCommandParams, FoldingRange, FoldingRangeParams, HoverParams, InitializeParams, InitializeResult, Location, Position, ProposedFeatures,
+  DidChangeConfigurationNotification, DocumentFormattingParams, DocumentSymbolParams,
+  ExecuteCommandParams, FoldingRange, FoldingRangeParams, HoverParams, InitializeParams, InitializeResult, Position, ProposedFeatures,
   ReferenceParams, SignatureHelpParams, SignatureInformation, TextDocumentPositionParams,
   TextDocuments, TextDocumentSyncKind, TextEdit, WorkspaceFolder,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import Parser from './parser/parser';
-import { Bounds, boundsToString } from './parser/types';
-import {
-  DefinitionsUsages, DefinitionsUsagesLookup, DefUsageScope, findDefinitionsUsages,
-} from './parser/definitions-usages';
-import { isParseError, ParseError, Warning } from './parser/errors';
+import { boundsToString } from './parser/types';
+import { isParseError } from './parser/errors';
 import { Builtins, BuiltinFunctionInfo } from './parser/builtins';
 import { isIdentifierPart } from './parser/lexer';
-import ResolvedFile, { FileResolver, pathToFileURL } from './parser/file-resolver';
-import { Include } from './parser/statements';
+import ResolvedFile, { pathToFileURL } from './parser/file-resolver';
+import { Chunk } from './parser/statements';
 import Formatter, { FormatterOptions } from './parser/formatter';
-import {
-  findProjects, getProjectFiles, iterateProject, ParsedDocumentsMap, Project, ProjectDocument, ProjectDocumentNode,
-} from './projects';
+import { makeFileResolver, ProjectDocument, ProjectIndex } from './projects';
 import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
 import { buildDocumentSymbols } from './document-symbols';
-import { analyze } from './parser/analysis/binder';
-import { outlineFor } from './parser/symbols';
 import { computeFoldingRanges } from './folding-ranges';
-import { errorsInFile, mergeDiagnostics } from './diagnostics';
+import { errorsInFile } from './diagnostics';
+import { completionItems, completionRequestAt } from './completion';
 
 console.log('PICO-8-LS language server starting.');
 
@@ -38,9 +32,16 @@ const documents = new TextDocuments(TextDocument);
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 
-let parsedDocuments: ParsedDocumentsMap = new Map();
-let projects: Project[] = [];
-let projectsByFilename: Map<string, Project> = new Map();
+// The text of the workspace's files as the scan read them.
+const diskText = new Map<string, string>();
+
+function openText(uri: string): string | undefined {
+  return documents.get(uri)?.getText() ?? diskText.get(uri);
+}
+
+const fileResolver = makeFileResolver(openText);
+
+const index = new ProjectIndex(parseFile);
 
 // Set up some initial configs
 connection.onInitialize((params: InitializeParams) => {
@@ -118,23 +119,17 @@ async function scanWorkspaceFolder(workspaceFolder: WorkspaceFolder) {
   // List all files in directory & subdirs
   const allFiles = await getFilesRecursive(folderPath);
 
-  // Load contents of each file & transform to TextDocument type
-  const textDocuments = await Promise.all(allFiles.map(createTextDocument));
+  const uris = await Promise.all(allFiles.map(async filePath => {
+    const uri = pathToFileURL(filePath);
+    try {
+      diskText.set(uri, (await fs.promises.readFile(filePath)).toString());
+    } catch (e) {
+      console.error('Error reading ' + filePath, e);
+    }
+    return uri;
+  }));
 
-  // Parse each file
-  parsedDocuments =
-    textDocuments.map(parseTextDocument)
-      .filter(chunk => !!chunk)
-    // Put the result into a map for lookup by file uri
-      .reduce((dict, curr) => {
-        dict.set(curr!.textDocument.uri, curr!);
-        return dict;
-      }, new Map<string, ProjectDocument>());
-
-  rebuildProjectTree();
-
-  // Now we have the project tree, we can FINALLY finish parsing all the files.
-  projects.forEach(findDefUsagesForProject);
+  publish(index.scan(uris));
 }
 
 async function getFilesRecursive(folderPath: string): Promise<string[]> {
@@ -160,107 +155,48 @@ async function getFilesRecursive(folderPath: string): Promise<string[]> {
   return p8andLuaFiles;
 }
 
-async function createTextDocument(filePath: string) {
-  const uri = pathToFileURL(filePath);
-
-  const cached = documents.get(uri);
-  if (cached) {
-    return cached;
+function parseFile(uri: string): ProjectDocument | undefined {
+  const text = textOf(uri);
+  if (text === undefined) {
+    return undefined;
   }
-
-  const languageId = filePath.endsWith('p8') ? 'pico-8' : 'pico-8-lua';
-  const content = (await fs.promises.readFile(filePath)).toString();
-  const result = TextDocument.create(uri, languageId, 0, content);
-  return result;
+  const chunk = parseText(uri, text);
+  if (!chunk) {
+    return undefined;
+  }
+  const textDocument = documents.get(uri) ?? TextDocument.create(uri, uri.endsWith('p8') ? 'pico-8' : 'pico-8-lua', 0, text);
+  return { textDocument, chunk, errors: chunk.errors };
 }
 
-function rebuildProjectTree() {
-  // Figure out which files belong together in a "project"
-  projects = findProjects(parsedDocuments);
-
-  // Build the map of filenames -> projects
-  projectsByFilename = new Map();
-  const iterateNode = (projNode: ProjectDocumentNode, rootProject: Project) => {
-    projectsByFilename.set(projNode.document.textDocument.uri, rootProject);
-    for (const child of projNode.included) {
-      iterateNode(child, rootProject);
-    }
-  };
-  for (const project of projects) {
-    iterateNode(project.root, project);
+function textOf(uri: string): string | undefined {
+  const text = openText(uri);
+  if (text !== undefined) {
+    return text;
   }
-}
-
-function findDefUsagesForProject(project: Project) {
-  // How this works is that the root of the project #includes all the other
-  // files into itself, so its global scope has everything all the other files
-  // might want. So we just invoke findDefinitionsUsages on every file,
-  // injecting the global scope of the root file into the other files.
-
-  // Before we start, make sure we're using the most up-to-date version of the files
-  refreshProject(project);
-
-  const warnings: Warning[] = [];
-
-  const rootDefUsages = processDefUsages(project.root.document);
-  const rootScope = rootDefUsages?.scopes;
-  if (rootDefUsages?.warnings) {
-    warnings.push(...rootDefUsages.warnings);
-  }
-
-  if (rootScope) {
-    // recursive stepping through includes in case the includes have includes
-    const iterateNode = (projNode: ProjectDocumentNode) => {
-      const result = processDefUsages(projNode.document, rootScope);
-      if (result && result.warnings) {
-        warnings.push(...result.warnings);
-      }
-
-      // recurse into children
-      for (const child of projNode.included) {
-        iterateNode(child);
-      }
-    };
-
-    // actually iterate over the children of the root
-    for (const child of project.root.included) {
-      iterateNode(child);
-    }
-  }
-
-  for (const { uri, diagnostics } of mergeDiagnostics(getProjectFiles(project), parseErrorsByUri, warnings, globalSettings.maxNumberOfProblems)) {
-    connection.sendDiagnostics({ uri, diagnostics });
-  }
-}
-
-// Refresh the contents of each parsed file in the project tree
-// by fetching the document & parsed AST from parsedDocuments.
-function refreshProject(project: Project) {
-  iterateProject(project, refreshNodeContents);
-}
-
-function refreshNodeContents(node: ProjectDocumentNode) {
-  const parsed = parsedDocuments.get(node.document.textDocument.uri);
-  if (!parsed) {
-    console.log('refreshNodeContents: cannot find contents of file ' + node.document.textDocument.uri);
-    return;
-  }
-
-  node.document = parsed;
-}
-
-function processDefUsages(document: ProjectDocument, injectedGlobalScope?: DefUsageScope) {
   try {
-    const uri = document.textDocument.uri;
-    const { warnings, definitionsUsages, scopes } = findDefinitionsUsages(document.chunk, { injectedGlobalScope });
-
-    // set some stuff in lookup tables
-    documentDefUsage.set(uri, definitionsUsages);
-    documentScopes.set(uri, scopes);
-
-    return { scopes, warnings };
+    return fs.readFileSync(url.fileURLToPath(uri)).toString();
   } catch (e) {
-    console.error(e);
+    console.error('Error reading ' + uri, e);
+    return undefined;
+  }
+}
+
+function parseText(uri: string, text: string): Chunk | undefined {
+  try {
+    return new Parser(ResolvedFile.fromFileURL(uri), text, { includeFileResolver: fileResolver }).parse();
+  } catch (e) {
+    if (isParseError(e)) {
+      console.error(`ParseError: ${e.stack ? e.stack : e.message}\nBounds: ${boundsToString(e.bounds)}`);
+    } else {
+      console.error(e);
+    }
+    return undefined;
+  }
+}
+
+function publish(uris: string[]) {
+  for (const diagnostics of index.diagnostics(uris, globalSettings.maxNumberOfProblems)) {
+    connection.sendDiagnostics(diagnostics);
   }
 }
 
@@ -289,101 +225,13 @@ async function fetchGlobalSettings() {
 
 // Set up validation handler for when document changes
 documents.onDidChangeContent(change => {
-  const document = change.document;
-
-  // re-parse the AST
-  const parsed = parseTextDocument(document);
-  if (!parsed) {
-    console.log('Failed to parse ' + document.uri);
-    return;
-  }
-
-  // Check if includes have changed -- if they have, we need to rebuild project files
-  const includedUris = parsed.chunk.includes!.map(include => include.resolvedFile.fileURL).sort();
-
-  // get the old includes to see what they were before
-  const oldIncludes = parsedDocuments.get(document.uri);
-  let oldIncludedUris = oldIncludes?.chunk.includes!.map(include => include.resolvedFile.fileURL).sort();
-  oldIncludedUris = oldIncludedUris || [];
-
-  // Before we proceed, we need to make sure to store the newly parsed doc back in parsedDocuments
-  parsedDocuments.set(document.uri, parsed);
-
-  // compare the two
-  let foundProjectDifferences = includedUris.length !== oldIncludedUris.length;
-  for (let i = 0; i < includedUris.length; i++) {
-    if (includedUris[i] !== oldIncludedUris[i]) {
-      foundProjectDifferences = true;
-    }
-  }
-
-  const alreadyParsed = { [document.uri]: parsed };
-
-  if (foundProjectDifferences) {
-    console.log('Found differences in #include statements -- rebuilding project tree');
-    rebuildProjectTree();
-    parseAllProjects(alreadyParsed);
-  } else {
-    // Otherwise, only re-scan the project that has changed
-    const projectOfChangedFile = projectsByFilename.get(document.uri);
-    if (projectOfChangedFile) {
-      reparseProjectFiles(projectOfChangedFile, alreadyParsed).catch(e => {
-        console.error('error reparsing project files: ', e);
-      });
-    } else {
-      const [ fileDiagnostics ] = mergeDiagnostics([ document.uri ], parseErrorsByUri, [], globalSettings.maxNumberOfProblems);
-      connection.sendDiagnostics(fileDiagnostics);
-    }
-  }
+  publish(index.update(change.document.uri));
 });
-
-function parseAllProjects(alreadyParsed: { [filename: string]: ProjectDocument }) {
-  projects.forEach(p => void reparseProjectFiles(p, alreadyParsed));
-}
-
-async function reparseProjectFiles(project: Project, alreadyParsed: { [filename: string]: ProjectDocument }) {
-  const projFiles = getProjectFiles(project);
-
-  await Promise.all(projFiles.map(async file => {
-    if (alreadyParsed[file]) {
-      return;
-    }
-
-    try {
-      const textDocument = await createTextDocument(url.fileURLToPath(file));
-      const parsed = parseTextDocument(textDocument);
-      if (parsed) {
-        parsedDocuments.set(textDocument.uri, parsed);
-      } else {
-        console.error('error parsing', textDocument.uri);
-      }
-    } catch (e) {
-      console.error('error reading', file, e);
-    }
-  }));
-
-  findDefUsagesForProject(project);
-}
 
 // Cache the settings of all open documents
 const documentSettings: Map<string, Thenable<DocumentSettings>> = new Map<string, Thenable<DocumentSettings>>();
 // When a document is closed, purge its entry from the cache
 documents.onDidClose(e => documentSettings.delete(e.document.uri));
-
-// A file's parse errors wait here for its warnings from the project's analysis:
-// sent as two lists, the later one would replace the earlier one.
-const parseErrorsByUri = new Map<string, ParseError[]>();
-
-// Text for open documents
-const documentTextCache: Map<string, TextDocument> = new Map<string, TextDocument>();
-// Symbols for open documents
-const documentSymbols: Map<string, DocumentSymbol[]> = new Map<string, DocumentSymbol[]>();
-// Definition/Usages lookup table for open documents
-const documentDefUsage: Map<string, DefinitionsUsagesLookup> = new Map<string, DefinitionsUsagesLookup>();
-// Scopes, for lookup up symbols for auto-completion
-const documentScopes: Map<string, DefUsageScope> = new Map<string, DefUsageScope>();
-// Includes, for looking up go-to-definition on the include statements themselves
-const documentIncludes: Map<string, Include[]> = new Map<string, Include[]>();
 
 connection.onDidChangeConfiguration(change => {
   if (hasConfigurationCapability) {
@@ -413,122 +261,24 @@ function getDocumentSettings(resource: string): Thenable<DocumentSettings> {
   return result;
 }
 
-const fileResolver: FileResolver = {
-  doesFileExist: (filepath) => fs.existsSync(filepath),
-  isFile: (filepath) => fs.statSync(filepath).isFile(),
-  loadFileContents: (filepath) => {
-    const uri = url.pathToFileURL(filepath).toString();
-
-    const cached = documents.get(uri);
-    if (cached) {
-      return cached.getText();
-    }
-
-    // file isn't available in documents cache so read it the old-fashioned way
-    return fs.readFileSync(filepath).toString();
-  },
-};
-
-function parseTextDocument(textDocument: TextDocument): ProjectDocument | undefined {
-  try {
-    // parse document
-    const text = textDocument.getText();
-    documentTextCache.set(textDocument.uri, textDocument);
-    const parser = new Parser(ResolvedFile.fromFileURL(textDocument.uri), text, { includeFileResolver: fileResolver });
-    const chunk = parser.parse();
-    const { errors, includes } = chunk;
-
-    // Set document info in caches
-    try {
-      documentSymbols.set(textDocument.uri, buildDocumentSymbols(textDocument, chunk.comments ?? [],
-        outlineFor(analyze(chunk), ResolvedFile.fromFileURL(textDocument.uri))));
-    } catch (e) {
-      console.error('Failed to build the outline', e);
-      documentSymbols.set(textDocument.uri, []);
-    }
-    documentIncludes.set(textDocument.uri, includes!);
-
-    parseErrorsByUri.set(textDocument.uri, errorsInFile(textDocument.uri, errors));
-
-    return { textDocument, chunk, errors };
-  } catch(e) {
-    if (isParseError(e)) {
-      console.error(`ParseError: ${e.stack ? e.stack : e.message}\nBounds: ${boundsToString(e.bounds)}`);
-    } else {
-      console.error(e);
-    }
-
-    return undefined;
-  }
-}
-
 connection.onDocumentSymbol((params: DocumentSymbolParams) => {
-  return documentSymbols.get(params.textDocument.uri);
+  const { uri } = params.textDocument;
+  const document = index.document(uri);
+  return document ? buildDocumentSymbols(document.textDocument, document.chunk.comments ?? [], index.outline(uri)) : [];
 });
 
-function getDefinitionsUsagesForPosition(params: TextDocumentPositionParams): DefinitionsUsages | undefined {
-  const lookup = documentDefUsage.get(params.textDocument.uri);
-  if (!lookup) {
-    console.log(`Definition/usages lookup table unavailable for ${params.textDocument.uri} -- re-scanning`);
-    rescanEverything();
-    return undefined;
-  }
-
-  return lookup.lookup(
-    // They use 0-index line numbers, we use 1-index
-    params.position.line + 1,
-    params.position.character,
-    ResolvedFile.fromFileURL(params.textDocument.uri));
-}
-
-function boundsToLocation(bounds: Bounds): Location {
-  return {
-    uri: bounds.start.filename.fileURL,
-    range: {
-      start: { line: bounds.start.line - 1, character: bounds.start.column },
-      end: { line: bounds.end.line - 1, character: bounds.end.column },
-    },
-  };
+function offsetOf(params: TextDocumentPositionParams): number | undefined {
+  return documents.get(params.textDocument.uri)?.offsetAt(params.position);
 }
 
 connection.onDefinition((params: DefinitionParams) => {
-  const includes = documentIncludes.get(params.textDocument.uri);
-  if (includes) {
-    // They use 0-index line numbers, we use 1-index
-    const line = params.position.line + 1;
-    const column = params.position.character;
-
-    for (const include of includes) {
-      const loc = include.stmt.loc!;
-      if (line === loc.start.line && column >= loc.start.column && column <= loc.end.column) {
-        const ret: Location = {
-          uri: include.resolvedFile.fileURL,
-          // We're just linking to the entire included file, so the range is the whole thing
-          range: {
-            start: { line: 0, character: 0 },
-            end: { line: Number.MAX_SAFE_INTEGER, character: 0 },
-          },
-        };
-        return [ ret ];
-      }
-    }
-  }
-
-  const result = getDefinitionsUsagesForPosition(params);
-  if (!result) {
-    return [];
-  }
-
-  return result.definitions.map(bounds => boundsToLocation(bounds));
+  const offset = offsetOf(params);
+  return offset === undefined ? [] : index.definitions(params.textDocument.uri, offset);
 });
 
 connection.onReferences((params: ReferenceParams) => {
-  const result = getDefinitionsUsagesForPosition(params);
-  if (!result) {
-    return [];
-  }
-
-  return result.usages.map(bounds => boundsToLocation(bounds));
+  const offset = offsetOf(params);
+  return offset === undefined ? [] : index.references(params.textDocument.uri, offset, params.context.includeDeclaration);
 });
 
 connection.onDidChangeWatchedFiles(_change => {
@@ -538,49 +288,14 @@ connection.onDidChangeWatchedFiles(_change => {
 
 // This handler provides the initial list of the completion items.
 connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] => {
-  const scopes = documentScopes.get(params.textDocument.uri);
-  if (!scopes) {
-    console.log(`Definition/usages lookup table unavailable for ${params.textDocument.uri} -- re-scanning everything`);
-    rescanEverything();
+  const { uri } = params.textDocument;
+  const offset = offsetOf(params);
+  const lineText = getTextOnLine(uri, params.position);
+  if (offset === undefined || lineText === undefined) {
     return [];
   }
-
-  const line = params.position.line;
-  const textOnLine = getTextOnLine(params.textDocument.uri, params.position);
-
-  let beginIdx = 0;
-  let endIdx = 0;
-  let completionFilterText = '';
-  if (textOnLine !== undefined) {
-    const completionFilter = completionFilterForPosition(params.position.character, textOnLine);
-    beginIdx = completionFilter.beginIdx;
-    endIdx = completionFilter.endIdx;
-    completionFilterText = completionFilter.text;
-  }
-
-  return scopes.lookupScopeFor({
-    // They use 0-index line numbers, we use 1-index
-    line: params.position.line + 1,
-    column: params.position.character,
-    // index is 0 because it is unused in the lookup
-    index: 0,
-    filename: ResolvedFile.fromFileURL(params.textDocument.uri) })
-    .allSymbols()
-    .filter(sym => sym.startsWith(completionFilterText))
-    .map(sym => {
-      const textEdit: TextEdit = {
-        range: {
-          start: { line, character: beginIdx },
-          end: { line, character: endIdx },
-        },
-        newText: sym,
-      };
-
-      return {
-        label: sym,
-        textEdit,
-      };
-    });
+  const { line, character } = params.position;
+  return completionItems(index.analyses(uri), ResolvedFile.fromFileURL(uri), offset, completionRequestAt(lineText, character), line, character);
 });
 
 function toDocumentationMarkdown(name: string, info: BuiltinFunctionInfo) : string {
@@ -616,26 +331,6 @@ connection.onCompletionResolve((item: CompletionItem) => {
   return item;
 });
 
-function completionFilterForPosition(position: number, text: string) {
-  // compensate for position being one index *past* the character just typed
-  const startIdx = position - 1;
-
-  let i;
-  for (i = startIdx; i >= 0; i--) {
-    const charCode = text.charCodeAt(i);
-    if (!isIdentifierPart(charCode) && charCode !== 46) { // .
-      break;
-    }
-  }
-  const begin = i + 1;
-
-  return {
-    beginIdx: begin,
-    endIdx: position,
-    text: text.substring(begin, position),
-  };
-}
-
 function identifierAtPosition(position: number, text: string) {
   let i;
   for (i = position; i >= 0; i--) {
@@ -658,7 +353,7 @@ function identifierAtPosition(position: number, text: string) {
 }
 
 function getTextOnLine(textDocumentUri: string, position: Position): string | undefined {
-  const text = documentTextCache.get(textDocumentUri);
+  const text = documents.get(textDocumentUri);
   if (!text) {
     return undefined;
   }
@@ -743,13 +438,8 @@ connection.onDocumentFormatting((params: DocumentFormattingParams) => {
 });
 
 connection.onFoldingRanges((params: FoldingRangeParams): FoldingRange[] => {
-  const uri = params.textDocument.uri;
-  const parsedDocument = parsedDocuments.get(uri);
-  if (!parsedDocument) {
-    return [];
-  }
-
-  return computeFoldingRanges(parsedDocument.textDocument, parsedDocument.chunk);
+  const document = index.document(params.textDocument.uri);
+  return document ? computeFoldingRanges(document.textDocument, document.chunk) : [];
 });
 
 connection.onExecuteCommand((params: ExecuteCommandParams) => {
@@ -767,7 +457,7 @@ connection.onExecuteCommand((params: ExecuteCommandParams) => {
 const formatterSupportedLanguages = [ 'pico-8', 'pico-8-lua' ];
 
 function executeCommand_formatDocument(documentUri: string, opts: FormatterOptions): TextEdit | null {
-  const textDocument = documentTextCache.get(documentUri);
+  const textDocument = documents.get(documentUri);
   if (!textDocument) {
     console.error('Can\'t find textDocument at uri ' + documentUri);
     return null;
@@ -779,16 +469,16 @@ function executeCommand_formatDocument(documentUri: string, opts: FormatterOptio
     return null;
   }
 
-  // Refresh document contents
-  const parsedDocument = parseTextDocument(textDocument);
-  if (!parsedDocument || errorsInFile(documentUri, parsedDocument.errors).length > 0) {
+  // A parse of its own: the formatter adds nodes to the syntax tree that the analysis cannot take.
+  const chunk = parseText(documentUri, textDocument.getText());
+  if (!chunk || errorsInFile(documentUri, chunk.errors).length > 0) {
     console.error(`Can't format document when there are parsing errors! (document: "${textDocument.uri}")`);
     return null;
   }
 
   // Actually format it
   const formatResult = new Formatter(opts).formatChunk(
-    parsedDocument.chunk,
+    chunk,
     textDocument.getText(),
     textDocument.languageId === 'pico-8-lua',
     documentUri,

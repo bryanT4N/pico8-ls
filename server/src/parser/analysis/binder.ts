@@ -66,8 +66,8 @@ class Binder extends ASTVisitor<BinderScope> {
   // The chain of #includes whose content the analysis is in, outermost first.
   private readonly openIncludes: OpenInclude[] = [];
   private topLevel: Statement[] = [];
-  // The first entry each global name got.
-  private readonly globalEntries = new Map<string, OutlineEntry>();
+  // The first entry each global name got in each file: by name, then by ResolvedFile.path.
+  private readonly globalEntries = new Map<string, Map<string, OutlineEntry>>();
   // For each expression value, where to attach it in the outline. The statement hooks fill this in before the
   // visitor reaches the values (so do function and table constructor hooks for the values inside them); the
   // whole design relies on that order.
@@ -335,7 +335,7 @@ class Binder extends ASTVisitor<BinderScope> {
     if (this.recorded.has(node) || node.name === '?' || (parent?.type === 'MemberExpression' && parent.identifier === node)) {
       return;
     }
-    this.read(this.resolve(node.name).symbol, node.loc!);
+    this.read(this.resolve(node).symbol, node.loc!);
   }
 
   override visitMemberExpression(node: MemberExpression): void {
@@ -430,7 +430,7 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   private assignName(name: Identifier, value: Expression | undefined, statement: Statement, compound: boolean): StatementInfo | undefined {
-    const binding = this.resolve(name.name);
+    const binding = this.resolve(name);
     if (compound && binding.kind === 'global') {
       // In PICO-8, x += 1 fails on a global that was never assigned, so a plain assignment elsewhere defines it.
       this.write(binding.symbol, name, true);
@@ -461,7 +461,7 @@ class Binder extends ASTVisitor<BinderScope> {
       const entry = this.link(addEntry(this.topScope().owner, name.name, CodeSymbolType.Function, statement.loc!, name.loc!), binding.symbol);
       this.targets.set(value, { kind: 'entry', entry });
       if (!binding.entry) {
-        this.globalEntries.set(name.name, entry);
+        this.setGlobalEntry(name, entry);
       }
     } else {
       if (binding.entry?.implicit) {
@@ -476,15 +476,15 @@ class Binder extends ASTVisitor<BinderScope> {
           this.targets.set(ctor, { kind: 'entry', entry: binding.entry });
         } else {
           const entry = this.link(addEntry(this.root, name.name, tableTypeOf(ctor), statement.loc!, name.loc!), binding.symbol);
-          this.globalEntries.set(name.name, entry);
+          this.setGlobalEntry(name, entry);
           this.targets.set(ctor, { kind: 'entry', entry });
         }
       } else if (!binding.entry) {
-        this.globalEntries.set(name.name,
+        this.setGlobalEntry(name,
           this.link(addEntry(this.root, name.name, CodeSymbolType.Variable, statement.loc!, name.loc!), binding.symbol));
       }
     }
-    const table = this.globalEntries.get(name.name)!;
+    const table = this.globalEntry(name)!;
     return { about: table, defines: table };
   }
 
@@ -516,7 +516,7 @@ class Binder extends ASTVisitor<BinderScope> {
       return this.addMemberField(selfTable, segments, value, statement);
     }
 
-    const binding = this.resolve(root.name);
+    const binding = this.resolve(root);
     if (binding.kind === 'param' || binding.kind === 'loopvar') {
       if (value?.type === 'FunctionDeclaration') {
         return this.addMethod(value, root, segments, variable.indexer, undefined, statement, member);
@@ -526,7 +526,9 @@ class Binder extends ASTVisitor<BinderScope> {
     }
 
     if (value?.type === 'FunctionDeclaration') {
-      return this.addMethod(value, root, segments, variable.indexer, binding.entry, statement, member);
+      // Grouping takes this file's entry only, but self.k = v still goes under the table when another file has its entry.
+      const selfTable = binding.entry ?? (binding.kind === 'global' ? this.anyGlobalEntry(root.name) : undefined);
+      return this.addMethod(value, root, segments, variable.indexer, binding.entry, statement, member, selfTable);
     }
 
     let rootEntry = binding.entry;
@@ -536,7 +538,7 @@ class Binder extends ASTVisitor<BinderScope> {
       }
       rootEntry = this.link(addEntry(this.root, root.name, CodeSymbolType.Table, statement.loc!, root.loc!), binding.symbol);
       rootEntry.implicit = true;
-      this.globalEntries.set(root.name, rootEntry);
+      this.setGlobalEntry(root, rootEntry);
     }
 
     return this.addMemberField(rootEntry, segments, value, statement);
@@ -561,9 +563,10 @@ class Binder extends ASTVisitor<BinderScope> {
     return { about: rootEntry };
   }
 
-  // A method written as its own statement: function a.b(), function a:b() or a.b = function() end.
+  // A method written as its own statement: function a.b(), function a:b() or a.b = function() end. table: the entry
+  // to group the method under; selfTable: the entry self's fields go under.
   private addMethod(fn: FunctionDeclaration, root: Identifier, segments: Identifier[], indexer: Indexer,
-    table: OutlineEntry | undefined, statement: Statement, member: LuaSymbol): StatementInfo | undefined {
+    table: OutlineEntry | undefined, statement: Statement, member: LuaSymbol, selfTable = table): StatementInfo | undefined {
     const key = segments[segments.length - 1];
     const name = [ root, ...segments.slice(0, -1) ].map(id => id.name).join('.') + indexer + key.name;
     const entry = this.link(addEntry(this.topScope().owner, name, CodeSymbolType.Method, statement.loc!, key.loc!), member);
@@ -573,9 +576,9 @@ class Binder extends ASTVisitor<BinderScope> {
     if (isSelfMethod) {
       const selfSymbol = member.owner;
       if (intermediates.length === 0) {
-        this.targets.set(fn, { kind: 'entry', entry, selfTable: table ?? null, selfSymbol });
-      } else if (table) {
-        this.targets.set(fn, { kind: 'entry', entry, selfPath: { root: table, segments: intermediates, stmt: statement }, selfSymbol });
+        this.targets.set(fn, { kind: 'entry', entry, selfTable: selfTable ?? null, selfSymbol });
+      } else if (selfTable) {
+        this.targets.set(fn, { kind: 'entry', entry, selfPath: { root: selfTable, segments: intermediates, stmt: statement }, selfSymbol });
       } else {
         this.targets.set(fn, { kind: 'entry', entry, selfTable: null, selfSymbol });
       }
@@ -659,7 +662,7 @@ class Binder extends ASTVisitor<BinderScope> {
 
   private pathSymbol(expression: Expression): LuaSymbol | undefined {
     if (expression.type === 'Identifier') {
-      const { symbol } = this.resolve(expression.name);
+      const { symbol } = this.resolve(expression);
       return symbol.table ?? symbol;
     }
     if (expression.type === 'MemberExpression') {
@@ -675,6 +678,24 @@ class Binder extends ASTVisitor<BinderScope> {
       this.globals.set(name, symbol);
     }
     return symbol;
+  }
+
+  private globalEntry(name: Identifier): OutlineEntry | undefined {
+    return this.globalEntries.get(name.name)?.get(name.loc!.start.filename.path);
+  }
+
+  private setGlobalEntry(name: Identifier, entry: OutlineEntry): void {
+    let entries = this.globalEntries.get(name.name);
+    if (!entries) {
+      entries = new Map<string, OutlineEntry>();
+      this.globalEntries.set(name.name, entries);
+    }
+    entries.set(name.loc!.start.filename.path, entry);
+  }
+
+  private anyGlobalEntry(name: string): OutlineEntry | undefined {
+    const [ first ] = this.globalEntries.get(name)?.values() ?? [];
+    return first;
   }
 
   private visibleDecl(scope: BinderScope, name: string): Decl | undefined {
@@ -722,23 +743,31 @@ class Binder extends ASTVisitor<BinderScope> {
     return undefined;
   }
 
-  private resolve(name: string): Binding {
+  private resolve(name: Identifier): Binding {
     for (let i = this.scopeStack.length - 1; i >= 0; i--) {
       // Skip any decl whose declaring stmt is still being initialised (LocalStatement on the node stack).
-      const decl = this.visibleDecl(this.scopeStack[i], name);
+      const decl = this.visibleDecl(this.scopeStack[i], name.name);
       if (decl) {
         return decl;
       }
     }
     // A self that nothing declares belongs to the innermost function alone, so that self.k never links two
     // functions. Outside every function it is the global of that name, as in Lua.
-    const fn = name === 'self' ? [ ...this.scopeStack ].reverse().find(scope => scope.kind === 'function') : undefined;
+    const fn = name.name === 'self' ? [ ...this.scopeStack ].reverse().find(scope => scope.kind === 'function') : undefined;
     if (fn) {
       fn.implicitSelf ??= { kind: 'param', symbol: new LuaSymbol('self', 'self') };
       return fn.implicitSelf;
     }
-    return { kind: 'global', symbol: this.globalSymbol(name), entry: this.globalEntries.get(name) };
+    return { kind: 'global', symbol: this.globalSymbol(name.name), entry: this.globalEntry(name) };
   }
+}
+
+export function emptyAnalysis(): Analysis {
+  return {
+    outline: [], globals: new Map(), referencesByFile: new Map(), membersByKey: new Map(),
+    scope: { kind: 'file', children: [], declarations: [] }, includeScopes: new Map(), includeStarts: new Map(),
+    includeCheckpoints: new Map(),
+  };
 }
 
 export function analyze(chunk: Chunk): Analysis {

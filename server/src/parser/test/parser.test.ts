@@ -1,6 +1,6 @@
 import { strictEqual as eq } from 'assert';
 import { Statement } from '../statements';
-import { bounds, deepEquals, deepEqualsAST, formatError, getTestFileContents, MockFileResolver, parse, TestFilesResolver } from './test-utils';
+import { analyzeCode, bounds, deepEquals, deepEqualsAST, formatError, getTestFileContents, MockFileResolver, parse, TestFilesResolver, warningsIn } from './test-utils';
 
 describe('Parser', () => {
   it('parses basic assignment statement', () => {
@@ -1023,12 +1023,9 @@ __music__
     });
 
     it('contains no warnings for symbols defined in included files', () => {
-      const fileResolver = new MockFileResolver();
-      fileResolver.loadFileContents = () => 'local a = 5';
-
-      const { errors, warnings } = parse('#include other_file.lua \n print(a)', { includeFileResolver: fileResolver });
-      deepEquals(errors, []);
-      deepEquals(warnings, []);
+      const a = analyzeCode('#include other_file.lua\n print(a)', { 'other_file.lua': 'local a = 5' });
+      deepEquals(a.chunk.errors, []);
+      deepEquals(warningsIn(a), []);
     });
   });
 

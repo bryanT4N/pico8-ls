@@ -1,11 +1,21 @@
 import { CodeSymbol } from '../symbols';
+import { Bounds } from '../types';
 import { parse, TestParseOptions } from './test-utils';
 
 export function outlineLines(symbols: CodeSymbol[]): string[] {
+  return linesOf(symbols, s => `${s.name}${s.detail ?? ''} [${s.type}]`);
+}
+
+export function outlineLinesWithRanges(symbols: CodeSymbol[]): string[] {
+  const at = (b: Bounds) => `${b.start.line}:${b.start.column}-${b.end.line}:${b.end.column}`;
+  return linesOf(symbols, s => `${s.name}${s.detail ?? ''} [${s.type}] ${at(s.loc)} ${at(s.selectionLoc)}`);
+}
+
+function linesOf(symbols: CodeSymbol[], describe: (s: CodeSymbol) => string): string[] {
   const lines: string[] = [];
   const walk = (level: CodeSymbol[], depth: number) => {
     for (const s of level) {
-      lines.push(`${'  '.repeat(depth)}${s.name}${s.detail ?? ''} [${s.type}]`);
+      lines.push(`${'  '.repeat(depth)}${describe(s)}`);
       walk(s.children, depth + 1);
     }
   };

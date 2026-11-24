@@ -1,8 +1,16 @@
+import { Location } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Chunk } from './parser/statements';
 import * as url from 'url';
 import * as path from 'path';
-import { ParseError } from './parser/errors';
+import { ParseError, Warning } from './parser/errors';
+import ResolvedFile, { FileResolver, RealFileResolver } from './parser/file-resolver';
+import { analyze, emptyAnalysis } from './parser/analysis/binder';
+import { Analysis, Reference } from './parser/analysis/model';
+import { definitionsAt, referenceAt, referencesOf, warningsOf } from './parser/analysis/queries';
+import { CodeSymbol, outlineFor } from './parser/symbols';
+import { Bounds, containsIndex } from './parser/types';
+import { errorsInFile, FileDiagnostics, inThisFile, mergeDiagnostics } from './diagnostics';
 
 export type ProjectDocument = { textDocument: TextDocument, chunk: Chunk, errors: ParseError[] };
 
@@ -26,7 +34,13 @@ export function getProjectFiles(project: Project) {
 }
 
 export function iterateProject(project: Project, fun: (arg0: ProjectDocumentNode) => void) {
+  // A file can be included twice, and files that include each other make a cycle.
+  const visited = new Set<ProjectDocumentNode>();
   const iterate = (node: ProjectDocumentNode) => {
+    if (visited.has(node)) {
+      return;
+    }
+    visited.add(node);
     fun(node);
     for (const child of node.included) {
       iterate(child);
@@ -99,14 +113,205 @@ function findProjectsRecursive(current: string, visited: Map<string, ProjectDocu
   return node;
 }
 
-// We also need a map that maps from the file to the project it is a part of.
+// Reads a file through the URI form VS Code uses (ResolvedFile.fromPath(p).fileURL): open documents and cached
+// workspace text first, then disk.
+export function makeFileResolver(openText: (uri: string) => string | undefined, disk: FileResolver = new RealFileResolver()): FileResolver {
+  const textAt = (filepath: string) => openText(ResolvedFile.fromPath(filepath).fileURL);
+  return {
+    doesFileExist: filepath => textAt(filepath) !== undefined || disk.doesFileExist(filepath),
+    isFile: filepath => textAt(filepath) !== undefined || disk.isFile(filepath),
+    loadFileContents: filepath => textAt(filepath) ?? disk.loadFileContents(filepath),
+  };
+}
 
-// Use cases:
-//
-// 1. When parsing or re-parsing a file, the global scope from the root should be injected into everything downstream.
-//    So each file needs access to the root of the project, so it can use that for finding defs/usages.
-//
-// 2. When a file is edited and it's re-parsed, we need to examine its includes to see if the project structure has changed.
-//    If it's changed, for now I guess we just call findProjects on _every single file_ again to rebuild the project trees.
-//    So, each file needs access to what its includes _used_ to be, so we can tell if we need to rebuild project trees.
-//    We also need to save the ParsedDocumentsMap in the server so that we can pass that into here, without re-parsing unchanged files.
+// The file's current text, parsed; undefined when it cannot be read.
+export type ParseFile = (uri: string) => ProjectDocument | undefined;
+
+type IndexedProject = { root: string, files: string[], analysis: Analysis, warnings: Warning[] };
+
+// One analysis per project, of its root's syntax tree, into which the parser has pasted every #include. Each file takes
+// its outline, lookups and warnings from the projects that contain it. Every change is analysed before the call
+// returns, so a request that comes after it sees the new text.
+export class ProjectIndex {
+  // Each file's own parse, by URI.
+  private readonly documents: ParsedDocumentsMap = new Map();
+  // Sorted by root URI.
+  private projects: IndexedProject[] = [];
+
+  constructor(private readonly parseFile: ParseFile) {}
+
+  document(uri: string): ProjectDocument | undefined {
+    return this.documents.get(uri);
+  }
+
+  // Returns every known URI.
+  scan(uris: string[]): string[] {
+    for (const uri of uris) {
+      const document = this.parseFile(uri);
+      if (document) {
+        this.documents.set(uri, document);
+      } else {
+        this.documents.delete(uri);
+      }
+    }
+    this.buildProjects();
+    this.projects.forEach(project => this.analyse(project));
+    return [ ...this.documents.keys() ];
+  }
+
+  // Returns the URIs whose diagnostics to send again: after the projects are rebuilt, every known one, so that a file
+  // that left a project loses that project's warnings.
+  update(uri: string): string[] {
+    const document = this.parseFile(uri);
+    if (!document) {
+      return this.remove(uri);
+    }
+    const includedBefore = includedUris(this.documents.get(uri));
+    this.documents.set(uri, document);
+    const rebuild = !sameSet(includedBefore, includedUris(document)) || this.projectsOf(uri).length === 0;
+    if (rebuild) {
+      this.buildProjects();
+    }
+    const containing = this.projectsOf(uri);
+    for (const { root } of containing) {
+      if (root !== uri) {
+        this.reparse(root);
+      }
+    }
+    (rebuild ? this.projects : containing).forEach(project => this.analyse(project));
+    return rebuild ? [ ...this.documents.keys() ] : unique([ uri, ...containing.flatMap(project => project.files) ]);
+  }
+
+  remove(uri: string): string[] {
+    const roots = this.projectsOf(uri).map(project => project.root).filter(root => root !== uri);
+    this.documents.delete(uri);
+    roots.forEach(root => this.reparse(root));
+    this.buildProjects();
+    this.projects.forEach(project => this.analyse(project));
+    return [ ...this.documents.keys(), uri ];
+  }
+
+  outline(uri: string): CodeSymbol[] {
+    const [ first ] = this.projectsOf(uri);
+    return first ? outlineFor(first.analysis, ResolvedFile.fromFileURL(uri)) : [];
+  }
+
+  definitions(uri: string, index: number): Location[] {
+    const file = ResolvedFile.fromFileURL(uri);
+    const include = this.documents.get(uri)?.chunk.includes?.find(({ stmt }) => containsIndex(stmt.loc!, file, index));
+    if (include) {
+      return [{
+        uri: include.resolvedFile.fileURL,
+        range: { start: { line: 0, character: 0 }, end: { line: Number.MAX_SAFE_INTEGER, character: 0 } },
+      }];
+    }
+    return this.lookUp(uri, index, definitionsAt);
+  }
+
+  references(uri: string, index: number, includeDeclaration: boolean): Location[] {
+    return this.lookUp(uri, index, (_analysis, reference) => referencesOf(reference.symbol, includeDeclaration));
+  }
+
+  // One per project containing uri, by root URI.
+  analyses(uri: string): Analysis[] {
+    return this.projectsOf(uri).map(project => project.analysis);
+  }
+
+  // Only the warnings every project containing uri gives: in a file that several carts include, a warning that one
+  // cart's code proves wrong is not shown.
+  warnings(uri: string): Warning[] {
+    const [ first, ...others ] = this.projectsOf(uri).map(project => project.warnings.filter(warning => inThisFile(uri, warning)));
+    if (!first) {
+      return [];
+    }
+    const othersKeys = others.map(warnings => new Set(warnings.map(keyOf)));
+    return first.filter(warning => othersKeys.every(keys => keys.has(keyOf(warning))));
+  }
+
+  diagnostics(uris: string[], maxPerFile: number): FileDiagnostics[] {
+    return unique(uris).flatMap(uri => mergeDiagnostics([ uri ],
+      new Map([[ uri, errorsInFile(uri, this.documents.get(uri)?.errors ?? []) ]]), this.warnings(uri), maxPerFile));
+  }
+
+  private projectsOf(uri: string): IndexedProject[] {
+    return this.projects.filter(project => project.files.includes(uri));
+  }
+
+  private buildProjects(): void {
+    this.projects = findProjects(this.documents)
+      .map(project => ({
+        root: project.root.document.textDocument.uri, files: getProjectFiles(project), analysis: emptyAnalysis(), warnings: [],
+      }))
+      .sort((a, b) => compare(a.root, b.root));
+  }
+
+  // A root that cannot be read now keeps its last parse.
+  private reparse(uri: string): void {
+    const document = this.parseFile(uri);
+    if (document) {
+      this.documents.set(uri, document);
+    }
+  }
+
+  // Never keeps an earlier result: one that failed gives way to an empty analysis.
+  private analyse(project: IndexedProject): void {
+    try {
+      project.analysis = analyze(this.documents.get(project.root)!.chunk);
+      project.warnings = warningsOf(project.analysis);
+    } catch (e) {
+      console.error(`Failed to analyse the project of ${project.root}`, e);
+      project.analysis = emptyAnalysis();
+      project.warnings = [];
+    }
+  }
+
+  // The union of the results in the projects containing uri, each place once, by file path and then by start.
+  private lookUp(uri: string, index: number, query: (analysis: Analysis, reference: Reference) => Bounds[]): Location[] {
+    const file = ResolvedFile.fromFileURL(uri);
+    const places = new Map<string, Bounds>();
+    for (const { analysis } of this.projectsOf(uri)) {
+      const reference = referenceAt(analysis, file, index);
+      for (const bounds of reference ? query(analysis, reference) : []) {
+        places.set(`${bounds.start.filename.path}:${bounds.start.index}:${bounds.end.index}`, bounds);
+      }
+    }
+    return [ ...places.values() ].sort(byPlace).map(toLocation);
+  }
+}
+
+function includedUris(document: ProjectDocument | undefined): Set<string> {
+  return new Set(document?.chunk.includes?.map(include => include.resolvedFile.fileURL));
+}
+
+function sameSet(a: Set<string>, b: Set<string>): boolean {
+  return a.size === b.size && [ ...a ].every(item => b.has(item));
+}
+
+function unique(uris: string[]): string[] {
+  return [ ...new Set(uris) ];
+}
+
+function keyOf(warning: Warning): string {
+  return `${warning.bounds.start.index}:${warning.bounds.end.index}:${warning.message}`;
+}
+
+function byPlace(a: Bounds, b: Bounds): number {
+  return compare(a.start.filename.path, b.start.filename.path) || a.start.index - b.start.index;
+}
+
+function compare(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+  return a < b ? -1 : 1;
+}
+
+function toLocation(bounds: Bounds): Location {
+  return {
+    uri: bounds.start.filename.fileURL,
+    range: {
+      start: { line: bounds.start.line - 1, character: bounds.start.column },
+      end: { line: bounds.end.line - 1, character: bounds.end.column },
+    },
+  };
+}

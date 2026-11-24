@@ -56,7 +56,6 @@ const MAX_INCLUDE_DEPTH = 32;
 const MAX_INCLUDE_PARSES = 256;
 
 export type ParserOptions = {
-  dontAddGlobalSymbols?: boolean,
   includeFileResolver?: FileResolver,
 };
 
@@ -98,10 +97,6 @@ export default class Parser {
   // block end there too, instead of at the last token, which is past them.
   private endBeforeHoisted: CodeLocation | null = null;
 
-  // Flag for telling DefinitionsUsagesFinder not to add global PICO-8
-  // predefined functions. Used for testing, just to make output a bit clearer.
-  dontAddGlobalSymbols: boolean;
-
   includes: Include[] = [];
 
   private includeParses = 0;
@@ -110,7 +105,6 @@ export default class Parser {
   // eslint-disable-next-line @typescript-eslint/ban-types
   constructor(filename: ResolvedFile, input: string, options: ParserOptions = {}) {
     this.includeFileResolver = options?.includeFileResolver || new RealFileResolver();
-    this.dontAddGlobalSymbols = !!options?.dontAddGlobalSymbols;
 
     this.lexerStack = [{
       lexer: new Lexer(input, filename),
