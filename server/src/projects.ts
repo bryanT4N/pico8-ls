@@ -231,8 +231,9 @@ export class ProjectIndex {
 
   remove(uri: string): string[] {
     const roots = this.projectsOf(uri).map(project => project.root).filter(root => root !== uri);
+    const before = this.documents.get(uri);
     this.documents.delete(uri);
-    const { dropped } = this.reparse(roots);
+    const { dropped } = this.reparse([ ...roots, ...stoppedIncluding(before, undefined, this.documents) ]);
     this.buildProjects();
     this.analyseChanged();
     return unique([ ...this.documents.keys(), uri, ...dropped ]);
@@ -304,9 +305,10 @@ export class ProjectIndex {
       .sort((a, b) => compare(a.root, b.root));
   }
 
-  // A file that cannot be parsed now is dropped, as update drops it, so that nothing is analysed from its old text. A
-  // file that a new parse no longer includes is parsed again too: one that is gone is dropped, and so counts as new when
-  // it comes back. changed: whether some file now includes other files than before.
+  // A file that cannot be parsed now is dropped, as update drops it, so that nothing is analysed from its old text. The
+  // files that a new parse no longer includes, or that a dropped file included, are parsed again too: one that is gone
+  // is dropped, and so counts as new when it comes back. changed: whether some file was dropped or now includes other
+  // files than before.
   private reparse(uris: string[]): { dropped: string[], changed: boolean } {
     const dropped: string[] = [];
     let changed = false;
@@ -322,12 +324,12 @@ export class ProjectIndex {
       if (document) {
         this.documents.set(uri, document);
         changed ||= !sameSet(includedUris(before), includedUris(document));
-        queue.push(...stoppedIncluding(before, document, this.documents));
       } else {
         this.documents.delete(uri);
         dropped.push(uri);
         changed = true;
       }
+      queue.push(...stoppedIncluding(before, document, this.documents));
     }
     return { dropped, changed };
   }
@@ -372,11 +374,12 @@ function includedUris(document: ProjectDocument | undefined): Set<string> {
   return new Set(document?.chunk.includes?.map(include => include.resolvedFile.fileURL));
 }
 
-// The files the index has that the earlier parse included and the new one does not, the file itself left out. Parsing
-// one the index never had, like a file in a dot-folder, would add it as a project of its own, with false warnings.
-function stoppedIncluding(before: ProjectDocument | undefined, after: ProjectDocument, documents: ParsedDocumentsMap): string[] {
+// The files the index has that the earlier parse included and the new one does not, the file itself left out; after is
+// undefined when the file is gone. Parsing one the index never had, like a file in a dot-folder, would add it as a
+// project of its own, with false warnings.
+function stoppedIncluding(before: ProjectDocument | undefined, after: ProjectDocument | undefined, documents: ParsedDocumentsMap): string[] {
   const now = includedUris(after);
-  return [ ...includedUris(before) ].filter(uri => !now.has(uri) && uri !== after.textDocument.uri && documents.has(uri));
+  return [ ...includedUris(before) ].filter(uri => !now.has(uri) && uri !== after?.textDocument.uri && documents.has(uri));
 }
 
 function sameSet(a: Set<string>, b: Set<string>): boolean {

@@ -542,4 +542,42 @@ describe('ProjectIndex', () => {
     onDisk.set('main.p8', 'x = 1\nhelper()');
     staysOut(index.scan([ uriOf('main.p8') ]));
   });
+
+  // main.p8 includes x.lua, which includes y.lua; all three are on disk and scanned.
+  const nested = () => {
+    const files: Record<string, string> = {};
+    const onDisk = new Map([[ 'main.p8', 'only_in_main = 1\n#include x.lua\nhelper()' ], [ 'x.lua', '#include y.lua' ], [ 'y.lua', 'function helper() return only_in_main end' ]]);
+    const index = indexOver(files, { disk: diskOf(onDisk) });
+    index.scan([ uriOf('main.p8'), uriOf('x.lua'), uriOf('y.lua') ]);
+    return { files, onDisk, index };
+  };
+
+  it('drops a file included by a dropped file when it is gone too, and resolves both when they come back', () => {
+    const { files, onDisk, index } = nested();
+    const [ x, y ] = [ onDisk.get('x.lua')!, onDisk.get('y.lua')! ];
+    // Their folder is deleted, which the file watcher reports for the folder only; then main.p8 is edited.
+    onDisk.delete('x.lua');
+    onDisk.delete('y.lua');
+    files['main.p8'] = onDisk.get('main.p8')! + '\n';
+    const resend = index.update(uriOf('main.p8'));
+    deepStrictEqual([ index.document(uriOf('y.lua')), index.warnings(uriOf('y.lua')), resend.includes(uriOf('y.lua')) ], [ undefined, [], true ]);
+    onDisk.set('x.lua', x);
+    onDisk.set('y.lua', y);
+    index.update(uriOf('x.lua'));
+    index.update(uriOf('y.lua'));
+    deepStrictEqual(index.document(uriOf('main.p8'))!.errors, []);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 3, 0)).map(loc), [ 'y.lua 1:9-1:15' ]);
+  });
+
+  it('drops a file included by a removed file when it is gone too', () => {
+    const { files, onDisk, index } = nested();
+    // x.lua is open when their folder is deleted, and is then closed.
+    files['x.lua'] = onDisk.get('x.lua')!;
+    index.update(uriOf('x.lua'));
+    onDisk.delete('x.lua');
+    onDisk.delete('y.lua');
+    delete files['x.lua'];
+    const resend = index.remove(uriOf('x.lua'));
+    deepStrictEqual([ index.document(uriOf('y.lua')), index.warnings(uriOf('y.lua')), resend.includes(uriOf('y.lua')) ], [ undefined, [], true ]);
+  });
 });
