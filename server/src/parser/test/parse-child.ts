@@ -9,6 +9,8 @@ import { outlineFor, CodeSymbol } from '../symbols';
 import { Chunk } from '../statements';
 import { codeLocationToString } from '../types';
 import { completionItems, completionRequestAt } from '../../completion';
+import { hoverMarkdown } from '../../hover';
+import { signatureHelpAt } from '../../signature-help';
 import { outlineLines } from './outline-utils';
 import { ChildParseJob, ChildParseResult, formatError, TestFilesResolver } from './test-utils';
 
@@ -46,7 +48,8 @@ function runQueries(analysis: Analysis, file: ResolvedFile, code: string): numbe
     }
     definitionsAt(analysis, found);
     referencesOf(found.symbol, true);
-    queries += 3;
+    hoverMarkdown(analysis, found);
+    queries += 4;
   }
   warningsOf(analysis);
   queries++;
@@ -59,7 +62,8 @@ function runQueries(analysis: Analysis, file: ResolvedFile, code: string): numbe
     visibleAt(analysis, file, index);
     membersAt(analysis, file, index, [ 'self' ], false);
     completionItems([ analysis ], file, index, completionRequestAt(lines[line], column), line, column);
-    queries += 3;
+    signatureHelpAt([ analysis ], file, code, index);
+    queries += 4;
   }
   return queries;
 }

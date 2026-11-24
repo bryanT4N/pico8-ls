@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+- Hover shows your own functions, variables, fields, parameters and labels: their declaration, such as `function vector:dot(v2)` or `(global) g_debug = false`, and the comment written right above them.
+  - A variable or field shows its value when that is written as a number, a short string, `true`, `false` or `nil`, and `{…}` for a table. The value comes from a plain assignment, never from `x -= 1` and the like, and a string that runs over several lines is not shown.
+- Which comments are shown:
+  - A block of comment lines right above the line where a name is defined, with no blank line between. Plain `--` and `//` comments count, and so do `---` and `--[[ ]]`.
+  - For a variable, table or field, a `--` or `//` comment at the end of its last line, when no comment above documents it.
+  - For a name set in several places, the comment is looked for where Go to Definition goes: its first definition in each file, and each function definition.
+  - Not shown: a tab's name (the comment right after `-->8`), the title at the top of a file, a heading framed by rows of dashes, and commented-out code.
+  - LDoc tags such as `@param` and `@return` are listed after the description; `@param name text` also documents that parameter.
+- Expanding a completion item shows the same declaration and comment.
+- A function of your own that has the name of a built-in one, such as `print`, shows as yours in hover, completion and parameter hints.
+- Parameter hints work for your own functions, with their comment and each parameter's `@param` text:
+  - Called with `:`, a function not declared with `:`, such as `obj.m = function(self, x)`, leaves out its first parameter, which takes the table, whatever its name, unless it is `...`. A function declared with `:` but called with `.` shows `self` first.
+  - A method that the table itself does not define, for example one inherited through `extend`, shows every method of that name with its table.
+  - When several functions may be called, the first whose parameters take the arguments typed so far is selected.
+- Parameter hints, also for PICO-8's built-in functions, now find the call when it is inside another call, contains strings or comments, or runs over several lines.
+  - None are shown in the body of a function passed as an argument, as in `foreach(t, function(e)`, or in a call on something other than a name, such as `f(x)(` or `get():hit(`.
+- Fixed: a file that an `#include` read from disk before you opened it, for example in a folder outside the workspace or in a folder whose name starts with a dot, showed its old text in its outline and Go to Definition until you edited it.
+- Fixed: after a folder of included files was deleted, its files, also those included only from other files in the folder, kept their own warnings, and when the files were created again the `#include` kept reporting a missing file until the including file was edited.
+- Fixed: fields that an included file sets on a function of the including file were listed without the function's name in the included file's outline.
+- Creating a file no longer analyses every cart in the workspace again.
+
 ## 0.3.0 (unreleased)
 
 - The outline, Go to Definition, Find References, completion and "undefined variable" warnings now come from one analysis of the whole project, so they agree with each other.
