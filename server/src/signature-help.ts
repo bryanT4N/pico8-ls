@@ -2,7 +2,7 @@ import { MarkupContent, ParameterInformation, SignatureHelp, SignatureInformatio
 import { builtinMarkdown, pathOf, renderDoc } from './hover';
 import { definitionDoc, documentationOf, paramDoc } from './parser/analysis/docs';
 import { Analysis, Definition, LuaSymbol } from './parser/analysis/model';
-import { methodsNamed, placeOf, visibleAt } from './parser/analysis/queries';
+import { methodsNamed, placeOf, symbolOfPath } from './parser/analysis/queries';
 import { builtinInfo } from './parser/builtins';
 import ResolvedFile from './parser/file-resolver';
 import Lexer from './parser/lexer';
@@ -204,26 +204,26 @@ function builtinHelp(name: string, argument: number | null): SignatureHelp | und
   }]);
 }
 
+// The active signature is the first whose parameters take the argument: its active parameter is one of them, which a
+// vararg always is. With none, as inside a table, the first.
 function helpOf(signatures: Signature[]): SignatureHelp {
-  return { signatures, activeSignature: 0, activeParameter: signatures[0].activeParameter };
+  const active = Math.max(0, signatures.findIndex(signature => signature.activeParameter < (signature.parameters?.length ?? 0)));
+  return { signatures, activeSignature: active, activeParameter: signatures[active].activeParameter };
 }
 
 // For a.b.c, the member c of a.b; when a.b has no c with a definition, every method named c, as the table may inherit
 // it. Nothing when a or b is not found.
 function calleesOf(analysis: Analysis, file: ResolvedFile, offset: number, path: string[]): LuaSymbol[] {
-  const [ first, ...keys ] = path;
-  let symbol: LuaSymbol | undefined = visibleAt(analysis, file, offset).find(visible => visible.name === first);
-  const last = keys.pop();
-  if (last === undefined) {
+  if (path.length === 1) {
+    const symbol = symbolOfPath(analysis, file, offset, path);
     return symbol && hasFunction(symbol) ? [ symbol ] : [];
   }
-  for (const key of keys) {
-    symbol = symbol && (symbol.table ?? symbol).members.get(key);
-  }
-  if (!symbol) {
+  const table = symbolOfPath(analysis, file, offset, path.slice(0, -1));
+  if (!table) {
     return [];
   }
-  const member = (symbol.table ?? symbol).members.get(last);
+  const last = path[path.length - 1];
+  const member = (table.table ?? table).members.get(last);
   if (member && member.definitions.length > 0) {
     return hasFunction(member) ? [ member ] : [];
   }
@@ -234,11 +234,12 @@ function hasFunction(symbol: LuaSymbol): boolean {
   return symbol.definitions.some(definition => definition.isFunction);
 }
 
-// Shown as the call is written: with a colon, a self that the function names itself is left out; with a dot, the self
-// of a method is added.
+// Shown as the call is written. With a colon, the receiver goes to the first parameter of a function not declared with
+// one, whatever its name, so that parameter is left out; a ... takes the receiver and the rest, so it stays. With a dot,
+// the self of a method is added.
 function userSignature(analysis: Analysis, symbol: LuaSymbol, definition: Definition, fn: FunctionDeclaration, call: CallContext): Signature {
   let names = parameterNames(fn);
-  if (call.colon && !isColonMethod(fn) && names[0] === 'self') {
+  if (call.colon && !isColonMethod(fn) && names[0] !== '...') {
     names = names.slice(1);
   } else if (!call.colon && isColonMethod(fn)) {
     names = [ 'self', ...names ];

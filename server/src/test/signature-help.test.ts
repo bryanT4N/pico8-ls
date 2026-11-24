@@ -39,6 +39,8 @@ describe('signatureHelpAt', () => {
     strictEqual(helpAt(lines(outer, 'outer(f(x)(')), undefined);
     strictEqual(helpAt(lines(outer, 'outer(get():hit(')), undefined);
     strictEqual(helpAt(lines(outer, 'outer(make { x = 1 }(')), undefined);
+    strictEqual(helpAt(lines(outer, 'outer(t[1](')), undefined);
+    strictEqual(helpAt(lines(outer, 'outer(f"s"(')), undefined);
   });
 
   it('gives no signature for the call around a function body being written', () => {
@@ -86,6 +88,23 @@ describe('signatureHelpAt', () => {
     });
   });
 
+  it('gives the receiver of a colon call the first parameter, whatever its name, but not a vararg', () => {
+    deepStrictEqual(helpAt(lines('t = { f = function(p, dt) end }', 't:f(')),
+      { signatures: [{ label: 't:f(dt)', parameters: [{ label: [ 4, 6 ] }], activeParameter: 0 }], activeSignature: 0, activeParameter: 0 });
+    deepStrictEqual(helpAt(lines('t = { g = function(...) end }', 't:g(1, ')),
+      { signatures: [{ label: 't:g(...)', parameters: [{ label: [ 4, 7 ] }], activeParameter: 0 }], activeSignature: 0, activeParameter: 0 });
+  });
+
+  it('makes active the first signature whose parameters take the argument', () => {
+    const methods = (b: string) => lines('a = {}', 'function a:go(x) end', 'b = {}', `function b:go(${b}) end`, 'c = {}', 'c:go(1, 2, ');
+    const fixed = helpAt(methods('x, y, z'))!;
+    deepStrictEqual([ fixed.signatures.map(signature => signature.label), fixed.activeSignature, fixed.activeParameter ],
+      [[ 'a:go(x)', 'b:go(x, y, z)' ], 1, 2 ]);
+    const vararg = helpAt(methods('x, ...'))!;
+    deepStrictEqual([ vararg.signatures.map(signature => signature.label), vararg.activeSignature, vararg.activeParameter ],
+      [[ 'a:go(x)', 'b:go(x, ...)' ], 1, 1 ]);
+  });
+
   it('lets a vararg take the remaining arguments, and marks no parameter inside a table', () => {
     deepStrictEqual(helpAt(lines('function log(fmt, ...) end', 'log("a", 1, 2, ')), {
       signatures: [{ label: 'log(fmt, ...)', parameters: [{ label: [ 4, 7 ] }, { label: [ 9, 12 ] }], activeParameter: 1 }],
@@ -97,6 +116,7 @@ describe('signatureHelpAt', () => {
       activeSignature: 0,
       activeParameter: 2,
     });
+    strictEqual(helpAt(lines('function log(fmt, ...) end', 'log('))!.activeParameter, 0);
   });
 
   it('finds the call through nesting and over several lines', () => {
@@ -154,6 +174,14 @@ describe('signatureHelpAt', () => {
     strictEqual(helpAt(lines('function print(s) end', 'print('))!.signatures[0].label, 'print(s)');
   });
 
+  it('marks no builtin parameter inside a table, and the first inside a string being typed', () => {
+    const spr = builtinInfo('spr')!;
+    const inTable = helpAt('spr({1, ')!;
+    deepStrictEqual([ inTable.signatures[0].label, inTable.activeParameter ], [ spr.sig, spr.params!.length ]);
+    const inString = helpAt('print("hel')!;
+    deepStrictEqual([ inString.signatures[0].label, inString.activeParameter ], [ builtinInfo('print')!.sig, 0 ]);
+  });
+
   it('gives nothing outside a call or in a definition', () => {
     strictEqual(helpAt(lines('x = 1', 'y = ')), undefined);
     strictEqual(helpAt('function f(a, '), undefined);
@@ -164,5 +192,7 @@ describe('signatureHelpAt', () => {
     strictEqual(helpAt(lines(methods, 'nosuch.f(')), undefined);
     strictEqual(helpAt(lines(methods, 'a.nosuch.f(')), undefined);
     strictEqual(helpAt(lines(methods, 'spr('))!.signatures[0].label, builtinInfo('spr')!.sig);
+    // A field that holds no function is not called as a method of another table.
+    strictEqual(helpAt(lines(methods, 'obj = {}', 'obj.f = 1', 'obj:f(')), undefined);
   });
 });

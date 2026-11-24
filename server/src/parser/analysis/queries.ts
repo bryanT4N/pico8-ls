@@ -137,6 +137,16 @@ function orderAt(analysis: Analysis, file: ResolvedFile, index: number): number 
   return order;
 }
 
+// What a.b.c names at index: a as visibleAt finds it, then each member in turn, a self standing for its table.
+// Undefined when one of them is not found.
+export function symbolOfPath(analysis: Analysis, file: ResolvedFile, index: number, path: string[]): LuaSymbol | undefined {
+  let symbol = visibleAt(analysis, file, index).find(visible => visible.name === path[0]);
+  for (const key of path.slice(1)) {
+    symbol = symbol && (symbol.table ?? symbol).members.get(key);
+  }
+  return symbol;
+}
+
 // The members to offer after `path.` or `path:`: those with a definition, only functions after a colon. When there
 // are none, as for a parameter, the ones used through the same variable, apart from the use being typed at index:
 // only those called, after a colon. Undefined when the path leads nowhere.
@@ -145,10 +155,7 @@ function orderAt(analysis: Analysis, file: ResolvedFile, index: number): number 
 // nor a definition at the same place.
 export function membersAt(analysis: Analysis, file: ResolvedFile, index: number, path: string[], colon: boolean,
   nothingTyped = false): LuaSymbol[] | undefined {
-  let symbol = visibleAt(analysis, file, index).find(visible => visible.name === path[0]);
-  for (const key of path.slice(1)) {
-    symbol = symbol && (symbol.table ?? symbol).members.get(key);
-  }
+  const symbol = symbolOfPath(analysis, file, index, path);
   if (!symbol) {
     return undefined;
   }
