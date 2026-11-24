@@ -288,6 +288,12 @@ describe('ProjectIndex', () => {
     deepStrictEqual(outlineOfLib('player = { update = function(self)\n  #include lib.lua\nend }'), [ 'helper() [Function]', 'other() [Function]' ]);
   });
 
+  it('keeps a forward-declared local in its file\'s outline when the function is in another file', () => {
+    const index = scanned({ 'main.p8': 'local update_enemy\n#include lib.lua', 'lib.lua': 'update_enemy = function() end' });
+    deepStrictEqual(outlineLines(index.outline(uriOf('main.p8'))), [ 'update_enemy [Variable]' ]);
+    deepStrictEqual(outlineLines(index.outline(uriOf('lib.lua'))), [ 'update_enemy() [Function]' ]);
+  });
+
   it('copes with files that include each other', () => {
     const index = scanned({ 'main.p8': '#include a.lua', 'a.lua': '#include b.lua\nfunction fa() end', 'b.lua': '#include a.lua\nfunction fb() end' });
     deepStrictEqual(outlineLines(index.outline(uriOf('a.lua'))), [ 'fa() [Function]' ]);

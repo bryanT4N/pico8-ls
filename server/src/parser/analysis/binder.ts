@@ -520,10 +520,12 @@ class Binder extends ASTVisitor<BinderScope> {
     return { about: table, defines: table };
   }
 
-  // local f, then f = function() end in the same function: the function's entry is enough.
+  // local f, then f = function() end in the same function: the function's entry is enough. Not when the function is in
+  // another file, whose outline lists it: the declaration's file would lose the name.
   private hideForwardDeclaration(binding: Binding, functionEntry: OutlineEntry): void {
     const declared = binding.kind === 'local' && binding.forward ? binding.entry : undefined;
-    if (declared && declared.members.size === 0 && declared.children.length === 0 && declared.parent === functionEntry.parent) {
+    if (declared && declared.members.size === 0 && declared.children.length === 0 && declared.parent === functionEntry.parent
+      && declared.loc.start.filename.equals(functionEntry.loc.start.filename)) {
       declared.hidden = true;
     }
   }
