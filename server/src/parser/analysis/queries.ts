@@ -131,7 +131,11 @@ function orderAt(analysis: Analysis, file: ResolvedFile, index: number): number 
 // The members to offer after `path.` or `path:`: those with a definition, only functions after a colon. When there
 // are none, as for a parameter, the ones used through the same variable, apart from the use being typed at index:
 // only those called, after a colon. Undefined when the path leads nowhere.
-export function membersAt(analysis: Analysis, file: ResolvedFile, index: number, path: string[], colon: boolean): LuaSymbol[] | undefined {
+// nothingTyped: no name follows the separator yet, so Lua takes the next name in the file as the member (`p.` above
+// `x = 1` reads as `p.x = 1`). When the first reference from index on is to a member of the table, it doesn't count,
+// nor a definition at the same place.
+export function membersAt(analysis: Analysis, file: ResolvedFile, index: number, path: string[], colon: boolean,
+  nothingTyped = false): LuaSymbol[] | undefined {
   let symbol = visibleAt(analysis, file, index).find(visible => visible.name === path[0]);
   for (const key of path.slice(1)) {
     symbol = symbol && (symbol.table ?? symbol).members.get(key);
@@ -139,14 +143,17 @@ export function membersAt(analysis: Analysis, file: ResolvedFile, index: number,
   if (!symbol) {
     return undefined;
   }
-  const members = [ ...(symbol.table ?? symbol).members.values() ];
-  const defined = members.filter(member => colon
-    ? member.definitions.some(definition => definition.isFunction)
-    : member.definitions.length > 0);
+  const table = symbol.table ?? symbol;
+  const members = [ ...table.members.values() ];
+  const next = nothingTyped ? analysis.referencesByFile.get(file.path)?.find(reference => reference.loc.start.index >= index) : undefined;
+  const glued = next?.symbol.owner === table ? placeOf(next.loc) : undefined;
+  const counts = (loc: Bounds) => glued === undefined || placeOf(loc) !== glued;
+  const defined = members.filter(member => member.definitions.some(definition => counts(definition.nameLoc)
+    && (!colon || definition.isFunction)));
   if (defined.length > 0) {
     return defined;
   }
-  return members.filter(member => member.references.some(reference => (!colon || reference.isCall)
+  return members.filter(member => member.references.some(reference => counts(reference.loc) && (!colon || reference.isCall)
     && !containsIndex(reference.loc, file, index)));
 }
 

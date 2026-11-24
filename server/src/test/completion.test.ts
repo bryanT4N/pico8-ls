@@ -54,6 +54,10 @@ describe('completionRequestAt', () => {
   it('reads a name after .. as a plain name', () => {
     deepStrictEqual(completionRequestAt('  print("hp: "..pl', 18), { path: [], colon: false, start: 16 });
   });
+
+  it('reads a path after ..', () => {
+    deepStrictEqual(completionRequestAt('  print("hp: "..player.', 23), { path: [ 'player' ], colon: false, start: 23 });
+  });
 });
 
 describe('completionItems', () => {
@@ -192,5 +196,19 @@ describe('completionItems', () => {
   it('does not offer the member being typed', () => {
     deepStrictEqual(names(itemsAt(lines('function f(p)', '  x = p.h', 'end'), 2, 9)), []);
     deepStrictEqual(names(itemsAt(lines('function f(p)', '  p.hp = 1', '  x = p.h', 'end'), 3, 9)), [ 'hp' ]);
+  });
+
+  it('offers members after ..', () => {
+    const code = lines('player = { hp = 1 }', 'function f()', '  print("hp: "..player.', 'end');
+    deepStrictEqual(names(itemsAt(code, 3, 23)), [ 'hp' ]);
+  });
+
+  it('does not offer the next line\'s name, which Lua reads as the member after the dot', () => {
+    deepStrictEqual(names(itemsAt(lines('function f(p)', '  p.', '  x = 1', 'end'), 2, 4)), []);
+    deepStrictEqual(names(itemsAt(lines('player = { hp = 1 }', 'function f()', '  player.', '  y = 2', 'end'), 3, 9)), [ 'hp' ]);
+    const definedAbove = lines('player = { hp = 1 }', 'player.y = 2', 'function f()', '  player.', '  y = 2', 'end');
+    deepStrictEqual(names(itemsAt(definedAbove, 4, 9)), [ 'hp', 'y' ]);
+    const definedBelow = lines('player = { hp = 1 }', 'function f()', '  player.', 'end', 'function g()', '  player.x = 5', 'end');
+    deepStrictEqual(names(itemsAt(definedBelow, 3, 9)), [ 'hp', 'x' ]);
   });
 });

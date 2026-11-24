@@ -11,11 +11,11 @@ export type CompletionRequest = { path: string[] | null, colon: boolean, start: 
 
 export function completionRequestAt(lineText: string, character: number): CompletionRequest {
   const start = wordStart(lineText, character);
-  const colon = lineText[start - 1] === ':';
-  // After .., the concatenation operator, comes a plain name.
-  if (!colon && (lineText[start - 1] !== '.' || lineText[start - 2] === '.')) {
-    return { path: [], colon, start };
+  const separator = separatorBefore(lineText, start);
+  if (!separator) {
+    return { path: [], colon: false, start };
   }
+  const colon = separator === ':';
   const path: string[] = [];
   let end = start - 1;
   for (;;) {
@@ -25,11 +25,20 @@ export function completionRequestAt(lineText: string, character: number): Comple
       return { path: null, colon, start };
     }
     path.unshift(lineText.slice(nameStart, end));
-    if (lineText[nameStart - 1] !== '.') {
+    if (!separatorBefore(lineText, nameStart)) {
       return { path, colon, start };
     }
     end = nameStart - 1;
   }
+}
+
+// The . or : right before index i, if there is one. The second dot of .., the concatenation operator, is not.
+function separatorBefore(text: string, i: number): '.' | ':' | undefined {
+  const char = text[i - 1];
+  if (char === ':' || (char === '.' && text[i - 2] !== '.')) {
+    return char;
+  }
+  return undefined;
 }
 
 function wordStart(text: string, end: number): number {
@@ -66,7 +75,7 @@ export function completionItems(analyses: Analysis[], file: ResolvedFile, index:
     }
   } else {
     for (const analysis of analyses) {
-      membersAt(analysis, file, index, path, colon)?.forEach(symbol => offer(itemFor(symbol)));
+      membersAt(analysis, file, index, path, colon, request.start === character)?.forEach(symbol => offer(itemFor(symbol)));
     }
   }
   return [ ...items.values() ];
