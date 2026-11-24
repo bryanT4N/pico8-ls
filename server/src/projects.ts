@@ -131,14 +131,29 @@ function findProjectsRecursive(current: string, visited: Map<string, ProjectDocu
   return node;
 }
 
-// Reads a file through the URI form VS Code uses (ResolvedFile.fromPath(p).fileURL): open documents and cached
-// workspace text first, then disk.
-export function makeFileResolver(openText: (uri: string) => string | undefined, disk: FileResolver = new RealFileResolver()): FileResolver {
-  const textAt = (filepath: string) => openText(ResolvedFile.fromPath(filepath).fileURL);
+// Reads a file through the URI form VS Code uses (ResolvedFile.fromPath(p).fileURL). Whether a file that is not open
+// exists is asked of the disk, whatever the cache holds, and one found missing leaves the cache: deleting or renaming a
+// folder is reported for the folder alone, which the file watcher does not pass on. The parser asks that before reading
+// an #include, and so does the server before reading a file, so a read takes the cached text as it is.
+export function makeFileResolver(editorText: (uri: string) => string | undefined, cache: Map<string, string>,
+  disk: FileResolver = new RealFileResolver()): FileResolver {
   return {
-    doesFileExist: filepath => textAt(filepath) !== undefined || disk.doesFileExist(filepath),
-    isFile: filepath => textAt(filepath) !== undefined || disk.isFile(filepath),
-    loadFileContents: filepath => textAt(filepath) ?? disk.loadFileContents(filepath),
+    doesFileExist: filepath => {
+      const uri = ResolvedFile.fromPath(filepath).fileURL;
+      if (editorText(uri) !== undefined || disk.doesFileExist(filepath)) {
+        return true;
+      }
+      cache.delete(uri);
+      return false;
+    },
+    isFile: filepath => {
+      const uri = ResolvedFile.fromPath(filepath).fileURL;
+      return editorText(uri) !== undefined || cache.has(uri) || disk.isFile(filepath);
+    },
+    loadFileContents: filepath => {
+      const uri = ResolvedFile.fromPath(filepath).fileURL;
+      return editorText(uri) ?? cache.get(uri) ?? disk.loadFileContents(filepath);
+    },
   };
 }
 

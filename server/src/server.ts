@@ -31,17 +31,13 @@ const documents = new TextDocuments(TextDocument);
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 
-// The text of the workspace's files as the scan read them.
+// The text of the workspace's files as the scan or the file watcher read them.
 const diskText = new Map<string, string>();
 
 // Workspace root paths, populated when the workspace is scanned and kept for isTrackedPath checks.
 let workspaceRoots: string[] = [];
 
-function openText(uri: string): string | undefined {
-  return documents.get(uri)?.getText() ?? diskText.get(uri);
-}
-
-const fileResolver = makeFileResolver(openText);
+const fileResolver = makeFileResolver(uri => documents.get(uri)?.getText(), diskText);
 
 const index = new ProjectIndex(parseFile);
 
@@ -172,12 +168,13 @@ function parseFile(uri: string): ProjectDocument | undefined {
 }
 
 function textOf(uri: string): string | undefined {
-  const text = openText(uri);
-  if (text !== undefined) {
-    return text;
+  const document = documents.get(uri);
+  if (document) {
+    return document.getText();
   }
   try {
-    return fs.readFileSync(url.fileURLToPath(uri)).toString();
+    const filePath = url.fileURLToPath(uri);
+    return fileResolver.doesFileExist(filePath) ? fileResolver.loadFileContents(filePath) : undefined;
   } catch (e) {
     console.error('Error reading ' + uri, e);
     return undefined;

@@ -128,12 +128,16 @@ const NO_DISK: FileResolver = {
   },
 };
 
-// An index over files kept in memory; tests change `files` and call update or remove.
-function indexOver(files: Record<string, string>, tweak?: (doc: ProjectDocument) => void) {
+type IndexOptions = { tweak?: (doc: ProjectDocument) => void, cache?: Map<string, string>, disk?: FileResolver };
+
+// An index over files kept in memory; tests change `files` and call update or remove. `files` are the editor's open
+// documents; the server reads any other file through the resolver, from `cache` while `disk` has it.
+function indexOver(files: Record<string, string>, { tweak, cache = new Map(), disk = NO_DISK }: IndexOptions = {}) {
   const openText = (uri: string) => files[nameOf(uri)];
-  const resolver = makeFileResolver(openText, NO_DISK);
+  const resolver = makeFileResolver(openText, cache, disk);
   const parseFile = (uri: string) => {
-    const text = openText(uri);
+    const filePath = url.fileURLToPath(uri);
+    const text = openText(uri) ?? (resolver.doesFileExist(filePath) ? resolver.loadFileContents(filePath) : undefined);
     if (text === undefined) {
       return undefined;
     }
@@ -223,7 +227,7 @@ describe('ProjectIndex', () => {
     const resolver = makeFileResolver(uri => {
       asked.push(uri);
       return 'x = 1';
-    }, NO_DISK);
+    }, new Map(), NO_DISK);
     eq(resolver.loadFileContents(path.join(ROOT, 'lib.lua')), 'x = 1');
     deepStrictEqual(asked, [ uriOf('lib.lua') ]);
   });
@@ -240,7 +244,7 @@ describe('ProjectIndex', () => {
     makeFileResolver(uri => {
       asked.push(uri);
       return '';
-    }, NO_DISK).loadFileContents(path.join(ROOT, 'lib(2).lua'));
+    }, new Map(), NO_DISK).loadFileContents(path.join(ROOT, 'lib(2).lua'));
     deepStrictEqual(asked, [ lib ]);
     // Opened in the editor, then edited without saving.
     files['lib(2).lua'] = '\nfunction answer() return player end';
@@ -271,6 +275,32 @@ describe('ProjectIndex', () => {
     eq(index.document(uriOf('main.p8'))!.errors.map(formatError).includes('main.p8 1:0 Can\'t #include lib.lua from main.p8: File does not exist'), true);
     deepStrictEqual(index.definitions(uriOf('main.p8'), helper), []);
     deepStrictEqual(index.warnings(uriOf('main.p8')).map(formatError), [ 'main.p8 2:0 undefined variable: helper' ]);
+  });
+
+  it('does not take an #include from the cached text of a file that is gone from disk', () => {
+    const files: Record<string, string> = { 'main.p8': '#include lib.lua\nhelper()' };
+    const onDisk = new Set([ 'main.p8', 'lib.lua' ]);
+    const cache = new Map([[ uriOf('lib.lua'), 'function helper() end' ]]);
+    const disk: FileResolver = {
+      doesFileExist: p => onDisk.has(path.basename(p)),
+      isFile: p => onDisk.has(path.basename(p)),
+      loadFileContents: p => {
+        throw new Error(`not read in this test: ${p}`);
+      },
+    };
+    const index = indexOver(files, { cache, disk });
+    index.scan([ uriOf('main.p8'), uriOf('lib.lua') ]);
+    const helper = offsetIn(files, 'main.p8', 2, 0);
+    const includeLine = offsetIn(files, 'main.p8', 1, 3);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), helper).map(loc), [ 'lib.lua 1:9-1:15' ]);
+    // Its folder is deleted, which the file watcher does not report for lib.lua; then main.p8 is edited.
+    onDisk.delete('lib.lua');
+    index.update(uriOf('main.p8'));
+    deepStrictEqual(index.document(uriOf('main.p8'))!.errors.map(formatError),
+      [ 'main.p8 1:0 Can\'t #include lib.lua from main.p8: File does not exist' ]);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), helper), []);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), includeLine), []);
+    eq(cache.has(uriOf('lib.lua')), false);
   });
 
   it('lists a file included twice once', () => {
@@ -364,7 +394,7 @@ describe('ProjectIndex', () => {
 
   it('falls back to an empty analysis when the analysis throws', () => {
     // The kind of node the formatter inserts, which the analysis does not know.
-    const index = indexOver({ 'main.p8': 'function f() end' }, doc => doc.chunk.block.body.push({ type: 'Whitespace', count: 1 } as any));
+    const index = indexOver({ 'main.p8': 'function f() end' }, { tweak: doc => doc.chunk.block.body.push({ type: 'Whitespace', count: 1 } as any) });
     const consoleError = console.error;
     let logged = 0;
     console.error = () => {
