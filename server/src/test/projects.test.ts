@@ -278,6 +278,16 @@ describe('ProjectIndex', () => {
     deepStrictEqual(outlineLines(index.outline(uriOf('a.lua'))), [ 'f() [Function]', 'x [Variable]', 'y [Variable]' ]);
   });
 
+  it('lists the entries of a file #included in a function at the top of its outline', () => {
+    const lib = 'function helper() end\nfunction other() end';
+    const outlineOfLib = (main: string) => outlineLines(scanned({ 'main.p8': main, 'lib.lua': lib }).outline(uriOf('lib.lua')));
+    deepStrictEqual(outlineOfLib('function _init()\n  #include lib.lua\nend'), [ 'helper() [Function]', 'other() [Function]' ]);
+    deepStrictEqual(outlineOfLib('function _init()\n  local function setup()\n    #include lib.lua\n  end\nend'),
+      [ 'helper() [Function]', 'other() [Function]' ]);
+    deepStrictEqual(outlineOfLib('co = cocreate(function()\n  #include lib.lua\nend)'), [ 'helper() [Function]', 'other() [Function]' ]);
+    deepStrictEqual(outlineOfLib('player = { update = function(self)\n  #include lib.lua\nend }'), [ 'helper() [Function]', 'other() [Function]' ]);
+  });
+
   it('copes with files that include each other', () => {
     const index = scanned({ 'main.p8': '#include a.lua', 'a.lua': '#include b.lua\nfunction fa() end', 'b.lua': '#include a.lua\nfunction fb() end' });
     deepStrictEqual(outlineLines(index.outline(uriOf('a.lua'))), [ 'fa() [Function]' ]);

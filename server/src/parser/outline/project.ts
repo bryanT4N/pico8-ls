@@ -2,22 +2,41 @@ import ResolvedFile from '../file-resolver';
 import { CodeSymbol, CodeSymbolType, OutlineEntry } from './model';
 
 export function projectToFile(entries: OutlineEntry[], file: ResolvedFile): CodeSymbol[] {
-  return listedOnce(entries.flatMap(entry => {
-    const children = projectToFile(entry.children, file);
-    if (entry.hidden && children.length === 0) {
-      return [];
-    }
+  const { listed, lifted } = project(entries, file);
+  return inOrder([ ...listed, ...lifted ]);
+}
+
+// listed: the symbols of this level. lifted: this file's entries inside a function of another file, which is where an
+// #include in a function body puts them. No entry of the other file can hold them in this file's outline, so they go
+// up to the nearest entry of this file, or to the top.
+function project(entries: OutlineEntry[], file: ResolvedFile): { listed: CodeSymbol[], lifted: CodeSymbol[] } {
+  const listed: CodeSymbol[] = [];
+  const lifted: CodeSymbol[] = [];
+  for (const entry of entries) {
+    const inner = project(entry.children, file);
     if (entry.loc.start.filename.equals(file)) {
-      const { name, detail, type, loc, selectionLoc } = entry;
-      return [{ name, detail, type, loc, selectionLoc, children }];
+      const children = inOrder([ ...inner.listed, ...inner.lifted ]);
+      if (!entry.hidden || children.length > 0) {
+        const { name, detail, type, loc, selectionLoc } = entry;
+        listed.push({ name, detail, type, loc, selectionLoc, children });
+      }
+      continue;
     }
-    // Members this file adds to a table from another file still need a parent in this file's outline.
-    if (children.length > 0) {
+    lifted.push(...inner.lifted);
+    if (entry.type === CodeSymbolType.Function || entry.type === CodeSymbolType.Method) {
+      lifted.push(...inner.listed);
+    } else if (inner.listed.length > 0) {
+      // Members this file adds to a table from another file still need a parent in this file's outline.
+      const children = inOrder(inner.listed);
       const { loc, selectionLoc } = children[0];
-      return [{ name: entry.name, detail: undefined, type: CodeSymbolType.Table, loc, selectionLoc, children }];
+      listed.push({ name: entry.name, detail: undefined, type: CodeSymbolType.Table, loc, selectionLoc, children });
     }
-    return [];
-  }).sort(bySourcePosition));
+  }
+  return { listed, lifted };
+}
+
+function inOrder(symbols: CodeSymbol[]): CodeSymbol[] {
+  return listedOnce(symbols.sort(bySourcePosition));
 }
 
 // Entries defined by the same statement share loc.start, so where their names sit breaks the tie.
