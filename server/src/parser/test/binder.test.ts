@@ -212,6 +212,16 @@ describe('binder', () => {
     eq(at(1, 10), at(2, 9));
     eq(kind(3, 6), 'global toString');
   });
+
+  it('records what a definition assigns, a parameter\'s function and every comment of the project', () => {
+    const a = analyzeCode(lines('-- a', 'speed = 2', 'function f(p) end', 't = { k = "x" }', '#include lib.lua'), { 'lib.lua': '-- b' });
+    eq(symbolAt(a, 2, 0)!.definitions[0].value!.type, 'NumericLiteral');
+    const f = symbolAt(a, 3, 9)!.definitions[0];
+    eq(f.value!.type, 'FunctionDeclaration');
+    eq(symbolAt(a, 3, 11)!.definitions[0].node, f.value);
+    eq(symbolAt(a, 4, 6)!.definitions[0].value!.type, 'StringLiteral');
+    deepStrictEqual(a.analysis.comments.map(c => c.raw), [ '-- a', '-- b' ]);
+  });
 });
 
 describe('binder on the test carts', () => {

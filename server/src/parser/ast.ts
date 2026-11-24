@@ -313,12 +313,13 @@ export default class AST {
     };
   }
 
-  static comment(value: string, raw: string, startsLine: boolean): Comment_ {
+  static comment(value: string, raw: string, startsLine: boolean, lineBefore: string): Comment_ {
     return {
       type: 'Comment',
       value: value,
       raw: raw,
       startsLine: startsLine,
+      lineBefore: lineBefore,
     };
   }
 }

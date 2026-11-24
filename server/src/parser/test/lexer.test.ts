@@ -538,5 +538,9 @@ __music__
         { value: '<eof>' },
       ]);
     });
+
+    it('records the text before a comment on its line', () => {
+      assert.deepStrictEqual(lexWithErrors('x = 1 -- c\n  -- d').comments.map(c => c.lineBefore), [ 'x = 1 ', '  ' ]);
+    });
   });
 });

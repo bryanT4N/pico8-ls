@@ -1,11 +1,14 @@
+import { Comment_, Expression } from '../expressions';
 import ResolvedFile from '../file-resolver';
 import type { OutlineEntry } from '../outline/model';
 import { ASTNode, Bounds } from '../types';
 
 export type SymbolKind = 'global' | 'local' | 'param' | 'loopvar' | 'member' | 'label' | 'self' | 'value';
 
-// node: the statement, table field, parameter or label the definition comes from (step 3 reads its comments).
-export type Definition = { loc: Bounds, nameLoc: Bounds, node: ASTNode, isFunction: boolean, compound: boolean };
+// node: the statement, table field or label the definition comes from; a loop variable's for statement; a parameter's
+// FunctionDeclaration. value: what it assigns, as an initializer, a table field's value, or a function statement's
+// FunctionDeclaration. Docs read the comments above node.
+export type Definition = { loc: Bounds, nameLoc: Bounds, node: ASTNode, value?: Expression, isFunction: boolean, compound: boolean };
 
 // One per identifier that names something; loc covers that identifier only. A compound target (x += 1) reads and writes.
 // order: when the analysis came to it, counted together with Declared.order; for a goto, where the goto is.
@@ -58,4 +61,6 @@ export type Analysis = {
   // Key: ResolvedFile.path. Where each #include in the file ends, with the order the analysis had come to after the
   // included content.
   includeCheckpoints: Map<string, Array<{ index: number, order: number }>>,
+  // chunk.comments, then chunk.includedComments: a file included twice comes twice.
+  comments: Comment_[],
 };

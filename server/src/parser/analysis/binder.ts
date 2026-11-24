@@ -247,7 +247,7 @@ class Binder extends ASTVisitor<BinderScope> {
         if (isSelf && param === firstParam) {
           symbol.table = selfSymbol;
         }
-        this.define(symbol, param, param.loc!, param);
+        this.define(symbol, param, param.loc!, node);
         scope.decls.set(param.name, { kind: 'param', symbol });
         this.declare(scope, symbol, parametersEnd);
       }
@@ -658,7 +658,7 @@ class Binder extends ASTVisitor<BinderScope> {
   // A definition, and its name as a reference: written, and for x += 1 read first.
   private define(symbol: LuaSymbol, name: Identifier, loc: Bounds, node: ASTNode, value?: Expression, compound = false): void {
     const isFunction = value?.type === 'FunctionDeclaration';
-    symbol.definitions.push({ loc, nameLoc: name.loc!, node, isFunction, compound });
+    symbol.definitions.push({ loc, nameLoc: name.loc!, node, value, isFunction, compound });
     if (isFunction) {
       symbol.signature = signatureOf(value);
     }
@@ -886,12 +886,13 @@ export function emptyAnalysis(): Analysis {
   return {
     outline: [], globals: new Map(), referencesByFile: new Map(), membersByKey: new Map(),
     scope: { kind: 'file', children: [], declarations: [] }, includeScopes: new Map(), includeStarts: new Map(),
-    includeCheckpoints: new Map(),
+    includeCheckpoints: new Map(), comments: [],
   };
 }
 
 export function analyze(chunk: Chunk): Analysis {
-  const binder = new Binder(findBoundaryLines([ ...(chunk.comments ?? []), ...(chunk.includedComments ?? []) ]));
+  const comments = [ ...(chunk.comments ?? []), ...(chunk.includedComments ?? []) ];
+  const binder = new Binder(findBoundaryLines(comments));
   binder.visit(chunk);
   const referencesByFile = new Map<string, Reference[]>();
   const membersByKey = new Map<string, LuaSymbol[]>();
@@ -910,7 +911,7 @@ export function analyze(chunk: Chunk): Analysis {
   return {
     outline: binder.root.children, globals: binder.globals, referencesByFile, membersByKey,
     scope: binder.fileScope, includeScopes: binder.includeScopes, includeStarts: binder.includeStarts,
-    includeCheckpoints: binder.includeCheckpoints,
+    includeCheckpoints: binder.includeCheckpoints, comments,
   };
 }
 
