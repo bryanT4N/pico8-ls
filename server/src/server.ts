@@ -2,7 +2,7 @@ import {
   CompletionItem, CompletionItemTag, createConnection, DefinitionParams,
   DidChangeConfigurationNotification, DocumentFormattingParams, DocumentSymbolParams,
   ExecuteCommandParams, FileChangeType, FoldingRange, FoldingRangeParams, HoverParams, InitializeParams, InitializeResult, Position, ProposedFeatures,
-  ReferenceParams, SignatureHelpParams, SignatureInformation, TextDocumentPositionParams,
+  ReferenceParams, SignatureHelpParams, TextDocumentPositionParams,
   TextDocuments, TextDocumentSyncKind, TextEdit, WorkspaceFolder,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -379,56 +379,12 @@ connection.onHover((params: HoverParams) => {
 });
 
 connection.onSignatureHelp((params: SignatureHelpParams) => {
-  const textOnLine = getTextOnLine(params.textDocument.uri, params.position);
-  if (!textOnLine) {
+  const { uri } = params.textDocument;
+  const document = documents.get(uri);
+  if (!document) {
     return undefined;
   }
-
-  // get position of starting (
-  let i = params.position.character;
-  let numCommas = 0;
-  while (i >= 0 && textOnLine[i] !== '(') {
-    if (textOnLine[i] === ',') {
-      numCommas++;
-    }
-    i--;
-  }
-
-  // not found
-  if (i < 0) {
-    return undefined;
-  }
-
-  const startingParenPos = i;
-
-  // get identifier before that
-  const identifier = wordAt(textOnLine, startingParenPos - 1);
-  const info = builtinInfo(identifier);
-  if (!info || !info.sig || !info.params) {
-    return undefined;
-  }
-
-  const signatureInfo: SignatureInformation = {
-    label: info.sig,
-    documentation: {
-      kind: 'markdown',
-      value: builtinMarkdown(identifier, info),
-    },
-    activeParameter: numCommas,
-    parameters: info.params.map(p => {
-      const idxOfColon = p.indexOf(':');
-      return {
-        label: p.substring(0, idxOfColon),
-        documentation: p,
-      };
-    }),
-  };
-
-  return {
-    signatures: [ signatureInfo ],
-    activeSignature: 0,
-    activeParameter: numCommas,
-  };
+  return index.signatureHelp(uri, document.offsetAt(params.position), document.getText());
 });
 
 connection.onDocumentFormatting((params: DocumentFormattingParams) => {

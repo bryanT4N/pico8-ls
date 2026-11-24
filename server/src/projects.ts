@@ -1,4 +1,4 @@
-import { Location } from 'vscode-languageserver/node';
+import { Location, SignatureHelp } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Chunk } from './parser/statements';
 import * as url from 'url';
@@ -13,6 +13,7 @@ import { Bounds, containsIndex } from './parser/types';
 import { errorsInFile, FileDiagnostics, inThisFile, mergeDiagnostics } from './diagnostics';
 import { hoverMarkdown } from './hover';
 import { rangeOf } from './ranges';
+import { signatureHelpAt } from './signature-help';
 
 export type ProjectDocument = { textDocument: TextDocument, chunk: Chunk, errors: ParseError[] };
 
@@ -272,6 +273,11 @@ export class ProjectIndex {
       }
     }
     return undefined;
+  }
+
+  // From the first project by root URI that finds the function, or else from the builtins.
+  signatureHelp(uri: string, index: number, text: string): SignatureHelp | undefined {
+    return signatureHelpAt(this.analyses(uri), ResolvedFile.fromFileURL(uri), text, index);
   }
 
   // One per project containing uri, by root URI.

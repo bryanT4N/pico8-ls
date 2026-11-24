@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as url from 'url';
 import { Location } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
+import { builtinInfo } from '../parser/builtins';
 import Parser from '../parser/parser';
 import ResolvedFile, { FileResolver, fileURLToPath, pathToFileURL } from '../parser/file-resolver';
 import { outlineLines } from '../parser/test/outline-utils';
@@ -395,9 +396,10 @@ describe('ProjectIndex', () => {
     deepStrictEqual(index.references(uriOf('main.p8'), a, false).map(loc), [ 'main.p8 2:4-2:5' ]);
   });
 
-  it('falls back to an empty analysis when the analysis throws', () => {
+  // An index whose analysis of main.p8 throws. logged: how many errors the scan reported.
+  const failedAnalysis = (files: { 'main.p8': string }) => {
     // The kind of node the formatter inserts, which the analysis does not know.
-    const index = indexOver({ 'main.p8': 'function f() end' }, { tweak: doc => doc.chunk.block.body.push({ type: 'Whitespace', count: 1 } as any) });
+    const index = indexOver(files, { tweak: doc => doc.chunk.block.body.push({ type: 'Whitespace', count: 1 } as any) });
     const consoleError = console.error;
     let logged = 0;
     console.error = () => {
@@ -408,9 +410,21 @@ describe('ProjectIndex', () => {
     } finally {
       console.error = consoleError;
     }
+    return { index, logged };
+  };
+
+  it('falls back to an empty analysis when the analysis throws', () => {
+    const { index, logged } = failedAnalysis({ 'main.p8': 'function f() end' });
     deepStrictEqual(index.outline(uriOf('main.p8')), []);
     deepStrictEqual(index.warnings(uriOf('main.p8')), []);
     eq(logged, 1);
+  });
+
+  it('gives no hover and the builtin signature help when the analysis failed', () => {
+    const files = { 'main.p8': 'function f() end\nprint(' };
+    const { index } = failedAnalysis(files);
+    eq(index.hover(uriOf('main.p8'), offsetIn(files, 'main.p8', 1, 9)), undefined);
+    eq(index.signatureHelp(uriOf('main.p8'), files['main.p8'].length, files['main.p8'])!.signatures[0].label, builtinInfo('print')!.sig);
   });
 
   it('sends each file\'s diagnostics once', () => {
@@ -594,5 +608,12 @@ describe('ProjectIndex', () => {
   it('hovers from a later project when the first has nothing to show', () => {
     const files = { 'a.p8': '#include common.lua', 'b.p8': 'x = 1\n-- from b\nplayer = {}\n#include common.lua', 'common.lua': 'print(player)' };
     eq(scanned(files).hover(uriOf('common.lua'), offsetIn(files, 'common.lua', 1, 6)), '```pico-8-lua\n(global) player = {\u2026}\n```\n\nfrom b');
+  });
+
+  it('gives signature help for a function from an included file', () => {
+    const files = { 'main.p8': '#include lib.lua\ndist(1, ', 'lib.lua': 'function dist(a, b) end' };
+    const help = scanned(files).signatureHelp(uriOf('main.p8'), files['main.p8'].length, files['main.p8'])!;
+    eq(help.signatures[0].label, 'dist(a, b)');
+    eq(help.activeParameter, 1);
   });
 });
