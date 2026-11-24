@@ -50,6 +50,10 @@ describe('completionRequestAt', () => {
   it('ignores the end of a CRLF line', () => {
     deepStrictEqual(completionRequestAt('  player.\r', 9), { path: [ 'player' ], colon: false, start: 9 });
   });
+
+  it('reads a name after .. as a plain name', () => {
+    deepStrictEqual(completionRequestAt('  print("hp: "..pl', 18), { path: [], colon: false, start: 16 });
+  });
 });
 
 describe('completionItems', () => {
@@ -148,5 +152,45 @@ describe('completionItems', () => {
   it('sees the parameters of a function in a loop header', () => {
     const code = lines('for e in all(filter(enemies, function(enemy)', '  return ', 'end)) do end');
     deepStrictEqual(names(itemsAt(code, 2, 9)), [ 'enemy' ]);
+  });
+
+  it('offers plain names after ..', () => {
+    const code = lines('player = {}', 'function f()', '  print("hp: "..pl', 'end');
+    deepStrictEqual(names(itemsAt(code, 3, 18)), [ 'f', 'player' ]);
+  });
+
+  it('offers the locals of an #included file from where the #include is', () => {
+    const lib = { 'lib.lua': 'local gravity = 1' };
+    deepStrictEqual(names(itemsAt(lines('#include lib.lua', ''), 2, 0, lib)), [ 'gravity' ]);
+    deepStrictEqual(names(itemsAt(lines('local debug = true', '#include lib.lua', ''), 3, 0, lib)), [ 'debug', 'gravity' ]);
+    deepStrictEqual(names(itemsAt(lines('', '#include lib.lua', 'print(1)'), 1, 0, lib)), []);
+  });
+
+  it('counts a goto where it is, not where its label is found', () => {
+    const lib = { 'lib.lua': lines('::top::', 'local inside = 1', 'goto top', '') };
+    deepStrictEqual(names(itemsAt(lines('#include lib.lua', 'local later = 1'), 4, 0, lib, 'lib.lua')), [ 'inside' ]);
+  });
+
+  it('offers the locals of a function whose end is not written yet', () => {
+    const followed = lines('function foo(a, b)', '  local c = 1', '  ', 'function bar() end');
+    deepStrictEqual(names(itemsAt(followed, 3, 2)), [ 'a', 'b', 'bar', 'c', 'foo' ]);
+    deepStrictEqual(names(itemsAt(lines('function foo(a, b)', '  local c = 1', '  '), 3, 2)), [ 'a', 'b', 'c', 'foo' ]);
+  });
+
+  it('offers the locals of a closed function in an if whose end is not written yet', () => {
+    deepStrictEqual(names(itemsAt(lines('function f(a)', '  local b = 1', '  if a then', '    ', 'end'), 4, 4)), [ 'a', 'b', 'f' ]);
+    const inRepeat = lines('function f(a)', '  repeat', '    if a then', '      local c = 1', '      ', '  until a', 'end');
+    deepStrictEqual(names(itemsAt(inRepeat, 5, 6)), [ 'a', 'c', 'f' ]);
+  });
+
+  it('does not offer the parameters of a closed function after its end', () => {
+    const code = lines('function f(a)', 'end', '', 'function g(b)', '  ');
+    deepStrictEqual(names(itemsAt(code, 3, 0)), [ 'f', 'g' ]);
+    deepStrictEqual(names(itemsAt(code, 5, 2)), [ 'b', 'f', 'g' ]);
+  });
+
+  it('does not offer the member being typed', () => {
+    deepStrictEqual(names(itemsAt(lines('function f(p)', '  x = p.h', 'end'), 2, 9)), []);
+    deepStrictEqual(names(itemsAt(lines('function f(p)', '  p.hp = 1', '  x = p.h', 'end'), 3, 9)), [ 'hp' ]);
   });
 });

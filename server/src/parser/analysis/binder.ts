@@ -34,7 +34,11 @@ type ValueTarget =
   | { kind: 'flat', owner: Owner, name: string, loc?: Bounds, selectionLoc?: Bounds, symbol?: LuaSymbol } // rule 7, unnamed table
   | { kind: 'anonymous', owner: Owner };
 
-type PendingGoto = { label: Identifier, blocks: BinderScope[] };
+// order: taken where the goto is, though the label it goes to may come later.
+type PendingGoto = { label: Identifier, blocks: BinderScope[], order: number };
+
+// An #include whose content the analysis is in. file and included are ResolvedFile paths; end is where it ends in file.
+type OpenInclude = { file: string, included: string, end: number };
 
 class BinderScope {
   decls = new Map<string, Decl>();
@@ -56,7 +60,12 @@ class Binder extends ASTVisitor<BinderScope> {
   readonly references: Reference[] = [];
   readonly fileScope: Scope = { kind: 'file', children: [], declarations: [] };
   readonly includeScopes = new Map<string, Scope>();
+  readonly includeStarts = new Map<string, number>();
+  readonly includeCheckpoints = new Map<string, Array<{ index: number, order: number }>>();
   private order = 0;
+  // The chain of #includes whose content the analysis is in, outermost first.
+  private readonly openIncludes: OpenInclude[] = [];
+  private topLevel: Statement[] = [];
   // The first entry each global name got.
   private readonly globalEntries = new Map<string, OutlineEntry>();
   // For each expression value, where to attach it in the outline. The statement hooks fill this in before the
@@ -72,7 +81,9 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   override visit(chunk: Chunk): void {
+    this.topLevel = chunk.block.body;
     super.visit(chunk);
+    this.closeIncludes();
     this.resolveGotos(this.scopeStack[0]);
     groupMethodRuns(chunk.block.body, this.statementInfo, this.boundaryLines);
   }
@@ -91,7 +102,8 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   createDefaultScope(scopeNode: VisitableASTNode | null): BinderScope {
-    return new BinderScope(this.topScope().owner, 'block', { kind: 'block', loc: scopeNode?.loc, children: [], declarations: [] },
+    const loc = scopeNode ? this.rangeOf(scopeNode) : undefined;
+    return new BinderScope(this.topScope().owner, 'block', { kind: 'block', loc, children: [], declarations: [] },
       isStatementWithBody(scopeNode) ? scopeNode.block : undefined);
   }
 
@@ -106,11 +118,52 @@ class Binder extends ASTVisitor<BinderScope> {
     }
   }
 
+  // The range of a scope, for completion. The loc of a block whose closer is missing stops at its last statement,
+  // before the line being typed, so its range runs on to just before the next statement of the block around it;
+  // with none, to the end of the scope around it, or of the file. Only the index of such an end is compared.
+  private rangeOf(node: VisitableASTNode): Bounds | undefined {
+    const { loc } = node;
+    if (!loc || !node.unclosed) {
+      return loc;
+    }
+    const file = loc.start.filename.path;
+    const body = [ ...this.scopeStack ].reverse().find(scope => scope.block)?.block?.body ?? this.topLevel;
+    const statement = [ node, ...this.nodeStack.map(entry => entry.node).reverse() ]
+      .find(candidate => body.includes(candidate as Statement)) as Statement | undefined;
+    const next = statement && body[body.indexOf(statement) + 1];
+    if (next?.loc && next.loc.start.filename.path === file) {
+      return { start: loc.start, end: { ...next.loc.start, index: next.loc.start.index - 1 } };
+    }
+    const around = this.topScope().analysisScope.loc;
+    if (around && around.start.filename.path === file) {
+      return { start: loc.start, end: around.end };
+    }
+    return { start: loc.start, end: { ...loc.end, index: Number.MAX_SAFE_INTEGER } };
+  }
+
   override visitIncludeStatement(node: IncludeStatement): void {
-    const included = resolveIncludeFile(node.loc!.start.filename, node.filename).path;
+    const file = node.loc!.start.filename;
+    this.closeIncludes(file.path);
+    const included = resolveIncludeFile(file, node.filename).path;
     if (!this.includeScopes.has(included)) {
       this.includeScopes.set(included, this.topScope().analysisScope);
+      this.includeStarts.set(included, this.order);
     }
+    this.openIncludes.push({ file: file.path, included, end: node.loc!.end.index });
+  }
+
+  // The content of an #include ends where the analysis next comes to something in a file outside it: the includer,
+  // or a file further up the chain. Its checkpoint gets the order reached by then.
+  private closeIncludes(file?: string): void {
+    while (this.openIncludes.length > 0 && this.openIncludes[this.openIncludes.length - 1].included !== file) {
+      const { file: includer, end } = this.openIncludes.pop()!;
+      listIn(this.includeCheckpoints, includer).push({ index: end, order: this.order });
+    }
+  }
+
+  private nextOrder(file: string): number {
+    this.closeIncludes(file);
+    return this.order++;
   }
 
   override visitFunctionDeclaration(node: FunctionDeclaration): BinderScope {
@@ -147,7 +200,7 @@ class Binder extends ASTVisitor<BinderScope> {
       owner = this.topScope().owner;
     }
 
-    const scope = new BinderScope(owner, 'function', { kind: 'function', loc: node.loc, children: [], declarations: [] }, node.block);
+    const scope = new BinderScope(owner, 'function', { kind: 'function', loc: this.rangeOf(node), children: [], declarations: [] }, node.block);
 
     const firstParam = node.parameters[0];
     const firstParamIsSelf = firstParam?.type === 'Identifier' && firstParam.name === 'self';
@@ -254,12 +307,13 @@ class Binder extends ASTVisitor<BinderScope> {
 
   override visitGotoStatement(node: GotoStatement): void {
     this.recorded.add(node.label);
+    const order = this.nextOrder(node.label.loc!.start.filename.path);
     const blocks: BinderScope[] = [];
     for (let i = this.scopeStack.length - 1; i >= 0; i--) {
       const scope = this.scopeStack[i];
       blocks.push(scope);
       if (scope.kind !== 'block') {
-        scope.gotos.push({ label: node.label, blocks });
+        scope.gotos.push({ label: node.label, blocks, order });
         return;
       }
     }
@@ -267,10 +321,10 @@ class Binder extends ASTVisitor<BinderScope> {
 
   // A goto with no label to go to gets no reference: the parser reports it.
   private resolveGotos(scope: BinderScope): void {
-    for (const { label, blocks } of scope.gotos) {
+    for (const { label, blocks, order } of scope.gotos) {
       const target = blocks.find(block => block.labels.has(label.name))?.labels.get(label.name);
       if (target) {
-        this.read(target, label.loc!);
+        this.addReference({ symbol: target, loc: label.loc!, read: true, write: false, isCall: false }, order);
       }
     }
   }
@@ -572,15 +626,16 @@ class Binder extends ASTVisitor<BinderScope> {
     this.addReference({ symbol, loc, read: true, write: false, isCall });
   }
 
-  private addReference(unordered: Omit<Reference, 'order'>): void {
-    const reference = { ...unordered, order: this.order++ };
+  private addReference(unordered: Omit<Reference, 'order'>, order?: number): void {
+    const reference = { ...unordered, order: order ?? this.nextOrder(unordered.loc.start.filename.path) };
     reference.symbol.references.push(reference);
     this.references.push(reference);
   }
 
   // For completion: symbol is visible in scope from `from` on.
   private declare(scope: BinderScope, symbol: LuaSymbol, from: CodeLocation): void {
-    scope.analysisScope.declarations.push({ symbol, file: from.filename, visibleFrom: from.index, order: this.order++ });
+    const order = this.nextOrder(from.filename.path);
+    scope.analysisScope.declarations.push({ symbol, file: from.filename, visibleFrom: from.index, order });
   }
 
   private link(entry: OutlineEntry, symbol: LuaSymbol | undefined): OutlineEntry {
@@ -705,7 +760,8 @@ export function analyze(chunk: Chunk): Analysis {
   }
   return {
     outline: binder.root.children, globals: binder.globals, referencesByFile, membersByKey,
-    scope: binder.fileScope, includeScopes: binder.includeScopes,
+    scope: binder.fileScope, includeScopes: binder.includeScopes, includeStarts: binder.includeStarts,
+    includeCheckpoints: binder.includeCheckpoints,
   };
 }
 

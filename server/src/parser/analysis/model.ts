@@ -8,7 +8,7 @@ export type SymbolKind = 'global' | 'local' | 'param' | 'loopvar' | 'member' | '
 export type Definition = { loc: Bounds, nameLoc: Bounds, node: ASTNode, isFunction: boolean, compound: boolean };
 
 // One per identifier that names something; loc covers that identifier only. A compound target (x += 1) reads and writes.
-// order: when the analysis came to it, counted together with Declared.order.
+// order: when the analysis came to it, counted together with Declared.order; for a goto, where the goto is.
 export type Reference = { symbol: LuaSymbol, loc: Bounds, read: boolean, write: boolean, isCall: boolean, order: number };
 
 // A local, parameter or loop variable, visible in its scope from index visibleFrom of file on.
@@ -52,4 +52,9 @@ export type Analysis = {
   scope: Scope,
   // Key: ResolvedFile.path of an #included file. The scope its first #include is in.
   includeScopes: Map<string, Scope>,
+  // Key: ResolvedFile.path of an #included file. The order the analysis had come to at its first #include.
+  includeStarts: Map<string, number>,
+  // Key: ResolvedFile.path. Where each #include in the file ends, with the order the analysis had come to after the
+  // included content.
+  includeCheckpoints: Map<string, Array<{ index: number, order: number }>>,
 };

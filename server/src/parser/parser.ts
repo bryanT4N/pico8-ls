@@ -1527,9 +1527,13 @@ function endsParameterList(token: Token): boolean {
   return token.type === TokenType.EOF || token.type === TokenType.Keyword;
 }
 
+// end: what expectBlockEnd returned, so every block whose closer is missing comes through here.
 function endAt<T extends ASTNode>(node: T, end: CodeLocation | null): T {
   if (end && node.loc) {
     node.loc = { start: node.loc.start, end };
+  }
+  if (end) {
+    Object.defineProperty(node, 'unclosed', { value: true });
   }
   return node;
 }

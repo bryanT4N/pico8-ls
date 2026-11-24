@@ -107,20 +107,30 @@ function innermostScope(scope: Scope, file: ResolvedFile, index: number): Scope 
   return inner ? innermostScope(inner, file, index) : scope;
 }
 
-// Where index falls in the order the analysis came to things: the order of the first reference in file from index
-// on, or just after the last one.
+// Where index falls in the order the analysis came to things: just after the last checkpoint of file at or before
+// index, a reference or the end of an #include, or else where the file's content starts. Where two checkpoints share
+// a place (a file included twice), the first inclusion's counts.
 function orderAt(analysis: Analysis, file: ResolvedFile, index: number): number {
-  const references = analysis.referencesByFile.get(file.path) ?? [];
-  const next = references.find(reference => reference.loc.start.index >= index);
-  if (next) {
-    return next.order;
+  let at = -1;
+  let order = analysis.includeStarts.get(file.path) ?? 0;
+  const pass = (place: number, reached: number) => {
+    if (place <= index && place > at) {
+      at = place;
+      order = reached + 0.5;
+    }
+  };
+  for (const reference of analysis.referencesByFile.get(file.path) ?? []) {
+    pass(reference.loc.start.index, reference.order);
   }
-  return references.length > 0 ? references[references.length - 1].order + 0.5 : Infinity;
+  for (const checkpoint of analysis.includeCheckpoints.get(file.path) ?? []) {
+    pass(checkpoint.index, checkpoint.order);
+  }
+  return order;
 }
 
 // The members to offer after `path.` or `path:`: those with a definition, only functions after a colon. When there
-// are none, as for a parameter, the ones used through the same variable: only those called, after a colon.
-// Undefined when the path leads nowhere.
+// are none, as for a parameter, the ones used through the same variable, apart from the use being typed at index:
+// only those called, after a colon. Undefined when the path leads nowhere.
 export function membersAt(analysis: Analysis, file: ResolvedFile, index: number, path: string[], colon: boolean): LuaSymbol[] | undefined {
   let symbol = visibleAt(analysis, file, index).find(visible => visible.name === path[0]);
   for (const key of path.slice(1)) {
@@ -136,7 +146,8 @@ export function membersAt(analysis: Analysis, file: ResolvedFile, index: number,
   if (defined.length > 0) {
     return defined;
   }
-  return members.filter(member => colon ? member.references.some(reference => reference.isCall) : member.references.length > 0);
+  return members.filter(member => member.references.some(reference => (!colon || reference.isCall)
+    && !containsIndex(reference.loc, file, index)));
 }
 
 function placeOf(bounds: Bounds): string {

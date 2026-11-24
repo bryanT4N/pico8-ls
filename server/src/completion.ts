@@ -12,7 +12,8 @@ export type CompletionRequest = { path: string[] | null, colon: boolean, start: 
 export function completionRequestAt(lineText: string, character: number): CompletionRequest {
   const start = wordStart(lineText, character);
   const colon = lineText[start - 1] === ':';
-  if (!colon && lineText[start - 1] !== '.') {
+  // After .., the concatenation operator, comes a plain name.
+  if (!colon && (lineText[start - 1] !== '.' || lineText[start - 2] === '.')) {
     return { path: [], colon, start };
   }
   const path: string[] = [];
