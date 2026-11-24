@@ -161,4 +161,6 @@ export type Chunk = {
   // main file's own.
   includedComments?: Comment_[],
   includes?: Include[],
+  // The files that #includes, nested ones too, could not find or read. A file that appears later can be one of them.
+  unresolvedIncludes?: ResolvedFile[],
 };

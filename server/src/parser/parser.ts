@@ -102,6 +102,8 @@ export default class Parser {
 
   private includedComments: Comment_[] = [];
 
+  private unresolvedIncludes: ResolvedFile[] = [];
+
   private includeParses = 0;
   private reportedTooManyIncludeParses = false;
 
@@ -263,6 +265,7 @@ export default class Parser {
     chunk.includes = this.includes;
     chunk.comments = this.lexer.comments;
     chunk.includedComments = this.includedComments;
+    chunk.unresolvedIncludes = this.unresolvedIncludes;
 
     return chunk;
   }
@@ -405,23 +408,20 @@ export default class Parser {
     }
 
     if (!this.includeFileResolver.doesFileExist(resolvedInclude.path)) {
-      this.errors.push(this.getIncludeStatementError(statement, 'File does not exist'));
-      return [];
+      return this.unresolvedInclude(statement, resolvedInclude, 'File does not exist');
     }
 
     let fileContents: string;
     try {
       if (!this.includeFileResolver.isFile(resolvedInclude.path)) {
-        this.errors.push(this.getIncludeStatementError(statement, 'File cannot be read (is it a directory?)'));
-        return [];
+        return this.unresolvedInclude(statement, resolvedInclude, 'File cannot be read (is it a directory?)');
       }
       fileContents = this.includeFileResolver.loadFileContents(resolvedInclude.path);
     } catch (e) {
       // The file can be locked, lose its permissions or go away after it was
       // found; that is an error in this file, not a reason to lose the parse.
       const reason = (e as NodeJS.ErrnoException | null)?.code ?? (e instanceof Error ? e.message : String(e));
-      this.errors.push(this.getIncludeStatementError(statement, `File cannot be read (${reason})`));
-      return [];
+      return this.unresolvedInclude(statement, resolvedInclude, `File cannot be read (${reason})`);
     }
 
     if (!this.isInIncludedFile()) {
@@ -450,6 +450,12 @@ export default class Parser {
         this.includedComments.push(comment);
       }
     }
+  }
+
+  private unresolvedInclude(statement: IncludeStatement, resolvedInclude: ResolvedFile, reason: string): Statement[] {
+    this.errors.push(this.getIncludeStatementError(statement, reason));
+    this.unresolvedIncludes.push(resolvedInclude);
+    return [];
   }
 
   private appendHoisted(block: Statement[]) {

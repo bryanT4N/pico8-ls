@@ -195,10 +195,11 @@ export class ProjectIndex {
     }
     const includedBefore = includedUris(this.documents.get(uri));
     this.documents.set(uri, document);
-    // A new file may resolve #includes that previously failed: the parser does not add a failed include
-    // to chunk.includes, so the includer is never re-parsed until every known document is refreshed.
+    // A new file can be one that an #include could not find, and no project links them, since the parser leaves such an
+    // #include out of chunk.includes: the files whose last parse had one are parsed again.
     if (isNew) {
-      return this.scan([ ...this.documents.keys() ]);
+      return this.scan([ ...this.documents.keys() ]
+        .filter(other => other !== uri && (this.documents.get(other)!.chunk.unresolvedIncludes?.length ?? 0) > 0));
     }
     let rebuilt = !sameSet(includedBefore, includedUris(document)) || this.projectsOf(uri).length === 0;
     if (rebuilt) {

@@ -96,6 +96,11 @@ describe('#include', function () {
     assert.deepStrictEqual(includes!.map(i => i.stmt.filename), [ 'a.lua' ]);
   });
 
+  it('lists the files that #includes could not find, nested ones too, but not a circular one', () => {
+    const { unresolvedIncludes } = parseWith('#include a.lua\n#include gone.lua', { 'a.lua': '#include sub/nope.lua\n#include a.lua' });
+    assert.deepStrictEqual(unresolvedIncludes!.map(file => file.path), [ path.normalize('sub/nope.lua'), 'gone.lua' ]);
+  });
+
   it('ends the last statement of an included file in that file', () => {
     const { block } = parseWith('#include a.lua', { 'a.lua': 'x = 1\ny = 2' });
     const { start, end } = block.body[2].loc!;
@@ -174,6 +179,7 @@ describe('#include', function () {
       const chunk = parse('#include inc.lua\nfunction f() end', { includeFileResolver: resolver });
       assert.deepStrictEqual(chunk.errors.map(formatError), [ `main_test_file 1:0 Can't #include inc.lua from main_test_file: File cannot be read (${reason})` ]);
       assert.deepStrictEqual(statementsOf(chunk), [ 'IncludeStatement', 'FunctionDeclaration' ]);
+      assert.deepStrictEqual(chunk.unresolvedIncludes!.map(file => file.path), [ 'inc.lua' ]);
     });
   }
 

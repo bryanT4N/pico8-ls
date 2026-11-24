@@ -128,14 +128,16 @@ const NO_DISK: FileResolver = {
   },
 };
 
-type IndexOptions = { tweak?: (doc: ProjectDocument) => void, cache?: Map<string, string>, disk?: FileResolver };
+type IndexOptions = { tweak?: (doc: ProjectDocument) => void, cache?: Map<string, string>, disk?: FileResolver, parsed?: string[] };
 
 // An index over files kept in memory; tests change `files` and call update or remove. `files` are the editor's open
-// documents; the server reads any other file through the resolver, from `cache` while `disk` has it.
-function indexOver(files: Record<string, string>, { tweak, cache = new Map(), disk = NO_DISK }: IndexOptions = {}) {
+// documents; the server reads any other file through the resolver, from `cache` while `disk` has it. `parsed` gets the
+// name of each file the index parses.
+function indexOver(files: Record<string, string>, { tweak, cache = new Map(), disk = NO_DISK, parsed }: IndexOptions = {}) {
   const openText = (uri: string) => files[nameOf(uri)];
   const resolver = makeFileResolver(openText, cache, disk);
   const parseFile = (uri: string) => {
+    parsed?.push(nameOf(uri));
     const filePath = url.fileURLToPath(uri);
     const text = openText(uri) ?? (resolver.doesFileExist(filePath) ? resolver.loadFileContents(filePath) : undefined);
     if (text === undefined) {
@@ -427,6 +429,20 @@ describe('ProjectIndex', () => {
     deepStrictEqual(index.document(uriOf('main.p8'))!.errors, []);
     deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 2, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
     eq(resend.includes(uriOf('main.p8')), true);
+  });
+
+  it('parses again only the files with an #include that could not be resolved when a file appears', () => {
+    const files: Record<string, string> = {
+      'main.p8': '#include lib.lua\nhelper()', 'lib.lua': 'function helper() end', 'other.lua': 'x = 1', 'waiting.p8': '#include later.lua',
+    };
+    const parsed: string[] = [];
+    const index = indexOver(files, { parsed });
+    index.scan(Object.keys(files).map(uriOf));
+    parsed.length = 0;
+    files['new.lua'] = 'function fresh() end';
+    index.update(uriOf('new.lua'));
+    deepStrictEqual(parsed, [ 'new.lua', 'waiting.p8' ]);
+    deepStrictEqual(outlineLines(index.outline(uriOf('new.lua'))), [ 'fresh() [Function]' ]);
   });
 
   it('resolves a nested fresh #include when update adds the file', () => {
