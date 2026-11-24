@@ -4,6 +4,9 @@ import { CodeSymbol, CodeSymbolType, OutlineEntry } from './model';
 export function projectToFile(entries: OutlineEntry[], file: ResolvedFile): CodeSymbol[] {
   return listedOnce(entries.flatMap(entry => {
     const children = projectToFile(entry.children, file);
+    if (entry.hidden && children.length === 0) {
+      return [];
+    }
     if (entry.loc.start.filename.equals(file)) {
       const { name, detail, type, loc, selectionLoc } = entry;
       return [{ name, detail, type, loc, selectionLoc, children }];

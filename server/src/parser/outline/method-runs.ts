@@ -1,7 +1,7 @@
 import { Comment_ } from '../expressions';
 import { isTabMarker, regionMarkerOf } from '../region-markers';
 import { Statement } from '../statements';
-import { Bounds } from '../types';
+import { boundsContain } from '../types';
 import { moveEntry, OutlineEntry } from './model';
 import { promoteToTable } from './members';
 
@@ -44,7 +44,7 @@ function groupRun(table: OutlineEntry, statements: Statement[], info: Map<Statem
   }
   const definition = statements[first];
   // A table first defined somewhere else (in _init, say) would be stretched from there, over other entries.
-  if (!contains(definition.loc!, table.selectionLoc)) {
+  if (!boundsContain(definition.loc!, table.selectionLoc)) {
     return;
   }
 
@@ -83,7 +83,7 @@ function groupRun(table: OutlineEntry, statements: Statement[], info: Map<Statem
   const wouldCover = (entry: OutlineEntry) => entry !== table
     && entry.loc.start.filename.equals(definition.loc!.start.filename)
     && definition.loc!.end.index < entry.loc.start.index && entry.loc.start.index <= lastMethod.loc!.end.index
-    && !moving.some(method => contains(method.entry.loc, entry.loc));
+    && !moving.some(method => boundsContain(method.entry.loc, entry.loc));
   if (table.parent.children.some(wouldCover)) {
     return;
   }
@@ -94,9 +94,4 @@ function groupRun(table: OutlineEntry, statements: Statement[], info: Map<Statem
   }
   table.loc = { start: table.loc.start, end: lastMethod.loc!.end };
   promoteToTable(table);
-}
-
-function contains(outer: Bounds, inner: Bounds): boolean {
-  return inner.start.filename.equals(outer.start.filename)
-    && outer.start.index <= inner.start.index && inner.end.index <= outer.end.index;
 }

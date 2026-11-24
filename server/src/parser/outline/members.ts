@@ -3,6 +3,10 @@ import { Bounds } from '../types';
 import { addEntry, CodeSymbolType, OutlineEntry } from './model';
 
 export function unwrapValue(value: Expression | undefined): Expression | undefined {
+  // x = x or { ... } gives x that table the first time it runs.
+  if (value?.type === 'LogicalExpression' && value.operator === 'or') {
+    return unwrapValue(value.right);
+  }
   if (value?.type === 'CallExpression') {
     if (value.base.type === 'Identifier' && value.base.name === 'setmetatable') {
       const firstArg = value.arguments[0];
@@ -28,7 +32,7 @@ export function promoteToTable(entry: OutlineEntry): void {
   }
 }
 
-export function getOrAddMember(
+function getOrAddMember(
   table: OutlineEntry,
   key: string,
   type: CodeSymbolType,
@@ -42,6 +46,31 @@ export function getOrAddMember(
   }
   const member = addEntry(table, key, type, loc, selectionLoc);
   table.members.set(key, member);
+  return member;
+}
+
+// A member's own definition: the last key of a.b = v, a constructor key, self.b = v. A member that only deeper paths
+// went through so far moves here, as an implicit global does.
+export function defineMember(table: OutlineEntry, key: string, type: CodeSymbolType, loc: Bounds, selectionLoc: Bounds): OutlineEntry {
+  const existing = table.members.get(key);
+  if (existing?.implicit) {
+    existing.loc = loc;
+    existing.selectionLoc = selectionLoc;
+    existing.implicit = false;
+    return existing;
+  }
+  return getOrAddMember(table, key, type, loc, selectionLoc);
+}
+
+// A member a deeper path goes through, like the b of a.b.c = 1.
+export function pathMember(table: OutlineEntry, key: string, loc: Bounds, selectionLoc: Bounds): OutlineEntry {
+  const existing = table.members.get(key);
+  if (existing) {
+    promoteToTable(table);
+    return existing;
+  }
+  const member = getOrAddMember(table, key, CodeSymbolType.Table, loc, selectionLoc);
+  member.implicit = true;
   return member;
 }
 

@@ -79,6 +79,15 @@ describe('Go to Definition and Find References', () => {
     deepStrictEqual(r(5, 6), [ 'main_test_file 5:6-5:7' ]);
   });
 
+  it('goes to the explicit definition of an intermediate member', () => {
+    deepStrictEqual(probe(analyzeCode('a = {}\na.b.c = 1\nprint(a.b.c)')).d(3, 8), [ 'main_test_file 2:2-2:3' ]);
+    deepStrictEqual(probe(analyzeCode('a = {}\na.b.c = 1\na.b = { d = 2 }\nprint(a.b.c)')).d(4, 8), [ 'main_test_file 3:2-3:3' ]);
+  });
+
+  it('goes to a field of a table written as x or {...}', () => {
+    deepStrictEqual(probe(analyzeCode('cfg = cfg or { speed = 1 }\nprint(cfg.speed)')).d(2, 10), [ 'main_test_file 1:15-1:20' ]);
+  });
+
   it('links fields through self across the methods of a table', () => {
     const { d, r, w } = probe(analyzeCode(lines('vector={}', 'function vector:deconstruct()', '  return self.x, self.y', 'end', '',
       'function vector:set(x, y)', '  self.x = x', '  self.y = y', 'end')));
@@ -361,6 +370,10 @@ describe('Go to Definition and Find References', () => {
     deepStrictEqual(d(1, 19), [ 'main_test_file 2:17-2:22' ]);
     deepStrictEqual(w(), []);
     strictEqual(outlineOf(code), lines('_update() [Function]', '_init() [Function]', 'score [Variable]'));
+  });
+
+  it('does not move the implicit entry of a global to a compound assignment', () => {
+    deepStrictEqual(probe(analyzeCode(lines('a.x = 1', 'a += 1'))).d(2, 0), [ 'main_test_file 1:0-1:1' ]);
   });
 
   it('still counts a compound assignment of a field as a definition', () => {

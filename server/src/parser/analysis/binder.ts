@@ -1,11 +1,11 @@
-import { Expression, Identifier, Indexer, MemberExpression, TableConstructorExpression, Variable } from '../expressions';
+import { Expression, Identifier, IndexExpression, Indexer, MemberExpression, TableConstructorExpression, Variable } from '../expressions';
 import { AnonymousFunctionName, AssignmentStatement, Block, Chunk, ForGenericStatement, ForNumericStatement,
   FunctionDeclaration, GotoStatement, IncludeStatement, isStatementWithBody, LabelStatement, LocalStatement, Statement } from '../statements';
 import { resolveIncludeFile } from '../file-resolver';
-import { ASTNode, Bounds, CodeLocation } from '../types';
+import { ASTNode, Bounds, boundsContain, CodeLocation } from '../types';
 import { ASTVisitor, VisitableASTNode } from '../visitor';
 import { addEntry, CodeSymbolType, OutlineEntry, Owner, signatureOf } from '../outline/model';
-import { getOrAddMember, receiveTable, tableTypeOf, unwrapValue } from '../outline/members';
+import { defineMember, pathMember, receiveTable, tableTypeOf, unwrapValue } from '../outline/members';
 import { findBoundaryLines, groupMethodRuns, StatementInfo } from '../outline/method-runs';
 import { Analysis, LuaSymbol, Reference, Scope } from './model';
 
@@ -18,14 +18,16 @@ type Decl = {
   stmt?: Statement,
   // The decl shadowed by this one in the same scope, if any.
   previous?: Decl,
+  // A local declared without a value, or with nil.
+  forward?: boolean,
 };
 
 // What a name refers to at some point: its innermost declaration, or else the global.
 type Binding = Decl | { kind: 'global', symbol: LuaSymbol, entry?: OutlineEntry };
 
 // For a deeper method path (e.g. T.a:m), the last intermediate table may not exist yet;
-// selfPath holds the info to create it on the first self.k = v that needs it.
-type SelfPath = { root: OutlineEntry, segments: Identifier[], stmt: Statement };
+// selfPath holds the info to create it on the first self.k = v that needs it. loc: the range of the method's target.
+type SelfPath = { root: OutlineEntry, segments: Identifier[], loc: Bounds };
 
 // selfSymbol is the table self means in a method, as far as names tell. A flat target's symbol is the member a
 // function defines, or the variable that holds a table.
@@ -75,6 +77,9 @@ class Binder extends ASTVisitor<BinderScope> {
   private readonly statementInfo = new Map<Statement, StatementInfo>();
   // Names and member expressions that a statement hook recorded before the visitor reaches them.
   private readonly recorded = new Set<ASTNode>();
+  // The entry each value was listed with, recorded by the statement and constructor hooks: the callbacks in a value
+  // can go under it.
+  private readonly valueEntries = new Map<ASTNode, OutlineEntry>();
 
   constructor(private readonly boundaryLines: Map<string, number[]>) {
     super();
@@ -180,7 +185,7 @@ class Binder extends ASTVisitor<BinderScope> {
       this.statementInfo.set(node, { about: entry, defines: entry });
     } else if (node.identifier) {
       // function f() end and function t.f() end — same as f = function() end and t.f = function() end
-      this.recordStatement(node, [ this.assign(node.identifier, node, node, false) ]);
+      this.recordStatement(node, [ this.assign(node.identifier, node, node, node.loc!, false) ]);
     }
 
     const target = this.targets.get(node);
@@ -194,7 +199,7 @@ class Binder extends ASTVisitor<BinderScope> {
     } else if (target?.kind === 'anonymous') {
       owner = addEntry(target.owner, AnonymousFunctionName, CodeSymbolType.Function, node.loc!, node.loc!, signatureOf(node));
     } else if (!node.identifier) {
-      owner = addEntry(this.topScope().owner, AnonymousFunctionName, CodeSymbolType.Function,
+      owner = addEntry(this.callbackOwner(), AnonymousFunctionName, CodeSymbolType.Function,
         node.loc!, node.loc!, signatureOf(node));
     } else {
       owner = this.topScope().owner;
@@ -245,7 +250,8 @@ class Binder extends ASTVisitor<BinderScope> {
 
   override visitAssignmentStatement(node: AssignmentStatement): void {
     const compound = node.operator !== '=';
-    this.recordStatement(node, node.variables.map((variable, i) => this.assign(variable, node.init[i], node, compound)));
+    this.recordStatement(node, node.variables.map((variable, i) =>
+      this.assign(variable, node.init[i], node, targetRange(node, i), compound)));
   }
 
   override visitLocalStatement(node: LocalStatement): void {
@@ -254,22 +260,25 @@ class Binder extends ASTVisitor<BinderScope> {
         return undefined;
       }
       const value = node.init[i];
+      const loc = targetRange(node, i);
       const previous = this.topScope().decls.get(variable.name);
       const unwrapped = unwrapValue(value);
       const symbol = new LuaSymbol('local', variable.name);
       this.define(symbol, variable, node.loc!, node, value);
       let entry: OutlineEntry;
       if (value?.type === 'FunctionDeclaration') {
-        entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Function, node.loc!, variable.loc!);
+        entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Function, loc, variable.loc!);
         this.targets.set(value, { kind: 'entry', entry });
       } else if (unwrapped?.type === 'TableConstructorExpression') {
-        entry = addEntry(this.topScope().owner, variable.name, tableTypeOf(unwrapped), node.loc!, variable.loc!);
+        entry = addEntry(this.topScope().owner, variable.name, tableTypeOf(unwrapped), loc, variable.loc!);
         this.targets.set(unwrapped, { kind: 'entry', entry });
       } else {
-        entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Variable, node.loc!, variable.loc!);
+        entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Variable, loc, variable.loc!);
       }
       this.link(entry, symbol);
-      this.topScope().decls.set(variable.name, { kind: 'local', symbol, entry, stmt: node, previous });
+      this.recordValue(entry, value);
+      const forward = !value || value.type === 'NilLiteral';
+      this.topScope().decls.set(variable.name, { kind: 'local', symbol, entry, stmt: node, previous, forward });
       this.declare(this.topScope(), symbol, node.loc!.end);
       return { about: entry, defines: entry };
     }));
@@ -365,20 +374,22 @@ class Binder extends ASTVisitor<BinderScope> {
             continue;
           }
           const unwrapped = unwrapValue(field.value);
+          let memberEntry: OutlineEntry;
           if (unwrapped?.type === 'TableConstructorExpression') {
             const innerCtor = unwrapped as TableConstructorExpression;
-            const memberEntry = this.memberEntry(tableEntry, field.key.name, tableTypeOf(innerCtor), field.loc!, field.key.loc!);
+            memberEntry = this.memberEntry(tableEntry, field.key.name, tableTypeOf(innerCtor), field.loc!, field.key.loc!);
             receiveTable(memberEntry, innerCtor);
             this.targets.set(innerCtor, { kind: 'entry', entry: memberEntry });
           } else {
-            this.memberEntry(tableEntry, field.key.name, CodeSymbolType.Field, field.loc!, field.key.loc!);
+            memberEntry = this.memberEntry(tableEntry, field.key.name, CodeSymbolType.Field, field.loc!, field.key.loc!);
           }
+          this.recordValue(memberEntry, field.value);
         } else if (field.type === 'TableValue' || field.type === 'TableKey') {
           this.registerPositionalTarget(field.value, tableEntry);
         }
       }
     } else {
-      const owner = target?.kind === 'flat' ? target.owner : this.topScope().owner;
+      const owner = target?.kind === 'flat' ? target.owner : this.callbackOwner();
       const prefix = target?.kind === 'flat' ? target.name : '';
       const named = target?.kind === 'flat' ? target.symbol : undefined;
       // The keys of a table that no name holds still get symbols, so that a method call on some other table
@@ -407,13 +418,24 @@ class Binder extends ASTVisitor<BinderScope> {
     return new BinderScope(this.topScope().owner, 'block', this.topScope().analysisScope);
   }
 
-  private assign(variable: Variable, value: Expression | undefined, statement: Statement, compound: boolean): StatementInfo | undefined {
+  // loc: the range of this target's entries.
+  private assign(variable: Variable, value: Expression | undefined, statement: Statement, loc: Bounds, compound: boolean): StatementInfo | undefined {
     if (variable.type === 'Identifier') {
-      return this.assignName(variable, value, statement, compound);
+      return this.assignName(variable, value, statement, loc, compound);
     } else if (variable.type === 'MemberExpression') {
-      return this.assignMember(variable, value, statement, compound);
+      return this.assignMember(variable, value, statement, loc, compound);
     }
-    return undefined;
+    return this.assignIndex(variable);
+  }
+
+  // t[k] = v and t.a[k] = v are about t, as t.k = v is, so that they don't break a run of t's methods.
+  private assignIndex(variable: IndexExpression): StatementInfo | undefined {
+    let base = variable.base;
+    while (base.type === 'IndexExpression' || base.type === 'MemberExpression') {
+      base = base.base;
+    }
+    const entry = base.type === 'Identifier' ? this.resolve(base).entry : undefined;
+    return entry && { about: entry };
   }
 
   // A statement is about a table only when all of its targets are.
@@ -429,7 +451,8 @@ class Binder extends ASTVisitor<BinderScope> {
     });
   }
 
-  private assignName(name: Identifier, value: Expression | undefined, statement: Statement, compound: boolean): StatementInfo | undefined {
+  private assignName(name: Identifier, value: Expression | undefined, statement: Statement, loc: Bounds,
+    compound: boolean): StatementInfo | undefined {
     const binding = this.resolve(name);
     if (compound && binding.kind === 'global') {
       // In PICO-8, x += 1 fails on a global that was never assigned, so a plain assignment elsewhere defines it.
@@ -442,8 +465,9 @@ class Binder extends ASTVisitor<BinderScope> {
     if (binding.kind !== 'global') {
       if (value?.type === 'FunctionDeclaration') {
         const entry = this.link(addEntry(this.topScope().owner, name.name, CodeSymbolType.Function,
-          statement.loc!, name.loc!), binding.symbol);
+          loc, name.loc!), binding.symbol);
         this.targets.set(value, { kind: 'entry', entry });
+        this.hideForwardDeclaration(binding, entry);
       } else if (unwrapped?.type === 'TableConstructorExpression' && binding.kind === 'local' && binding.entry) {
         const ctor = unwrapped as TableConstructorExpression;
         receiveTable(binding.entry, ctor);
@@ -458,14 +482,14 @@ class Binder extends ASTVisitor<BinderScope> {
     if (value?.type === 'FunctionDeclaration') {
       // Listed under the enclosing function, if any: its range lies inside that function's, and breadcrumbs
       // only follow entries whose ranges contain the cursor.
-      const entry = this.link(addEntry(this.topScope().owner, name.name, CodeSymbolType.Function, statement.loc!, name.loc!), binding.symbol);
+      const entry = this.link(addEntry(this.topScope().owner, name.name, CodeSymbolType.Function, loc, name.loc!), binding.symbol);
       this.targets.set(value, { kind: 'entry', entry });
       if (!binding.entry) {
         this.setGlobalEntry(name, entry);
       }
     } else {
       if (binding.entry?.implicit) {
-        binding.entry.loc = statement.loc!;
+        binding.entry.loc = loc;
         binding.entry.selectionLoc = name.loc!;
         binding.entry.implicit = false;
       }
@@ -475,20 +499,30 @@ class Binder extends ASTVisitor<BinderScope> {
           receiveTable(binding.entry, ctor);
           this.targets.set(ctor, { kind: 'entry', entry: binding.entry });
         } else {
-          const entry = this.link(addEntry(this.root, name.name, tableTypeOf(ctor), statement.loc!, name.loc!), binding.symbol);
+          const entry = this.link(addEntry(this.root, name.name, tableTypeOf(ctor), loc, name.loc!), binding.symbol);
           this.setGlobalEntry(name, entry);
           this.targets.set(ctor, { kind: 'entry', entry });
         }
       } else if (!binding.entry) {
         this.setGlobalEntry(name,
-          this.link(addEntry(this.root, name.name, CodeSymbolType.Variable, statement.loc!, name.loc!), binding.symbol));
+          this.link(addEntry(this.root, name.name, CodeSymbolType.Variable, loc, name.loc!), binding.symbol));
       }
     }
     const table = this.globalEntry(name)!;
+    this.recordValue(table, value);
     return { about: table, defines: table };
   }
 
-  private assignMember(variable: MemberExpression, value: Expression | undefined, statement: Statement, compound: boolean): StatementInfo | undefined {
+  // local f, then f = function() end in the same function: the function's entry is enough.
+  private hideForwardDeclaration(binding: Binding, functionEntry: OutlineEntry): void {
+    const declared = binding.kind === 'local' && binding.forward ? binding.entry : undefined;
+    if (declared && declared.members.size === 0 && declared.children.length === 0 && declared.parent === functionEntry.parent) {
+      declared.hidden = true;
+    }
+  }
+
+  private assignMember(variable: MemberExpression, value: Expression | undefined, statement: Statement, loc: Bounds,
+    compound: boolean): StatementInfo | undefined {
     this.recorded.add(variable);
     const member = this.tableOf(variable.base).member(variable.identifier.name);
     this.define(member, variable.identifier, statement.loc!, statement, value, compound);
@@ -506,20 +540,20 @@ class Binder extends ASTVisitor<BinderScope> {
 
     if (root.name === 'self' && this.resolveSelfBinding() !== 'local-or-loopvar') {
       if (value?.type === 'FunctionDeclaration') {
-        return this.addMethod(value, root, segments, variable.indexer, undefined, statement, member);
+        return this.addMethod(value, root, segments, variable.indexer, undefined, loc, member);
       }
       const selfTable = this.resolveSelfTable();
       if (!selfTable) {
         this.assignUnknownRoot(root, segments, value, member);
         return undefined;
       }
-      return this.addMemberField(selfTable, segments, value, statement);
+      return this.addMemberField(selfTable, segments, value, loc);
     }
 
     const binding = this.resolve(root);
     if (binding.kind === 'param' || binding.kind === 'loopvar') {
       if (value?.type === 'FunctionDeclaration') {
-        return this.addMethod(value, root, segments, variable.indexer, undefined, statement, member);
+        return this.addMethod(value, root, segments, variable.indexer, undefined, loc, member);
       }
       this.assignUnknownRoot(root, segments, value, member); // the outline can't know which table was passed in
       return undefined;
@@ -528,7 +562,7 @@ class Binder extends ASTVisitor<BinderScope> {
     if (value?.type === 'FunctionDeclaration') {
       // Grouping takes this file's entry only, but self.k = v still goes under the table when another file has its entry.
       const selfTable = binding.entry ?? (binding.kind === 'global' ? this.anyGlobalEntry(root.name) : undefined);
-      return this.addMethod(value, root, segments, variable.indexer, binding.entry, statement, member, selfTable);
+      return this.addMethod(value, root, segments, variable.indexer, binding.entry, loc, member, selfTable);
     }
 
     let rootEntry = binding.entry;
@@ -536,40 +570,41 @@ class Binder extends ASTVisitor<BinderScope> {
       if (binding.kind !== 'global') {
         return;
       }
-      rootEntry = this.link(addEntry(this.root, root.name, CodeSymbolType.Table, statement.loc!, root.loc!), binding.symbol);
+      rootEntry = this.link(addEntry(this.root, root.name, CodeSymbolType.Table, loc, root.loc!), binding.symbol);
       rootEntry.implicit = true;
       this.setGlobalEntry(root, rootEntry);
     }
 
-    return this.addMemberField(rootEntry, segments, value, statement);
+    return this.addMemberField(rootEntry, segments, value, loc);
   }
 
-  private addMemberField(rootEntry: OutlineEntry, segments: Identifier[], value: Expression | undefined, statement: Statement): StatementInfo {
+  private addMemberField(rootEntry: OutlineEntry, segments: Identifier[], value: Expression | undefined, loc: Bounds): StatementInfo {
     const unwrapped = unwrapValue(value);
     let tableEntry = rootEntry;
     for (let i = 0; i < segments.length - 1; i++) {
       const seg = segments[i];
-      tableEntry = this.memberEntry(tableEntry, seg.name, CodeSymbolType.Table, statement.loc!, seg.loc!);
+      tableEntry = this.pathEntry(tableEntry, seg.name, loc, seg.loc!);
     }
     const lastSeg = segments[segments.length - 1];
     const memberType = unwrapped?.type === 'TableConstructorExpression'
       ? tableTypeOf(unwrapped as TableConstructorExpression) : CodeSymbolType.Field;
-    const member = this.memberEntry(tableEntry, lastSeg.name, memberType, statement.loc!, lastSeg.loc!);
+    const member = this.memberEntry(tableEntry, lastSeg.name, memberType, loc, lastSeg.loc!);
     if (unwrapped?.type === 'TableConstructorExpression') {
       const ctor = unwrapped as TableConstructorExpression;
       receiveTable(member, ctor);
       this.targets.set(ctor, { kind: 'entry', entry: member });
     }
+    this.recordValue(member, value);
     return { about: rootEntry };
   }
 
   // A method written as its own statement: function a.b(), function a:b() or a.b = function() end. table: the entry
   // to group the method under; selfTable: the entry self's fields go under.
   private addMethod(fn: FunctionDeclaration, root: Identifier, segments: Identifier[], indexer: Indexer,
-    table: OutlineEntry | undefined, statement: Statement, member: LuaSymbol, selfTable = table): StatementInfo | undefined {
+    table: OutlineEntry | undefined, loc: Bounds, member: LuaSymbol, selfTable = table): StatementInfo | undefined {
     const key = segments[segments.length - 1];
     const name = [ root, ...segments.slice(0, -1) ].map(id => id.name).join('.') + indexer + key.name;
-    const entry = this.link(addEntry(this.topScope().owner, name, CodeSymbolType.Method, statement.loc!, key.loc!), member);
+    const entry = this.link(addEntry(this.topScope().owner, name, CodeSymbolType.Method, loc, key.loc!), member);
     const intermediates = segments.slice(0, -1);
     const firstParam = fn.parameters[0];
     const isSelfMethod = indexer === ':' || (firstParam?.type === 'Identifier' && firstParam.name === 'self');
@@ -578,7 +613,7 @@ class Binder extends ASTVisitor<BinderScope> {
       if (intermediates.length === 0) {
         this.targets.set(fn, { kind: 'entry', entry, selfTable: selfTable ?? null, selfSymbol });
       } else if (selfTable) {
-        this.targets.set(fn, { kind: 'entry', entry, selfPath: { root: selfTable, segments: intermediates, stmt: statement }, selfSymbol });
+        this.targets.set(fn, { kind: 'entry', entry, selfPath: { root: selfTable, segments: intermediates, loc }, selfSymbol });
       } else {
         this.targets.set(fn, { kind: 'entry', entry, selfTable: null, selfSymbol });
       }
@@ -649,9 +684,48 @@ class Binder extends ASTVisitor<BinderScope> {
     return entry;
   }
 
-  // The member entry of a table entry stands for the member symbol of the table's symbol.
+  // The member entries of a table entry stand for the members of the table's symbol. memberEntry is for a member's own
+  // definition, pathEntry for a member a deeper path goes through.
   private memberEntry(table: OutlineEntry, key: string, type: CodeSymbolType, loc: Bounds, selectionLoc: Bounds): OutlineEntry {
-    return this.link(getOrAddMember(table, key, type, loc, selectionLoc), table.symbol?.member(key));
+    return this.link(defineMember(table, key, type, loc, selectionLoc), table.symbol?.member(key));
+  }
+
+  private pathEntry(table: OutlineEntry, key: string, loc: Bounds, selectionLoc: Bounds): OutlineEntry {
+    return this.link(pathMember(table, key, loc, selectionLoc), table.symbol?.member(key));
+  }
+
+  private recordValue(entry: OutlineEntry, value: Expression | undefined): void {
+    if (value) {
+      this.valueEntries.set(value, entry);
+    }
+  }
+
+  // Where a callback or a function listed flat goes: under the innermost entry, in the function being visited, whose
+  // value holds it, as in local co = cocreate(function() end); otherwise under that function, or at the top level. The
+  // entry must be listed under that function too: a global first assigned in _init is listed at the top level, and a
+  // cursor in a callback listed there would no longer find _init.
+  private callbackOwner(): Owner {
+    const owner = this.topScope().owner;
+    for (let i = this.nodeStack.length - 1; i >= 0; i--) {
+      const { node } = this.nodeStack[i];
+      if (node.type === 'FunctionDeclaration') {
+        break;
+      }
+      const entry = this.valueEntries.get(node);
+      if (entry && boundsContain(entry.loc, node.loc!) && this.isUnder(entry, owner)) {
+        return entry;
+      }
+    }
+    return owner;
+  }
+
+  // The root, where every chain of parents ends, holds every entry.
+  private isUnder(entry: OutlineEntry, owner: Owner): boolean {
+    let parent = entry.parent;
+    while (parent !== owner && parent !== this.root) {
+      parent = (parent as OutlineEntry).parent;
+    }
+    return parent === owner;
   }
 
   // The symbol whose members base.k names: self stands for its method's table. A base that is not a name or a
@@ -733,7 +807,7 @@ class Binder extends ASTVisitor<BinderScope> {
       if (scope.selfPath) {
         let entry = scope.selfPath.root;
         for (const seg of scope.selfPath.segments) {
-          entry = this.memberEntry(entry, seg.name, CodeSymbolType.Table, scope.selfPath.stmt.loc!, seg.loc!);
+          entry = this.pathEntry(entry, seg.name, scope.selfPath.loc, seg.loc!);
         }
         scope.selfTable = entry;
         scope.selfPath = undefined;
@@ -760,6 +834,18 @@ class Binder extends ASTVisitor<BinderScope> {
     }
     return { kind: 'global', symbol: this.globalSymbol(name.name), entry: this.globalEntry(name) };
   }
+}
+
+// The range of the entries of target i. With several targets, each gets its own name and value, the first from the start
+// of the statement; a target with no value of its own gets just its name.
+function targetRange(statement: AssignmentStatement | LocalStatement, i: number): Bounds {
+  const { variables, init } = statement;
+  if (variables.length < 2) {
+    return statement.loc!;
+  }
+  const start = i === 0 ? statement.loc!.start : variables[i].loc!.start;
+  const valueEnd = init[i]?.loc?.end;
+  return { start, end: valueEnd?.filename.equals(start.filename) ? valueEnd : variables[i].loc!.end };
 }
 
 export function emptyAnalysis(): Analysis {

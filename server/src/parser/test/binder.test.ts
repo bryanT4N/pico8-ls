@@ -1,5 +1,6 @@
 import { deepStrictEqual, notStrictEqual as ne, ok, strictEqual as eq } from 'assert';
-import { analyzeCode, Analyzed, describeSymbol, referenceAtPos, symbolAt } from './test-utils';
+import { OutlineEntry } from '../outline/model';
+import { analyzeCode, Analyzed, describeSymbol, getTestFileContents, referenceAtPos, symbolAt, TEST_CARTS } from './test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
 
@@ -211,4 +212,33 @@ describe('binder', () => {
     eq(at(1, 10), at(2, 9));
     eq(kind(3, 6), 'global toString');
   });
+});
+
+describe('binder on the test carts', () => {
+  for (const name of TEST_CARTS) {
+    it(`links outline entries and symbols both ways in ${name}`, () => {
+      const { analysis } = analyzeCode(getTestFileContents(name));
+      const entries: OutlineEntry[] = [];
+      const collect = (list: OutlineEntry[]) => list.forEach(entry => {
+        entries.push(entry);
+        collect(entry.children);
+      });
+      collect(analysis.outline);
+      const symbols = new Set([ ...analysis.referencesByFile.values() ].flatMap(references => references.map(reference => reference.symbol)));
+      for (const entry of entries) {
+        ok(!entry.symbol || entry.symbol.entries.includes(entry), `${entry.name} is not among the entries of its symbol`);
+        if (entry.symbol) {
+          symbols.add(entry.symbol);
+        }
+      }
+      for (const symbol of symbols) {
+        ok(symbol.entries.every(entry => entry.symbol === symbol), `an entry of ${symbol.name} lists another symbol`);
+        ok(symbol.entries.length === 0 || !symbol.definitions.some(definition => definition.isFunction) || symbol.signature !== undefined,
+          `${symbol.name} has a function definition and entries, but no signature`);
+      }
+      for (const member of [ ...analysis.membersByKey.values() ].flat()) {
+        ok(member.references.length > 0, `member ${member.name} has no reference`);
+      }
+    });
+  }
 });

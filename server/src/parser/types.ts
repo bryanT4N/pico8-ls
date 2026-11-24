@@ -52,6 +52,11 @@ export function containsIndex(bounds: Bounds, file: ResolvedFile, index: number)
   return bounds.start.filename.path === file.path && bounds.start.index <= index && index <= bounds.end.index;
 }
 
+export function boundsContain(outer: Bounds, inner: Bounds): boolean {
+  return inner.start.filename.equals(outer.start.filename)
+    && outer.start.index <= inner.start.index && inner.end.index <= outer.end.index;
+}
+
 export function boundsEqual(a: Bounds, b: Bounds): boolean {
   return a && b && codeLocationsEqual(a.start, b.start) && codeLocationsEqual(a.end, b.end);
 }

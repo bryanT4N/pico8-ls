@@ -80,6 +80,13 @@ describe('outline', () => {
         lines('f() [Function]', '  g() [Function]', '  h(a) [Function]'));
     });
 
+    it('lists only the function of a forward-declared local', () => {
+      assert.strictEqual(outlineOf(lines('local f', 'function _init() f() end', 'f = function() end', 'local g', 'function g() end',
+        'local h = 1', 'h = 2', 'local k = nil', 'k = function() end', 'local m', 'function _update()', '  m = function() end', 'end')),
+      lines('_init() [Function]', 'f() [Function]', 'g() [Function]', 'h [Variable]', 'k() [Function]', 'm [Variable]',
+        '_update() [Function]', '  m() [Function]'));
+    });
+
     it('lists a function assigned to a parameter', () => {
       assert.strictEqual(outlineOf('function f(cb)\n  cb = function() end\n  function cb(x) end\nend'),
         lines('f(cb) [Function]', '  cb() [Function]', '  cb(x) [Function]'));
@@ -91,13 +98,40 @@ describe('outline', () => {
       lines('_update() [Function]', '  <anonymous function>(e) [Function]', '    speed [Variable]'));
     });
 
+    it('lists callbacks in a variable\'s value under the variable', () => {
+      const { symbols } = parse(lines('local player = new_player {', '  on_damaged = function()', '    sfx(1)', '  end,', '}',
+        'enemy = make_enemy({ update = function(self)', '  self.x += 1', 'end })', 'local a = { cb = foo { f = function() end } }',
+        'b = setmetatable({}, { __index = function(t, k) return 0 end })', 'c = f(function() end)', 'local d, e = g(function() end)',
+        't = { co = cocreate(function() end) }'));
+      assert.deepStrictEqual(outlineLinesWithRanges(symbols), [
+        'player [Variable] 1:0-5:1 1:6-1:12', '  on_damaged() [Method] 2:2-4:5 2:2-2:12',
+        'enemy [Variable] 6:0-8:6 6:0-6:5', '  update(self) [Method] 6:21-8:3 6:21-6:27',
+        'a [Table] 9:0-9:45 9:6-9:7', '  cb [Field] 9:12-9:43 9:12-9:14', '    f() [Method] 9:23-9:41 9:23-9:24',
+        'b [Table] 10:0-10:63 10:0-10:1', '  __index(t,k) [Method] 10:23-10:60 10:23-10:30',
+        'c [Variable] 11:0-11:21 11:0-11:1', '  <anonymous function>() [Function] 11:6-11:20 11:6-11:20',
+        'd [Variable] 12:0-12:30 12:6-12:7', '  <anonymous function>() [Function] 12:15-12:29 12:15-12:29', 'e [Variable] 12:9-12:10 12:9-12:10',
+        't [Table] 13:0-13:37 13:0-13:1', '  co [Field] 13:6-13:35 13:6-13:8', '    <anonymous function>() [Function] 13:20-13:34 13:20-13:34',
+      ]);
+    });
+
+    it('nests a callback only under an entry of the same owner', () => {
+      assert.strictEqual(outlineOf(lines('function _init()', '  player = new_player { on_damaged = function() end }', 'end')),
+        lines('_init() [Function]', '  on_damaged() [Method]', 'player [Variable]'));
+      assert.strictEqual(outlineOf(lines('function _init()', '  player.on_hit = wrap(function() end)', 'end')),
+        lines('_init() [Function]', '  <anonymous function>() [Function]', 'player [Table]', '  on_hit [Field]'));
+      assert.strictEqual(outlineOf(lines('function new_game()', '  local player = new_player { on_damaged = function() end }', 'end')),
+        lines('new_game() [Function]', '  player [Variable]', '    on_damaged() [Method]'));
+      assert.strictEqual(outlineOf(lines('function f()', '  local co = cocreate(function() end)', 'end')),
+        lines('f() [Function]', '  co [Variable]', '    <anonymous function>() [Function]'));
+    });
+
     it('puts the locals of a function assigned to a global under it', () => {
       assert.strictEqual(outlineOf('x = function()\n  local y = 1\nend'), lines('x() [Function]', '  y [Variable]'));
     });
 
     it('does not see a local inside its own initializer', () => {
       assert.strictEqual(outlineOf('local co = cocreate(function()\n  co = nil\nend)'),
-        lines('co [Variable]', '<anonymous function>() [Function]', 'co [Variable]'));
+        lines('co [Variable]', '  <anonymous function>() [Function]', 'co [Variable]'));
       assert.strictEqual(outlineOf('local f = function()\n  f = function() end\nend'),
         lines('f() [Function]', '  f() [Function]'));
     });
@@ -123,6 +157,16 @@ describe('outline', () => {
     it('creates intermediate members for nested paths', () => {
       assert.strictEqual(outlineOf('cfg = {}\ncfg.screen.w = 128\ncfg.screen.h = 128'),
         lines('cfg [Table]', '  screen [Table]', '    w [Field]', '    h [Field]'));
+    });
+
+    it('moves an intermediate member to its own definition', () => {
+      const { symbols } = parse(lines('a = {}', 'a.b.c = 1', 'a.b = { d = 2 }', 'function _init() x.y.z = 1 end', 'x = { y = {} }',
+        'T = {}', 'function T.s:m() self.k = 1 end', 'T.s = {}'));
+      assert.deepStrictEqual(outlineLinesWithRanges(symbols), [
+        'a [Table] 1:0-1:6 1:0-1:1', '  b [Table] 3:0-3:15 3:2-3:3', '    c [Field] 2:0-2:9 2:4-2:5', '    d [Field] 3:8-3:13 3:8-3:9',
+        '_init() [Function] 4:0-4:30 4:9-4:14', 'x [Table] 5:0-5:14 5:0-5:1', '  y [Table] 5:6-5:12 5:6-5:7', '    z [Field] 4:17-4:26 4:21-4:22',
+        'T [Table] 6:0-6:6 6:0-6:1', '  s [Table] 8:0-8:8 8:2-8:3', '    k [Field] 7:17-7:27 7:22-7:23', 'T.s:m() [Method] 7:0-7:31 7:13-7:14',
+      ]);
     });
 
     it('merges keys when a table is assigned again', () => {
@@ -161,6 +205,12 @@ describe('outline', () => {
         lines('new() [Function]', '  e [Table]', '    x [Field]', '    hp [Field]'));
     });
 
+    it('treats x = x or {...} as a table', () => {
+      assert.strictEqual(outlineOf(lines('cfg = cfg or { speed = 1, on = function() end }', 'local s = s or {}',
+        'pal_map = pal_map and pal_map or { 1, 2 }')),
+      lines('cfg [Table]', '  speed [Field]', '  on() [Method]', 's [Table]', 'pal_map [Array]'));
+    });
+
     it('puts fields set through a local alias under the alias', () => {
       assert.strictEqual(outlineOf('player = {}\nfunction f()\n  local p = player\n  p.hp = 3\nend'),
         lines('player [Table]', 'f() [Function]', '  p [Table]', '    hp [Field]'));
@@ -180,6 +230,16 @@ describe('outline', () => {
     it('attaches each value of a multiple assignment to its own target', () => {
       assert.strictEqual(outlineOf('t = {}\na, t.k = function() end, { n = 1 }'),
         lines('t [Table]', '  k [Table]', '    n [Field]', 'a() [Function]'));
+    });
+
+    it('gives each target of a multiple assignment its own range', () => {
+      const { symbols } = parse(lines('a, b = function()', '  local x = 1', 'end, function()', '  local y = 2', 'end', 't = {}',
+        't.p, t.q = { k = 1 }, function() end', 'local u, v = 1', 'local w, z'));
+      assert.deepStrictEqual(outlineLinesWithRanges(symbols), [
+        'a() [Function] 1:0-3:3 1:0-1:1', '  x [Variable] 2:2-2:13 2:8-2:9', 'b() [Function] 1:3-5:3 1:3-1:4', '  y [Variable] 4:2-4:13 4:8-4:9',
+        't [Table] 6:0-7:36 6:0-6:1', '  p [Table] 7:0-7:20 7:2-7:3', '    k [Field] 7:13-7:18 7:13-7:14', '  q() [Method] 7:5-7:36 7:7-7:8',
+        'u [Variable] 8:0-8:14 8:6-8:7', 'v [Variable] 8:9-8:10 8:9-8:10', 'w [Variable] 9:0-9:7 9:6-9:7', 'z [Variable] 9:9-9:10 9:9-9:10',
+      ]);
     });
 
     it('moves an implicit table to its first assignment of any value', () => {
@@ -214,6 +274,16 @@ describe('outline', () => {
     it('groups methods of a table created by a call', () => {
       assert.strictEqual(outlineOf('cls = object:extend()\nfunction cls:init() end\nfunction cls:draw() end'),
         lines('cls [Table]', '  init() [Method]', '  draw() [Method]'));
+    });
+
+    it('groups methods across T[k] = v', () => {
+      const { symbols } = parse(lines('vec = {}', 'vec.__index = vec', 'vec[1] = 0', 'function vec:len() end', 'function vec:add() end',
+        'obj = {}', 'obj["k"] = 1', 'function obj:m() end', 'grid = {}', 'grid[1][2] = 0', 'function grid:at() end'));
+      assert.deepStrictEqual(outlineLinesWithRanges(symbols), [
+        'vec [Table] 1:0-5:22 1:0-1:3', '  __index [Field] 2:0-2:17 2:4-2:11', '  len() [Method] 4:0-4:22 4:13-4:16',
+        '  add() [Method] 5:0-5:22 5:13-5:16', 'obj [Table] 6:0-8:20 6:0-6:3', '  m() [Method] 8:0-8:20 8:13-8:14',
+        'grid [Table] 9:0-11:22 9:0-9:4', '  at() [Method] 11:0-11:22 11:14-11:16',
+      ]);
     });
 
     it('stretches the table range over its grouped methods', () => {
@@ -275,7 +345,7 @@ describe('outline', () => {
 
     it('keeps methods in place when grouping would cover another entry', () => {
       assert.strictEqual(outlineOf('game = {}\ngame.co = cocreate(function() end)\nfunction game:update() end'),
-        lines('game [Table]', '  co [Field]', '<anonymous function>() [Function]', 'game:update() [Method]'));
+        lines('game [Table]', '  co [Field]', '    <anonymous function>() [Function]', '  update() [Method]'));
       assert.strictEqual(outlineOf('p = {}\np.anim = {}\nfunction p.anim.walk() end\nfunction p:update() end'),
         lines('p [Table]', '  anim [Table]', 'p.anim.walk() [Method]', 'p:update() [Method]'));
       assert.strictEqual(outlineOf('obj = {}\nfunction obj:a() end\nobj = function() end\nfunction obj:b() end'),

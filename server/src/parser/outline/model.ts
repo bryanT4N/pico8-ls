@@ -35,6 +35,9 @@ export type OutlineEntry = Owner & {
   members: Map<string, OutlineEntry>,
   // Created for a field assignment before the name itself was assigned.
   implicit: boolean,
+  // A local declared without a value that later gets a function: the function's entry stands for it, so it is left
+  // out unless it has children.
+  hidden: boolean,
   // Unset for anonymous functions and the functions of tables that no name holds.
   symbol?: LuaSymbol,
 };
@@ -45,6 +48,7 @@ export function addEntry(parent: Owner, name: string, type: CodeSymbolType, loc:
     children: [],
     members: new Map<string, OutlineEntry>(),
     implicit: false,
+    hidden: false,
   };
   parent.children.push(entry);
   return entry;
