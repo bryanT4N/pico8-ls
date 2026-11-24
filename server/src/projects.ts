@@ -15,6 +15,23 @@ import { rangeOf } from './ranges';
 
 export type ProjectDocument = { textDocument: TextDocument, chunk: Chunk, errors: ParseError[] };
 
+// A file is tracked when it has a .p8/.lua extension and none of its directory components below the
+// matching root starts with a dot, matching the recursive scan's behaviour of not descending into
+// hidden directories. With no matching root, only the extension is checked.
+export function isTrackedPath(filePath: string, roots: string[]): boolean {
+  if (!(/\.(p8|lua)$/i.test(filePath))) {
+    return false;
+  }
+  const normalizedFile = path.normalize(filePath);
+  const matchingRoot = roots.map(r => path.normalize(r))
+    .find(r => normalizedFile.startsWith(r + path.sep) || normalizedFile === r);
+  if (matchingRoot === undefined) {
+    return true;
+  }
+  const relative = normalizedFile.slice(matchingRoot.length + path.sep.length);
+  return relative.split(path.sep).slice(0, -1).every(part => !part.startsWith('.'));
+}
+
 export type ParsedDocumentsMap = Map<string, ProjectDocument>;
 
 // Represents a whole "project" tree. Starts at one root .p8 file, and includes

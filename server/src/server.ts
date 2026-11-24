@@ -13,7 +13,7 @@ import { builtinInfo } from './parser/builtins';
 import ResolvedFile, { pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
 import Formatter, { FormatterOptions } from './parser/formatter';
-import { makeFileResolver, ProjectDocument, ProjectIndex } from './projects';
+import { isTrackedPath, makeFileResolver, ProjectDocument, ProjectIndex } from './projects';
 import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -33,6 +33,9 @@ let hasWorkspaceFolderCapability = false;
 
 // The text of the workspace's files as the scan read them.
 const diskText = new Map<string, string>();
+
+// Workspace root paths, populated when the workspace is scanned and kept for isTrackedPath checks.
+let workspaceRoots: string[] = [];
 
 function openText(uri: string): string | undefined {
   return documents.get(uri)?.getText() ?? diskText.get(uri);
@@ -104,6 +107,7 @@ function rescanEverything() {
       return;
     }
 
+    workspaceRoots = workspaceFolders.map(wf => url.fileURLToPath(wf.uri));
     Promise.all(workspaceFolders.map(scanWorkspaceFolder)).catch(e => {
       console.log('Error scanning workspace folders', e);
     });
@@ -116,7 +120,7 @@ async function scanWorkspaceFolder(workspaceFolder: WorkspaceFolder) {
   const folderPath = url.fileURLToPath(workspaceFolder.uri);
 
   // List all files in directory & subdirs
-  const allFiles = await getFilesRecursive(folderPath);
+  const allFiles = await getFilesRecursive(folderPath, folderPath);
 
   const uris = await Promise.all(allFiles.map(async filePath => {
     const uri = pathToFileURL(filePath);
@@ -131,7 +135,7 @@ async function scanWorkspaceFolder(workspaceFolder: WorkspaceFolder) {
   publish(index.scan(uris));
 }
 
-async function getFilesRecursive(folderPath: string): Promise<string[]> {
+async function getFilesRecursive(folderPath: string, root: string): Promise<string[]> {
   const p8andLuaFiles: string[] = [];
   try {
     const files = await fs.promises.readdir(folderPath);
@@ -141,8 +145,8 @@ async function getFilesRecursive(folderPath: string): Promise<string[]> {
 
       const stat = await fs.promises.lstat(filePath);
       if (stat.isDirectory() && !file.startsWith('.')) {
-        p8andLuaFiles.push(...(await getFilesRecursive(filePath)));
-      } else if (stat.isFile() && isTrackedPath(filePath)) {
+        p8andLuaFiles.push(...(await getFilesRecursive(filePath, root)));
+      } else if (stat.isFile() && isTrackedPath(filePath, [ root ])) {
         p8andLuaFiles.push(filePath);
       }
     }));
@@ -152,15 +156,6 @@ async function getFilesRecursive(folderPath: string): Promise<string[]> {
   }
 
   return p8andLuaFiles;
-}
-
-// A file is tracked only when its extension is .p8/.lua and none of its directory components starts
-// with a dot — matching getFilesRecursive's behaviour of not descending into hidden directories.
-function isTrackedPath(filePath: string): boolean {
-  if (!(/\.(p8|lua)$/i.test(filePath))) {
-    return false;
-  }
-  return path.normalize(filePath).split(path.sep).slice(0, -1).every(part => !part.startsWith('.'));
 }
 
 function parseFile(uri: string): ProjectDocument | undefined {
@@ -289,7 +284,7 @@ connection.onReferences((params: ReferenceParams) => {
 connection.onDidChangeWatchedFiles(change => {
   const uris: string[] = [];
   for (const { uri, type } of change.changes) {
-    if (!isTrackedPath(url.fileURLToPath(uri))) {
+    if (!isTrackedPath(url.fileURLToPath(uri), workspaceRoots)) {
       continue;
     }
     if (type === FileChangeType.Deleted) {

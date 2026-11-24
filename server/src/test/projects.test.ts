@@ -7,7 +7,7 @@ import Parser from '../parser/parser';
 import ResolvedFile, { FileResolver } from '../parser/file-resolver';
 import { outlineLines } from '../parser/test/outline-utils';
 import { deepEquals, formatError } from '../parser/test/test-utils';
-import { findProjects, makeFileResolver, ParsedDocumentsMap, ProjectDocument, ProjectIndex } from '../projects';
+import { findProjects, isTrackedPath, makeFileResolver, ParsedDocumentsMap, ProjectDocument, ProjectIndex } from '../projects';
 
 // Creates a mock ProjectDocument that just has the specified includes
 function mockTextDocument(name: string, includes: string[]): ProjectDocument {
@@ -43,6 +43,25 @@ function createDocumentsMap(docs: ProjectDocument[]): ParsedDocumentsMap {
 
   return map;
 }
+
+describe('isTrackedPath', () => {
+  it('tracks .p8 and .lua files not in a dot-directory below the root', () => {
+    const root = path.resolve('/ws');
+    eq(isTrackedPath(path.join(root, 'main.p8'), [ root ]), true);
+    eq(isTrackedPath(path.join(root, 'sub', 'a.lua'), [ root ]), true);
+    eq(isTrackedPath(path.join(root, '.history', 'x.lua'), [ root ]), false);
+    eq(isTrackedPath(path.join(root, 'readme.txt'), [ root ]), false);
+  });
+
+  it('tracks a file when the root itself is in a dot-directory', () => {
+    const root = path.resolve('/home/me/.projects/game');
+    eq(isTrackedPath(path.join(root, 'main.p8'), [ root ]), true);
+  });
+
+  it('tracks any .p8/.lua file when no roots are given', () => {
+    eq(isTrackedPath(path.join(path.resolve('/anywhere'), '.x', 'a.lua'), []), true);
+  });
+});
 
 describe('findProjects', () => {
   it('groups files that include each other into projects', () => {
