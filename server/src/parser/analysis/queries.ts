@@ -30,11 +30,20 @@ export function definitionsAt(analysis: Analysis, reference: Reference): Bounds[
   const targets = targetsOf(symbol);
   if (targets.length === 0 && symbol.kind === 'member' && symbol.definitions.length === 0 && reference.isCall) {
     // The table may inherit the method (entity:extend and the like), so offer every method of that name.
-    const methods = (analysis.membersByKey.get(symbol.name) ?? [])
-      .filter(member => member.definitions.some(definition => definition.isFunction));
-    return uniqueInOrder(methods.flatMap(targetsOf));
+    return uniqueInOrder(methodsNamed(analysis, symbol.name).flatMap(targetsOf));
   }
   return uniqueInOrder(targets);
+}
+
+// The members named name that have a function definition, by the place of their first one.
+export function methodsNamed(analysis: Analysis, name: string): LuaSymbol[] {
+  return (analysis.membersByKey.get(name) ?? [])
+    .flatMap(member => {
+      const first = member.definitions.find(definition => definition.isFunction);
+      return first ? [{ member, place: first.nameLoc }] : [];
+    })
+    .sort((a, b) => byPlace(a.place, b.place))
+    .map(({ member }) => member);
 }
 
 // A local declared first and given a function later goes to the function, not to its declaration. Anything else goes

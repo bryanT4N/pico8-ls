@@ -11,6 +11,7 @@ import { definitionsAt, referenceAt, referencesOf, warningsOf } from './parser/a
 import { CodeSymbol, outlineFor } from './parser/symbols';
 import { Bounds, containsIndex } from './parser/types';
 import { errorsInFile, FileDiagnostics, inThisFile, mergeDiagnostics } from './diagnostics';
+import { hoverMarkdown } from './hover';
 import { rangeOf } from './ranges';
 
 export type ProjectDocument = { textDocument: TextDocument, chunk: Chunk, errors: ParseError[] };
@@ -258,6 +259,19 @@ export class ProjectIndex {
 
   references(uri: string, index: number, includeDeclaration: boolean): Location[] {
     return this.lookUp(uri, index, (_analysis, reference) => referencesOf(reference.symbol, includeDeclaration));
+  }
+
+  // From the first project by root URI that has one.
+  hover(uri: string, index: number): string | undefined {
+    const file = ResolvedFile.fromFileURL(uri);
+    for (const { analysis } of this.projectsOf(uri)) {
+      const reference = referenceAt(analysis, file, index);
+      const markdown = reference && hoverMarkdown(analysis, reference);
+      if (markdown !== undefined) {
+        return markdown;
+      }
+    }
+    return undefined;
   }
 
   // One per project containing uri, by root URI.

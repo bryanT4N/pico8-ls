@@ -1,6 +1,6 @@
 import { deepStrictEqual, strictEqual } from 'assert';
 import { CompletionItem, CompletionItemKind } from 'vscode-languageserver/node';
-import { completionItems, completionRequestAt, wordAt } from '../completion';
+import { completionItems, completionRequestAt, Offered, resolveUserItem, wordAt } from '../completion';
 import { analyzeCode, indexAt, testFile } from '../parser/test/test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
@@ -223,5 +223,22 @@ describe('completionItems', () => {
     deepStrictEqual(names(itemsAt(definedAbove, 4, 9)), [ 'hp', 'y' ]);
     const definedBelow = lines('player = { hp = 1 }', 'function f()', '  player.', 'end', 'function g()', '  player.x = 5', 'end');
     deepStrictEqual(names(itemsAt(definedBelow, 3, 9)), [ 'hp', 'x' ]);
+  });
+
+  it('fills in the declaration and the doc when an item is resolved', () => {
+    const code = lines('x = 1', '-- creates a deep copy', 'function deep_copy(obj) return obj end', 'function print(s) end', 'de');
+    const a = analyzeCode(code);
+    const offered: Offered = new Map();
+    const items = completionItems([ a.analysis ], testFile(), indexAt(a, 5, 2), completionRequestAt('de', 2), 4, 2, offered);
+    const copy = { ...items.find(i => i.label === 'deep_copy')! };
+    strictEqual(copy.detail, '(obj)');
+    strictEqual(resolveUserItem(copy, offered), true);
+    strictEqual(copy.detail, 'function deep_copy(obj)');
+    deepStrictEqual(copy.documentation, { kind: 'markdown', value: 'creates a deep copy' });
+    const print = { ...items.find(i => i.label === 'print')! };
+    strictEqual(resolveUserItem(print, offered), true);
+    strictEqual(print.detail, 'function print(s)');
+    strictEqual(print.documentation, undefined);
+    strictEqual(resolveUserItem({ label: 'cls' }, offered), false);
   });
 });

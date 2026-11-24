@@ -1,4 +1,6 @@
 import { CompletionItem, CompletionItemKind } from 'vscode-languageserver/node';
+import { declarationOf, renderDoc } from './hover';
+import { documentationOf } from './parser/analysis/docs';
 import { Analysis, LuaSymbol } from './parser/analysis/model';
 import { membersAt, visibleAt } from './parser/analysis/queries';
 import { BuiltinConstants, Builtins } from './parser/builtins';
@@ -69,23 +71,29 @@ function wordStart(text: string, end: number): number {
   return start;
 }
 
-// Not filtered by what is typed: VS Code does that.
+// The user symbol each item stands for, by label, kept for completionItem/resolve.
+export type Offered = Map<string, { analysis: Analysis, symbol: LuaSymbol }>;
+
+// Not filtered by what is typed: VS Code does that. offered gets the user symbols among the items.
 export function completionItems(analyses: Analysis[], file: ResolvedFile, index: number, request: CompletionRequest,
-  line: number, character: number): CompletionItem[] {
+  line: number, character: number, offered?: Offered): CompletionItem[] {
   const { path, colon } = request;
   if (path === null) {
     return [];
   }
   const range = { start: { line, character: request.start }, end: { line, character } };
   const items = new Map<string, CompletionItem>();
-  const offer = (item: CompletionItem) => {
+  const offer = (item: CompletionItem, user?: { analysis: Analysis, symbol: LuaSymbol }) => {
     if (!items.has(item.label)) {
       items.set(item.label, { ...item, textEdit: { range, newText: item.label } });
+      if (user) {
+        offered?.set(item.label, user);
+      }
     }
   };
   if (path.length === 0) {
     for (const analysis of analyses) {
-      visibleAt(analysis, file, index).forEach(symbol => offer(itemFor(symbol)));
+      visibleAt(analysis, file, index).forEach(symbol => offer(itemFor(symbol), { analysis, symbol }));
     }
     for (const name of Object.keys(Builtins)) {
       offer({ label: name, kind: CompletionItemKind.Function, sortText: '2' + name });
@@ -95,10 +103,25 @@ export function completionItems(analyses: Analysis[], file: ResolvedFile, index:
     }
   } else {
     for (const analysis of analyses) {
-      membersAt(analysis, file, index, path, colon, request.start === character)?.forEach(symbol => offer(itemFor(symbol)));
+      membersAt(analysis, file, index, path, colon, request.start === character)?.forEach(symbol => offer(itemFor(symbol), { analysis, symbol }));
     }
   }
   return [ ...items.values() ];
+}
+
+// Gives an item that stands for a user symbol its declaration and doc. False for any other item, such as a builtin.
+export function resolveUserItem(item: CompletionItem, offered: Offered): boolean {
+  const user = offered.get(item.label);
+  if (!user) {
+    return false;
+  }
+  const { definition, doc } = documentationOf(user.analysis, user.symbol);
+  item.detail = declarationOf(user.symbol, definition);
+  const text = doc ? renderDoc(doc) : '';
+  if (text !== '') {
+    item.documentation = { kind: 'markdown', value: text };
+  }
+  return true;
 }
 
 function itemFor(symbol: LuaSymbol): CompletionItem {

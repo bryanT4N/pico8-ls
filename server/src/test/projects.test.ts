@@ -580,4 +580,14 @@ describe('ProjectIndex', () => {
     const resend = index.remove(uriOf('x.lua'));
     deepStrictEqual([ index.document(uriOf('y.lua')), index.warnings(uriOf('y.lua')), resend.includes(uriOf('y.lua')) ], [ undefined, [], true ]);
   });
+
+  it('hovers over a function documented in an included file', () => {
+    const files = { 'main.p8': '#include lib.lua\nprint(dist(1, 2))', 'lib.lua': 'x = 1\n-- distance between\n-- two numbers\nfunction dist(a, b) return abs(a - b) end' };
+    eq(scanned(files).hover(uriOf('main.p8'), offsetIn(files, 'main.p8', 2, 6)), '```pico-8-lua\nfunction dist(a, b)\n```\n\ndistance between\ntwo numbers');
+  });
+
+  it('hovers from the first project by root URI', () => {
+    const files = { 'a.p8': 'x = 1\n-- from a\nplayer = {}\n#include common.lua', 'b.p8': 'x = 1\n-- from b\nplayer = {}\n#include common.lua', 'common.lua': 'print(player)' };
+    eq(scanned(files).hover(uriOf('common.lua'), offsetIn(files, 'common.lua', 1, 6)), '```pico-8-lua\n(global) player = {\u2026}\n```\n\nfrom a');
+  });
 });

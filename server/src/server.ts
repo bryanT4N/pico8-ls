@@ -20,7 +20,8 @@ import * as path from 'path';
 import { buildDocumentSymbols } from './document-symbols';
 import { computeFoldingRanges } from './folding-ranges';
 import { errorsInFile, maxProblems } from './diagnostics';
-import { completionItems, completionRequestAt, wordAt } from './completion';
+import { completionItems, completionRequestAt, Offered, resolveUserItem, wordAt } from './completion';
+import { builtinMarkdown } from './hover';
 
 console.log('PICO-8-LS language server starting.');
 
@@ -305,8 +306,12 @@ connection.onDidChangeWatchedFiles(change => {
   publish(uris);
 });
 
+// The user symbols of the last completion list, which the items being resolved come from.
+let lastOffered: Offered = new Map();
+
 // This handler provides the initial list of the completion items.
 connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] => {
+  lastOffered = new Map();
   const { uri } = params.textDocument;
   const offset = offsetOf(params);
   const lineText = getTextOnLine(uri, params.position);
@@ -314,25 +319,15 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
     return [];
   }
   const { line, character } = params.position;
-  return completionItems(index.analyses(uri), ResolvedFile.fromFileURL(uri), offset, completionRequestAt(lineText, character), line, character);
+  return completionItems(index.analyses(uri), ResolvedFile.fromFileURL(uri), offset, completionRequestAt(lineText, character), line, character,
+    lastOffered);
 });
 
-function toDocumentationMarkdown(name: string, info: { sig?: string, desc?: string, params?: string[] }): string {
-  if (!info.sig) {
-    return '';
+connection.onCompletionResolve((item: CompletionItem) => {
+  if (resolveUserItem(item, lastOffered)) {
+    return item;
   }
 
-  return `## ${name}
-
-\`${info.sig}\`
-
-${info.desc}
-
-### Params:
-${info.params?.map(p => ` - ${p}`).join('\n')}`;
-}
-
-connection.onCompletionResolve((item: CompletionItem) => {
   const name = item.label;
 
   const info = builtinInfo(name);
@@ -340,7 +335,7 @@ connection.onCompletionResolve((item: CompletionItem) => {
     item.detail = info.sig;
     item.documentation = {
       kind: 'markdown',
-      value: toDocumentationMarkdown(name, info),
+      value: builtinMarkdown(name, info),
     };
     if (info.deprecated) {
       item.tags = [ CompletionItemTag.Deprecated ];
@@ -363,6 +358,12 @@ function getTextOnLine(textDocumentUri: string, position: Position): string | un
 }
 
 connection.onHover((params: HoverParams) => {
+  const offset = offsetOf(params);
+  const value = offset === undefined ? undefined : index.hover(params.textDocument.uri, offset);
+  if (value !== undefined) {
+    return { contents: { kind: 'markdown', value } };
+  }
+
   const textOnLine = getTextOnLine(params.textDocument.uri, params.position);
   if (!textOnLine) {
     return undefined;
@@ -372,7 +373,7 @@ connection.onHover((params: HoverParams) => {
   const info = builtinInfo(identifier);
   if (info) {
     return {
-      contents: toDocumentationMarkdown(identifier, info),
+      contents: builtinMarkdown(identifier, info),
     };
   }
 });
@@ -411,7 +412,7 @@ connection.onSignatureHelp((params: SignatureHelpParams) => {
     label: info.sig,
     documentation: {
       kind: 'markdown',
-      value: toDocumentationMarkdown(identifier, info),
+      value: builtinMarkdown(identifier, info),
     },
     activeParameter: numCommas,
     parameters: info.params.map(p => {
