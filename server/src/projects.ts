@@ -160,7 +160,8 @@ export function makeFileResolver(editorText: (uri: string) => string | undefined
 // The file's current text, parsed; undefined when it cannot be read.
 export type ParseFile = (uri: string) => ProjectDocument | undefined;
 
-type IndexedProject = { root: string, files: string[], analysis: Analysis, warnings: Warning[] };
+// analysed: the parse of the root that analysis comes from.
+type IndexedProject = { root: string, files: string[], analysis: Analysis, warnings: Warning[], analysed?: ProjectDocument };
 
 // One analysis per project, of its root's syntax tree, into which the parser has pasted every #include. Each file takes
 // its outline, lookups and warnings from the projects that contain it. Every change is analysed before the call
@@ -179,9 +180,9 @@ export class ProjectIndex {
 
   // Returns every known URI, and those it dropped, so that their old diagnostics are cleared.
   scan(uris: string[]): string[] {
-    const dropped = this.reparse(uris);
+    const { dropped } = this.reparse(uris);
     this.buildProjects();
-    this.projects.forEach(project => this.analyse(project));
+    this.analyseChanged();
     return [ ...this.documents.keys(), ...dropped ];
   }
 
@@ -189,38 +190,51 @@ export class ProjectIndex {
   // file that left a project loses that project's warnings, and every dropped one.
   update(uri: string): string[] {
     const isNew = !this.documents.has(uri);
+    const before = this.documents.get(uri);
     const document = this.parseFile(uri);
     if (!document) {
       return this.remove(uri);
     }
-    const includedBefore = includedUris(this.documents.get(uri));
     this.documents.set(uri, document);
-    // A new file can be one that an #include could not find, and no project links them, since the parser leaves such an
-    // #include out of chunk.includes: the files whose last parse had one are parsed again.
+    const stopped = this.reparse(stoppedIncluding(before, document));
     if (isNew) {
-      return this.scan([ ...this.documents.keys() ]
-        .filter(other => other !== uri && (this.documents.get(other)!.chunk.unresolvedIncludes?.length ?? 0) > 0));
+      // A new file can be one that an #include could not find, and no project links them, since the parser leaves such an
+      // #include out of chunk.includes: the files whose last parse had one are parsed again.
+      const waiting = [ ...this.documents.keys() ]
+        .filter(other => other !== uri && (this.documents.get(other)!.chunk.unresolvedIncludes?.length ?? 0) > 0);
+      const { dropped } = this.reparse(waiting);
+      this.buildProjects();
+      // An includer can have read the file before the editor had it, from a folder the scan and the file watcher leave
+      // out: the roots that contain it are parsed again, so that they take its current text.
+      const roots = this.projectsOf(uri).map(project => project.root).filter(root => root !== uri && !waiting.includes(root));
+      if (roots.length > 0) {
+        dropped.push(...this.reparse(roots).dropped);
+        this.buildProjects();
+      }
+      this.analyseChanged();
+      return [ ...this.documents.keys(), ...stopped.dropped, ...dropped ];
     }
-    let rebuilt = !sameSet(includedBefore, includedUris(document)) || this.projectsOf(uri).length === 0;
+    let rebuilt = stopped.changed || !sameSet(includedUris(before), includedUris(document)) || this.projectsOf(uri).length === 0;
     if (rebuilt) {
       this.buildProjects();
     }
     const containing = this.projectsOf(uri);
-    const dropped = this.reparse(containing.map(project => project.root).filter(root => root !== uri));
-    if (dropped.length > 0) {
+    const roots = this.reparse(containing.map(project => project.root).filter(root => root !== uri));
+    if (roots.changed) {
       this.buildProjects();
       rebuilt = true;
     }
-    (rebuilt ? this.projects : containing).forEach(project => this.analyse(project));
+    this.analyseChanged();
+    const dropped = [ ...stopped.dropped, ...roots.dropped ];
     return rebuilt ? [ ...this.documents.keys(), ...dropped ] : unique([ uri, ...containing.flatMap(project => project.files) ]);
   }
 
   remove(uri: string): string[] {
     const roots = this.projectsOf(uri).map(project => project.root).filter(root => root !== uri);
     this.documents.delete(uri);
-    const dropped = this.reparse(roots);
+    const { dropped } = this.reparse(roots);
     this.buildProjects();
-    this.projects.forEach(project => this.analyse(project));
+    this.analyseChanged();
     return [ ...this.documents.keys(), uri, ...dropped ];
   }
 
@@ -279,31 +293,57 @@ export class ProjectIndex {
         trees.push({ root: findProjectsRecursive(uri, new Map(), this.documents)! });
       }
     }
+    // A project keeps its analysis while its root's parse is the same: analyseChanged skips it.
+    const previous = new Map(this.projects.map(project => [ project.root, project ]));
     this.projects = trees
-      .map(project => ({
-        root: project.root.document.textDocument.uri, files: getProjectFiles(project), analysis: emptyAnalysis(), warnings: [],
-      }))
+      .map(project => {
+        const root = project.root.document.textDocument.uri;
+        const { analysis, warnings, analysed } = previous.get(root) ?? { analysis: emptyAnalysis(), warnings: [] };
+        return { root, files: getProjectFiles(project), analysis, warnings, analysed };
+      })
       .sort((a, b) => compare(a.root, b.root));
   }
 
-  // A file that cannot be parsed now is dropped, as update drops it, so that nothing is analysed from its old text.
-  // Returns the dropped ones.
-  private reparse(uris: string[]): string[] {
+  // A file that cannot be parsed now is dropped, as update drops it, so that nothing is analysed from its old text. A
+  // file that a new parse no longer includes is parsed again too: one that is gone is dropped, and so counts as new when
+  // it comes back. changed: whether some file now includes other files than before.
+  private reparse(uris: string[]): { dropped: string[], changed: boolean } {
     const dropped: string[] = [];
-    for (const uri of uris) {
+    let changed = false;
+    const queue = [ ...uris ];
+    const done = new Set<string>();
+    for (let uri = queue.shift(); uri !== undefined; uri = queue.shift()) {
+      if (done.has(uri)) {
+        continue;
+      }
+      done.add(uri);
+      const before = this.documents.get(uri);
       const document = this.parseFile(uri);
       if (document) {
         this.documents.set(uri, document);
+        changed ||= !sameSet(includedUris(before), includedUris(document));
+        queue.push(...stoppedIncluding(before, document));
       } else {
         this.documents.delete(uri);
         dropped.push(uri);
+        changed = true;
       }
     }
-    return dropped;
+    return { dropped, changed };
+  }
+
+  // A project's analysis comes from its root's parse alone, so it holds until the root is parsed again.
+  private analyseChanged(): void {
+    for (const project of this.projects) {
+      if (project.analysed !== this.documents.get(project.root)) {
+        this.analyse(project);
+      }
+    }
   }
 
   // Never keeps an earlier result: one that failed gives way to an empty analysis.
   private analyse(project: IndexedProject): void {
+    project.analysed = this.documents.get(project.root);
     try {
       project.analysis = analyze(this.documents.get(project.root)!.chunk);
       project.warnings = warningsOf(project.analysis);
@@ -330,6 +370,12 @@ export class ProjectIndex {
 
 function includedUris(document: ProjectDocument | undefined): Set<string> {
   return new Set(document?.chunk.includes?.map(include => include.resolvedFile.fileURL));
+}
+
+// The files the earlier parse included and the new one does not, the file itself left out.
+function stoppedIncluding(before: ProjectDocument | undefined, after: ProjectDocument): string[] {
+  const now = includedUris(after);
+  return [ ...includedUris(before) ].filter(uri => !now.has(uri) && uri !== after.textDocument.uri);
 }
 
 function sameSet(a: Set<string>, b: Set<string>): boolean {

@@ -456,4 +456,70 @@ describe('ProjectIndex', () => {
     deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 2, 0)).map(loc), [ 'b.lua 1:9-1:15' ]);
     eq(resend.includes(uriOf('main.p8')), true);
   });
+
+  const diskOf = (onDisk: Map<string, string>): FileResolver => ({
+    doesFileExist: p => onDisk.has(path.basename(p)),
+    isFile: p => onDisk.has(path.basename(p)),
+    loadFileContents: p => {
+      const text = onDisk.get(path.basename(p));
+      if (text === undefined) {
+        throw new Error(`not found: ${p}`);
+      }
+      return text;
+    },
+  });
+
+  it('parses the includer again when a file it read before the editor had it is opened', () => {
+    const files: Record<string, string> = {};
+    const onDisk = new Map([[ 'main.p8', '#include .shared/lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ]]);
+    const index = indexOver(files, { disk: diskOf(onDisk) });
+    // The scan leaves out the dot-folder, and the file watcher does not report it.
+    index.scan([ uriOf('main.p8') ]);
+    onDisk.set('lib.lua', '-- moved down\n\nfunction helper() end');
+    files['lib.lua'] = onDisk.get('lib.lua')!;
+    index.update(uriOf('.shared/lib.lua'));
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn({ 'main.p8': onDisk.get('main.p8')! }, 'main.p8', 2, 0)).map(loc),
+      [ 'lib.lua 3:9-3:15' ]);
+  });
+
+  it('drops an included file whose folder is deleted, and resolves its #include when it comes back', () => {
+    const files: Record<string, string> = {};
+    const onDisk = new Map([[ 'main.p8', 'only_in_main = 1\n#include lib/x.lua\nhelper()' ], [ 'x.lua', 'function helper() return only_in_main end' ]]);
+    const index = indexOver(files, { disk: diskOf(onDisk) });
+    index.scan([ uriOf('main.p8'), uriOf('lib/x.lua') ]);
+    const x = onDisk.get('x.lua')!;
+    // The file watcher reports the folder only, which the server leaves out; then main.p8 is edited.
+    onDisk.delete('x.lua');
+    files['main.p8'] = onDisk.get('main.p8')! + '\n';
+    const resend = index.update(uriOf('main.p8'));
+    eq(index.document(uriOf('lib/x.lua')), undefined);
+    eq(resend.includes(uriOf('lib/x.lua')), true);
+    deepStrictEqual(index.warnings(uriOf('lib/x.lua')), []);
+    onDisk.set('x.lua', x);
+    index.update(uriOf('lib/x.lua'));
+    deepStrictEqual(index.document(uriOf('main.p8'))!.errors, []);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 3, 0)).map(loc), [ 'x.lua 1:9-1:15' ]);
+  });
+
+  it('lists the fields a file sets on a function of its includer under the function\'s name', () => {
+    const index = scanned({ 'main.p8': 'local function f() end\n#include lib.lua', 'lib.lua': 'f.x = 1\nf.y = 2' });
+    deepStrictEqual(outlineLines(index.outline(uriOf('lib.lua'))), [ 'f [Table]', '  x [Field]', '  y [Field]' ]);
+    const inBody = scanned({ 'main.p8': 'function _init()\n  #include lib.lua\nend', 'lib.lua': 'function helper() end\n_init.x = 1' });
+    deepStrictEqual(outlineLines(inBody.outline(uriOf('lib.lua'))), [ 'helper() [Function]', '_init [Table]', '  x [Field]' ]);
+  });
+
+  it('keeps the analysis of a project whose root is not parsed again', () => {
+    const files: Record<string, string> = { 'main.p8': '#include lib.lua', 'lib.lua': 'x = 1', 'other.p8': 'y = 2' };
+    const index = scanned(files);
+    const [ other ] = index.analyses(uriOf('other.p8'));
+    const [ main ] = index.analyses(uriOf('main.p8'));
+    files['new.lua'] = 'z = 3';
+    index.update(uriOf('new.lua'));
+    eq(index.analyses(uriOf('other.p8'))[0], other);
+    eq(index.analyses(uriOf('main.p8'))[0], main);
+    files['lib.lua'] = 'x = 2';
+    index.update(uriOf('lib.lua'));
+    eq(index.analyses(uriOf('other.p8'))[0], other);
+    eq(index.analyses(uriOf('main.p8'))[0] !== main, true);
+  });
 });

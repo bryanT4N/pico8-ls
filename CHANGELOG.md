@@ -31,6 +31,7 @@
 - A new file, or one opened outside the workspace folders, gets Go to Definition and completion straight away, and an `#include` written before the file existed works as soon as it is created.
 - Fixed: setting `pico-8-ls.maxNumberOfProblems` to null hid every problem, and a negative number dropped some of them. Now null means the default of 100 and a negative number means 0. The settings editor asks for a whole number of at least 0.
 - Fixed: hovering over a name like `constructor` or `toString` showed an empty box. Hover, completion details and signature help now look up only PICO-8's own built-in functions.
+- Fixed: a file whose name has characters such as parentheses, like `lib(2).lua`, now works with `#include`: edits to it show up in the files that include it, and it no longer gets false warnings of its own.
 
 ## 0.2.0 (unreleased)
 
