@@ -196,7 +196,7 @@ export class ProjectIndex {
       return this.remove(uri);
     }
     this.documents.set(uri, document);
-    const stopped = this.reparse(stoppedIncluding(before, document));
+    const stopped = this.reparse(stoppedIncluding(before, document, this.documents));
     if (isNew) {
       // A new file can be one that an #include could not find, and no project links them, since the parser leaves such an
       // #include out of chunk.includes: the files whose last parse had one are parsed again.
@@ -235,7 +235,7 @@ export class ProjectIndex {
     const { dropped } = this.reparse(roots);
     this.buildProjects();
     this.analyseChanged();
-    return [ ...this.documents.keys(), uri, ...dropped ];
+    return unique([ ...this.documents.keys(), uri, ...dropped ]);
   }
 
   outline(uri: string): CodeSymbol[] {
@@ -322,7 +322,7 @@ export class ProjectIndex {
       if (document) {
         this.documents.set(uri, document);
         changed ||= !sameSet(includedUris(before), includedUris(document));
-        queue.push(...stoppedIncluding(before, document));
+        queue.push(...stoppedIncluding(before, document, this.documents));
       } else {
         this.documents.delete(uri);
         dropped.push(uri);
@@ -372,10 +372,11 @@ function includedUris(document: ProjectDocument | undefined): Set<string> {
   return new Set(document?.chunk.includes?.map(include => include.resolvedFile.fileURL));
 }
 
-// The files the earlier parse included and the new one does not, the file itself left out.
-function stoppedIncluding(before: ProjectDocument | undefined, after: ProjectDocument): string[] {
+// The files the index has that the earlier parse included and the new one does not, the file itself left out. Parsing
+// one the index never had, like a file in a dot-folder, would add it as a project of its own, with false warnings.
+function stoppedIncluding(before: ProjectDocument | undefined, after: ProjectDocument, documents: ParsedDocumentsMap): string[] {
   const now = includedUris(after);
-  return [ ...includedUris(before) ].filter(uri => !now.has(uri) && uri !== after.textDocument.uri);
+  return [ ...includedUris(before) ].filter(uri => !now.has(uri) && uri !== after.textDocument.uri && documents.has(uri));
 }
 
 function sameSet(a: Set<string>, b: Set<string>): boolean {

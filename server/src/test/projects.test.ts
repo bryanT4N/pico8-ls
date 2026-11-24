@@ -274,6 +274,7 @@ describe('ProjectIndex', () => {
     delete files['lib.lua'];
     const resend = index.remove(uriOf('lib.lua'));
     deepStrictEqual([ resend.includes(uriOf('main.p8')), resend.includes(uriOf('lib.lua')) ], [ true, true ]);
+    eq(new Set(resend).size, resend.length);
     eq(index.document(uriOf('main.p8'))!.errors.map(formatError).includes('main.p8 1:0 Can\'t #include lib.lua from main.p8: File does not exist'), true);
     deepStrictEqual(index.definitions(uriOf('main.p8'), helper), []);
     deepStrictEqual(index.warnings(uriOf('main.p8')).map(formatError), [ 'main.p8 2:0 undefined variable: helper' ]);
@@ -521,5 +522,24 @@ describe('ProjectIndex', () => {
     index.update(uriOf('lib.lua'));
     eq(index.analyses(uriOf('other.p8'))[0], other);
     eq(index.analyses(uriOf('main.p8'))[0] !== main, true);
+  });
+
+  it('does not add a file it never parsed when an #include of it goes', () => {
+    const files: Record<string, string> = {};
+    const onDisk = new Map([[ 'main.p8', 'x = 1\n#include .shared/lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() return x end' ]]);
+    const index = indexOver(files, { disk: diskOf(onDisk) });
+    const lib = uriOf('.shared/lib.lua');
+    const staysOut = (resend: string[]) =>
+      deepStrictEqual([ resend.includes(lib), index.document(lib), index.analyses(lib), index.warnings(lib) ], [ false, undefined, [], []]);
+    // The scan leaves out the dot-folder, and the file watcher does not report it.
+    staysOut(index.scan([ uriOf('main.p8') ]));
+    // The #include line is deleted in the editor; then the file is closed without saving, and the line is deleted on
+    // disk too before a new scan.
+    files['main.p8'] = 'x = 1\nhelper()';
+    staysOut(index.update(uriOf('main.p8')));
+    delete files['main.p8'];
+    index.update(uriOf('main.p8'));
+    onDisk.set('main.p8', 'x = 1\nhelper()');
+    staysOut(index.scan([ uriOf('main.p8') ]));
   });
 });
