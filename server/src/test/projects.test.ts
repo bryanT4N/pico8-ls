@@ -315,7 +315,7 @@ describe('ProjectIndex', () => {
       [[ 'lib.lua', [ 'undefined variable: gravity' ]], [ 'main.p8', []]]);
   });
 
-  it('keeps the analysis of <cart> consistent', function () {
+  it('resolves a fresh #include after refreshAll', () => {
     const files: Record<string, string> = { 'main.p8': '#include lib.lua\nhelper()' };
     const index = indexOver(files);
     index.scan([ uriOf('main.p8') ]);
