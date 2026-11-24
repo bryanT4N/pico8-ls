@@ -286,7 +286,8 @@ class Binder extends ASTVisitor<BinderScope> {
       this.recordValue(entry, value);
       const forward = !value || value.type === 'NilLiteral';
       this.topScope().decls.set(variable.name, { kind: 'local', symbol, entry, stmt: node, previous, forward });
-      this.declare(this.topScope(), symbol, node.loc!.end);
+      // At the end of the statement the cursor is still on its value, as in local a = pl.
+      this.declare(this.topScope(), symbol, node.loc!.end, true);
       return { about: entry, defines: entry };
     }));
   }
@@ -679,10 +680,10 @@ class Binder extends ASTVisitor<BinderScope> {
     this.references.push(reference);
   }
 
-  // For completion: symbol is visible in scope from `from` on.
-  private declare(scope: BinderScope, symbol: LuaSymbol, from: CodeLocation): void {
+  // For completion: symbol is visible in scope from `from` on, or only past it.
+  private declare(scope: BinderScope, symbol: LuaSymbol, from: CodeLocation, past = false): void {
     const order = this.nextOrder(from.filename.path);
-    scope.analysisScope.declarations.push({ symbol, file: from.filename, visibleFrom: from.index, order });
+    scope.analysisScope.declarations.push({ symbol, file: from.filename, visibleFrom: past ? from.index + 1 : from.index, order });
   }
 
   private link(entry: OutlineEntry, symbol: LuaSymbol | undefined): OutlineEntry {

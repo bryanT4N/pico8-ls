@@ -76,6 +76,12 @@ describe('completionItems', () => {
     deepStrictEqual(names(itemsAt(code, 11, 0)), [ 'a', 'b', 'top' ]);
   });
 
+  it('offers a local only after its statement', () => {
+    const code = lines('local a = pl', '');
+    deepStrictEqual(names(itemsAt(code, 1, 12)), []);
+    deepStrictEqual(names(itemsAt(code, 2, 0)), [ 'a' ]);
+  });
+
   it('offers neither a later top-level local nor dotted names', () => {
     const code = lines('function _update()', '  p', 'end', 'player = { x = 1 }', 'player.hp = 3', 'local pal_index = 1');
     deepStrictEqual(names(itemsAt(code, 2, 3)), [ '_update', 'player' ]);
