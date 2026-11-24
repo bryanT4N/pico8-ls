@@ -244,6 +244,38 @@ describe('ProjectIndex', () => {
     eq(index.analyses(uriOf('lib.lua')).length, 1);
   });
 
+  it('groups the methods of an included file across a tab line of the main file', () => {
+    const index = scanned({ 'main.p8': '#include player.lua\n-->8\nx = 1',
+      'player.lua': 'player = {}\nfunction player:update() end\nfunction player:draw() end' });
+    deepStrictEqual(outlineLines(index.outline(uriOf('player.lua'))), [ 'player [Table]', '  update() [Method]', '  draw() [Method]' ]);
+  });
+
+  it('keeps the methods of an included file in place across its own region lines', () => {
+    const index = scanned({ 'main.p8': '#include player.lua',
+      'player.lua': 'player = {}\nfunction player:update() end\n-- #region drawing\nfunction player:draw() end\n-- #endregion' });
+    deepStrictEqual(outlineLines(index.outline(uriOf('player.lua'))), [ 'player [Table]', 'player:update() [Method]', 'player:draw() [Method]' ]);
+  });
+
+  it('drops a root that cannot be parsed again, so that nothing is analysed from its old text', () => {
+    const files: Record<string, string> = { 'main.p8': '#include lib.lua', 'lib.lua': 'function old() end' };
+    const index = scanned(files);
+    delete files['main.p8'];
+    files['lib.lua'] = 'function new() end';
+    const resend = index.update(uriOf('lib.lua'));
+    deepStrictEqual(outlineLines(index.outline(uriOf('lib.lua'))), [ 'new() [Function]' ]);
+    eq(index.document(uriOf('main.p8')) === undefined, true);
+    eq(resend.includes(uriOf('main.p8')), true);
+  });
+
+  it('sends again the diagnostics of a file that a new scan cannot parse', () => {
+    const files: Record<string, string> = { 'main.p8': 'x = 1', 'gone.lua': 'print(nope)' };
+    const index = scanned(files);
+    deepStrictEqual(index.warnings(uriOf('gone.lua')).map(formatError), [ 'gone.lua 1:6 undefined variable: nope' ]);
+    delete files['gone.lua'];
+    eq(index.scan([ uriOf('main.p8'), uriOf('gone.lua') ]).includes(uriOf('gone.lua')), true);
+    deepStrictEqual(index.diagnostics([ uriOf('gone.lua') ], 100), [{ uri: uriOf('gone.lua'), diagnostics: [] }]);
+  });
+
   it('goes from an #include line to the file', () => {
     const files = { 'main.p8': '#include lib.lua', 'lib.lua': 'x = 1' };
     const found = scanned(files).definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 1, 3));

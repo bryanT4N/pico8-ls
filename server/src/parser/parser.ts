@@ -4,6 +4,7 @@ import * as errors from './errors';
 import { errMessages, raiseErrForToken } from './errors';
 import {
   CallExpression,
+  Comment_,
   Expression,
   Identifier,
   Literal,
@@ -98,6 +99,8 @@ export default class Parser {
   private endBeforeHoisted: CodeLocation | null = null;
 
   includes: Include[] = [];
+
+  private includedComments: Comment_[] = [];
 
   private includeParses = 0;
   private reportedTooManyIncludeParses = false;
@@ -259,6 +262,7 @@ export default class Parser {
     const chunk = this.finishNode(AST.chunk(body, this.errors));
     chunk.includes = this.includes;
     chunk.comments = this.lexer.comments;
+    chunk.includedComments = this.includedComments;
 
     return chunk;
   }
@@ -442,6 +446,9 @@ export default class Parser {
       this.lexerStack.pop();
       this.locations.length = locationDepth;
       this.addLexerErrors(newLexer);
+      for (const comment of newLexer.comments) {
+        this.includedComments.push(comment);
+      }
     }
   }
 

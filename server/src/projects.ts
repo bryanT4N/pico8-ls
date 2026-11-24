@@ -144,23 +144,16 @@ export class ProjectIndex {
     return this.documents.get(uri);
   }
 
-  // Returns every known URI.
+  // Returns every known URI, and those it dropped, so that their old diagnostics are cleared.
   scan(uris: string[]): string[] {
-    for (const uri of uris) {
-      const document = this.parseFile(uri);
-      if (document) {
-        this.documents.set(uri, document);
-      } else {
-        this.documents.delete(uri);
-      }
-    }
+    const dropped = this.reparse(uris);
     this.buildProjects();
     this.projects.forEach(project => this.analyse(project));
-    return [ ...this.documents.keys() ];
+    return [ ...this.documents.keys(), ...dropped ];
   }
 
-  // Returns the URIs whose diagnostics to send again: after the projects are rebuilt, every known one, so that a file
-  // that left a project loses that project's warnings.
+  // Returns the URIs whose diagnostics to send again. After the projects are rebuilt, that is every known one, so that a
+  // file that left a project loses that project's warnings, and every dropped one.
   update(uri: string): string[] {
     const document = this.parseFile(uri);
     if (!document) {
@@ -168,27 +161,27 @@ export class ProjectIndex {
     }
     const includedBefore = includedUris(this.documents.get(uri));
     this.documents.set(uri, document);
-    const rebuild = !sameSet(includedBefore, includedUris(document)) || this.projectsOf(uri).length === 0;
-    if (rebuild) {
+    let rebuilt = !sameSet(includedBefore, includedUris(document)) || this.projectsOf(uri).length === 0;
+    if (rebuilt) {
       this.buildProjects();
     }
     const containing = this.projectsOf(uri);
-    for (const { root } of containing) {
-      if (root !== uri) {
-        this.reparse(root);
-      }
+    const dropped = this.reparse(containing.map(project => project.root).filter(root => root !== uri));
+    if (dropped.length > 0) {
+      this.buildProjects();
+      rebuilt = true;
     }
-    (rebuild ? this.projects : containing).forEach(project => this.analyse(project));
-    return rebuild ? [ ...this.documents.keys() ] : unique([ uri, ...containing.flatMap(project => project.files) ]);
+    (rebuilt ? this.projects : containing).forEach(project => this.analyse(project));
+    return rebuilt ? [ ...this.documents.keys(), ...dropped ] : unique([ uri, ...containing.flatMap(project => project.files) ]);
   }
 
   remove(uri: string): string[] {
     const roots = this.projectsOf(uri).map(project => project.root).filter(root => root !== uri);
     this.documents.delete(uri);
-    roots.forEach(root => this.reparse(root));
+    const dropped = this.reparse(roots);
     this.buildProjects();
     this.projects.forEach(project => this.analyse(project));
-    return [ ...this.documents.keys(), uri ];
+    return [ ...this.documents.keys(), uri, ...dropped ];
   }
 
   outline(uri: string): CodeSymbol[] {
@@ -253,12 +246,20 @@ export class ProjectIndex {
       .sort((a, b) => compare(a.root, b.root));
   }
 
-  // A root that cannot be read now keeps its last parse.
-  private reparse(uri: string): void {
-    const document = this.parseFile(uri);
-    if (document) {
-      this.documents.set(uri, document);
+  // A file that cannot be parsed now is dropped, as update drops it, so that nothing is analysed from its old text.
+  // Returns the dropped ones.
+  private reparse(uris: string[]): string[] {
+    const dropped: string[] = [];
+    for (const uri of uris) {
+      const document = this.parseFile(uri);
+      if (document) {
+        this.documents.set(uri, document);
+      } else {
+        this.documents.delete(uri);
+        dropped.push(uri);
+      }
     }
+    return dropped;
   }
 
   // Never keeps an earlier result: one that failed gives way to an empty analysis.

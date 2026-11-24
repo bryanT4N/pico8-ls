@@ -169,5 +169,8 @@ export type Chunk = {
   block: Block,
   errors: ParseError[],
   comments?: Comment_[],
+  // The comments of the #included files, kept apart: the formatter, folding and outline regions take `comments` as the
+  // main file's own.
+  includedComments?: Comment_[],
   includes?: Include[],
 };

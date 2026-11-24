@@ -76,7 +76,7 @@ class Binder extends ASTVisitor<BinderScope> {
   // Names and member expressions that a statement hook recorded before the visitor reaches them.
   private readonly recorded = new Set<ASTNode>();
 
-  constructor(private readonly boundaryLines: number[]) {
+  constructor(private readonly boundaryLines: Map<string, number[]>) {
     super();
   }
 
@@ -771,7 +771,7 @@ export function emptyAnalysis(): Analysis {
 }
 
 export function analyze(chunk: Chunk): Analysis {
-  const binder = new Binder(findBoundaryLines(chunk.comments ?? []));
+  const binder = new Binder(findBoundaryLines([ ...(chunk.comments ?? []), ...(chunk.includedComments ?? []) ]));
   binder.visit(chunk);
   const referencesByFile = new Map<string, Reference[]>();
   const membersByKey = new Map<string, LuaSymbol[]>();

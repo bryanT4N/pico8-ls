@@ -10,13 +10,21 @@ import { promoteToTable } from './members';
 // grouped under T.
 export type StatementInfo = { about?: OutlineEntry, defines?: OutlineEntry, methods?: Array<{ entry: OutlineEntry, key: string }> };
 
-export function findBoundaryLines(comments: Comment_[]): number[] {
-  return comments
-    .filter(comment => isTabMarker(comment) || regionMarkerOf(comment) !== undefined)
-    .map(comment => comment.loc!.start.line);
+// The lines of the tab and region markers, by ResolvedFile.path: a file's markers bound only the method runs in it.
+export function findBoundaryLines(comments: Comment_[]): Map<string, number[]> {
+  const lines = new Map<string, number[]>();
+  for (const comment of comments) {
+    if (isTabMarker(comment) || regionMarkerOf(comment) !== undefined) {
+      const { filename, line } = comment.loc!.start;
+      const fileLines = lines.get(filename.path) ?? [];
+      fileLines.push(line);
+      lines.set(filename.path, fileLines);
+    }
+  }
+  return lines;
 }
 
-export function groupMethodRuns(statements: Statement[], info: Map<Statement, StatementInfo>, boundaryLines: number[]): void {
+export function groupMethodRuns(statements: Statement[], info: Map<Statement, StatementInfo>, boundaryLines: Map<string, number[]>): void {
   const tables = new Set<OutlineEntry>();
   for (const statement of statements) {
     const { about, methods } = info.get(statement) ?? {};
@@ -29,7 +37,7 @@ export function groupMethodRuns(statements: Statement[], info: Map<Statement, St
   }
 }
 
-function groupRun(table: OutlineEntry, statements: Statement[], info: Map<Statement, StatementInfo>, boundaryLines: number[]): void {
+function groupRun(table: OutlineEntry, statements: Statement[], info: Map<Statement, StatementInfo>, boundaryLines: Map<string, number[]>): void {
   const first = statements.findIndex(statement => info.get(statement)?.defines === table);
   if (first === -1) {
     return;
@@ -65,7 +73,8 @@ function groupRun(table: OutlineEntry, statements: Statement[], info: Map<Statem
   if (statements.slice(first + 1, last + 1).some(statement => info.get(statement)?.about !== table)) {
     return;
   }
-  if (boundaryLines.some(line => definition.loc!.start.line < line && line <= lastMethod.loc!.end.line)) {
+  const boundaries = boundaryLines.get(definition.loc!.start.filename.path) ?? [];
+  if (boundaries.some(line => definition.loc!.start.line < line && line <= lastMethod.loc!.end.line)) {
     return;
   }
   // Breadcrumbs only follow ranges that contain the cursor, so the stretched table must not cover an entry

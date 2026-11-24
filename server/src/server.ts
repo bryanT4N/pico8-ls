@@ -264,7 +264,15 @@ function getDocumentSettings(resource: string): Thenable<DocumentSettings> {
 connection.onDocumentSymbol((params: DocumentSymbolParams) => {
   const { uri } = params.textDocument;
   const document = index.document(uri);
-  return document ? buildDocumentSymbols(document.textDocument, document.chunk.comments ?? [], index.outline(uri)) : [];
+  if (!document) {
+    return [];
+  }
+  try {
+    return buildDocumentSymbols(document.textDocument, document.chunk.comments ?? [], index.outline(uri));
+  } catch (e) {
+    console.error('Failed to build the outline', e);
+    return [];
+  }
 });
 
 function offsetOf(params: TextDocumentPositionParams): number | undefined {
