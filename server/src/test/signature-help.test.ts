@@ -195,4 +195,11 @@ describe('signatureHelpAt', () => {
     // A field that holds no function is not called as a method of another table.
     strictEqual(helpAt(lines(methods, 'obj = {}', 'obj.f = 1', 'obj:f(')), undefined);
   });
+
+  it('gives only builtins with no analysis, as the server does when the project\'s signature help throws', () => {
+    const spr = lines('function f(a) end', 'spr(1, ');
+    deepStrictEqual(signatureHelpAt([], testFile(), spr, spr.length), helpAt(lines('x = 1', 'spr(1, ')));
+    const f = lines('function f(a) end', 'f(');
+    strictEqual(signatureHelpAt([], testFile(), f, f.length), undefined);
+  });
 });

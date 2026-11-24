@@ -22,6 +22,7 @@ import { computeFoldingRanges } from './folding-ranges';
 import { errorsInFile, maxProblems } from './diagnostics';
 import { completionItems, completionRequestAt, Offered, resolveUserItem, wordAt } from './completion';
 import { builtinMarkdown } from './hover';
+import { signatureHelpAt } from './signature-help';
 
 console.log('PICO-8-LS language server starting.');
 
@@ -324,8 +325,12 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
 });
 
 connection.onCompletionResolve((item: CompletionItem) => {
-  if (resolveUserItem(item, lastOffered)) {
-    return item;
+  try {
+    if (resolveUserItem(item, lastOffered)) {
+      return item;
+    }
+  } catch (e) {
+    console.error('Failed to resolve the completion item ' + item.label, e);
   }
 
   const name = item.label;
@@ -359,9 +364,13 @@ function getTextOnLine(textDocumentUri: string, position: Position): string | un
 
 connection.onHover((params: HoverParams) => {
   const offset = offsetOf(params);
-  const value = offset === undefined ? undefined : index.hover(params.textDocument.uri, offset);
-  if (value !== undefined) {
-    return { contents: { kind: 'markdown', value } };
+  try {
+    const value = offset === undefined ? undefined : index.hover(params.textDocument.uri, offset);
+    if (value !== undefined) {
+      return { contents: { kind: 'markdown', value } };
+    }
+  } catch (e) {
+    console.error('Failed to give the hover', e);
   }
 
   const textOnLine = getTextOnLine(params.textDocument.uri, params.position);
@@ -384,7 +393,14 @@ connection.onSignatureHelp((params: SignatureHelpParams) => {
   if (!document) {
     return undefined;
   }
-  return index.signatureHelp(uri, document.offsetAt(params.position), document.getText());
+  const offset = document.offsetAt(params.position);
+  try {
+    return index.signatureHelp(uri, offset, document.getText());
+  } catch (e) {
+    console.error('Failed to give signature help', e);
+    // With no analysis, only the builtins.
+    return signatureHelpAt([], ResolvedFile.fromFileURL(uri), document.getText(), offset);
+  }
 });
 
 connection.onDocumentFormatting((params: DocumentFormattingParams) => {
