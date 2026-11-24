@@ -2,7 +2,7 @@ import { MarkupContent, ParameterInformation, SignatureHelp, SignatureInformatio
 import { builtinMarkdown, pathOf, renderDoc } from './hover';
 import { definitionDoc, documentationOf, paramDoc } from './parser/analysis/docs';
 import { Analysis, Definition, LuaSymbol } from './parser/analysis/model';
-import { methodsNamed, visibleAt } from './parser/analysis/queries';
+import { methodsNamed, placeOf, visibleAt } from './parser/analysis/queries';
 import { builtinInfo } from './parser/builtins';
 import ResolvedFile from './parser/file-resolver';
 import Lexer from './parser/lexer';
@@ -18,9 +18,9 @@ type Signature = SignatureInformation & { activeParameter: number };
 
 const LEXED_FILE = new ResolvedFile('signature-help', 'signature-help');
 
-// The innermost ( still open at offset that follows a name path. The tokens are read from the start of the text, so
-// strings, comments, nesting and calls over several lines count as Lua reads them. Any other (, such as a grouping
-// parenthesis or a function's parameter list, is looked past.
+// The innermost call still open at offset. The tokens are read from the start of the text, so strings, comments,
+// nesting and calls over several lines count as Lua reads them. A grouping parenthesis and a function's parameter list
+// are looked past; inside a call on something other than a name path, such as get():hit( or f(x)(, there is none.
 export function callContextAt(text: string, offset: number): CallContext | undefined {
   const tokens: Token[] = [];
   try {
@@ -58,7 +58,10 @@ export function callContextAt(text: string, offset: number): CallContext | undef
   let inside = false;
   for (let i = open.length - 1; i >= 0; i--) {
     const { bracket, at, commas } = open[i];
-    const callee = bracket === '(' ? pathBefore(tokens, at) : undefined;
+    const callee = bracket === '(' ? calleeBefore(tokens, at) : undefined;
+    if (callee === 'unnamed') {
+      return undefined;
+    }
     if (callee) {
       return { ...callee, argument: inside ? null : commas };
     }
@@ -67,29 +70,36 @@ export function callContextAt(text: string, offset: number): CallContext | undef
   return undefined;
 }
 
-// The names right before tokens[at], separated by . or by a last :. Undefined when there are none, when a separator
-// follows something else, as in get():hit, or when `function` comes before them, as the definition function f( does.
-function pathBefore(tokens: Token[], at: number): { path: string[], colon: boolean } | undefined {
+// What the ( at tokens[at] is called on: names separated by . or by a last :, as in a.b.c or obj:m; 'unnamed' when it is
+// a call on something else, as in get():hit( or f(x)( or f{}(; undefined when it is no call, but a grouping parenthesis
+// or the parameter list of a function, as in function f(.
+function calleeBefore(tokens: Token[], at: number): { path: string[], colon: boolean } | 'unnamed' | undefined {
+  const previous = tokens[at - 1];
+  if (previous?.type === TokenType.StringLiteral || (previous?.type === TokenType.Punctuator && [ ')', ']', '}' ].includes(previous.value as string))) {
+    return 'unnamed';
+  }
+  if (previous?.type !== TokenType.Identifier) {
+    return undefined;
+  }
   const path: string[] = [];
   let colon = false;
   let i = at - 1;
   for (;;) {
-    const name = tokens[i];
-    if (name?.type !== TokenType.Identifier) {
-      return undefined;
-    }
-    path.unshift(name.value as string);
+    path.unshift(tokens[i].value as string);
     const separator = tokens[i - 1];
     if (separator?.type !== TokenType.Punctuator || (separator.value !== '.' && separator.value !== ':')) {
       break;
     }
     if (separator.value === ':') {
       if (path.length > 1) {
-        return undefined;
+        return 'unnamed';
       }
       colon = true;
     }
     i -= 2;
+    if (tokens[i]?.type !== TokenType.Identifier) {
+      return 'unnamed';
+    }
   }
   const before = tokens[i - 1];
   return before?.type === TokenType.Keyword && before.value === 'function' ? undefined : { path, colon };
@@ -104,9 +114,13 @@ export function signatureHelpAt(analyses: Analysis[], file: ResolvedFile, text: 
   }
   for (const analysis of analyses) {
     const signatures: Signature[] = [];
+    // A file included twice has its definitions twice.
+    const places = new Set<string>();
     for (const symbol of calleesOf(analysis, file, offset, call.path)) {
       for (const definition of symbol.definitions) {
-        if (definition.value?.type === 'FunctionDeclaration') {
+        const place = placeOf(definition.nameLoc);
+        if (definition.value?.type === 'FunctionDeclaration' && !places.has(place)) {
+          places.add(place);
           signatures.push(userSignature(analysis, symbol, definition, definition.value, call));
         }
       }

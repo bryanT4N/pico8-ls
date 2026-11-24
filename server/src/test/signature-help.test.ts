@@ -34,6 +34,13 @@ describe('signatureHelpAt', () => {
     deepStrictEqual(callContextAt(t, t.length), { path: [ 'spr' ], colon: false, argument: 1 });
   });
 
+  it('gives no signature in a call it cannot name, rather than the call around it', () => {
+    const outer = 'function outer(a, b) end';
+    strictEqual(helpAt(lines(outer, 'outer(f(x)(')), undefined);
+    strictEqual(helpAt(lines(outer, 'outer(get():hit(')), undefined);
+    strictEqual(helpAt(lines(outer, 'outer(make { x = 1 }(')), undefined);
+  });
+
   it('shows a user function with its doc and parameter docs', () => {
     const code = lines('x = 1', '-- creates a deep copy', '-- @param obj the table to copy', '-- @return the copy', 'function deep_copy(obj, depth) return obj end',
       'deep_copy(t, ');
@@ -104,6 +111,14 @@ describe('signatureHelpAt', () => {
     deepStrictEqual([ inMethod.signatures.length, inMethod.signatures[0].label, inMethod.activeParameter ], [ 1, 'entity:become(state)', 0 ]);
     const beforeEnd = helpAt(lines('function f(a, b) end', 'function g()', '  f(1, ', 'end'), 3, 7)!;
     deepStrictEqual([ beforeEnd.signatures[0].label, beforeEnd.activeParameter ], [ 'f(a, b)', 1 ]);
+  });
+
+  it('shows a function from a file included twice once, and each of two definitions', () => {
+    const code = lines('#include a.lua', '#include a.lua', 'f(1, ');
+    const a = analyzeCode(code, { 'a.lua': 'function f(x, y) end' });
+    deepStrictEqual(signatureHelpAt([ a.analysis ], testFile(), code, code.length)!.signatures.map(signature => signature.label), [ 'f(x, y)' ]);
+    const branches = helpAt(lines('if x then', '  function g(a) end', 'else', '  function g(a, b) end', 'end', 'g(1, '))!;
+    deepStrictEqual(branches.signatures.map(signature => signature.label), [ 'g(a)', 'g(a, b)' ]);
   });
 
   it('finds the call in a .p8 cart', () => {
