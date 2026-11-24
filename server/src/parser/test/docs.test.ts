@@ -1,5 +1,5 @@
 import { deepStrictEqual, strictEqual } from 'assert';
-import { Doc, documentationOf, parseDoc } from '../analysis/docs';
+import { Doc, Documentation, documentationOf, parseDoc } from '../analysis/docs';
 import { analyzeCode, symbolAt } from './test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
@@ -9,6 +9,10 @@ function docAt(code: string, line: number, column: number, files?: Record<string
   return documentationOf(a.analysis, symbolAt(a, line, column, filename)!).doc;
 }
 const text = (doc: Doc | undefined) => doc?.description;
+function documentationAt(code: string, line: number, column: number): Documentation {
+  const a = analyzeCode(code);
+  return documentationOf(a.analysis, symbolAt(a, line, column)!);
+}
 
 describe('doc comments', () => {
   it('takes the comment block right above a definition', () => {
@@ -72,6 +76,10 @@ describe('doc comments', () => {
       'pixels per frame');
   });
 
+  it('reads an end-of-line --- comment as a block reads it', () => {
+    strictEqual(text(docAt(lines('x = 1', 'speed = 2 --- pixels per frame', 'print(speed)'), 3, 6)), 'pixels per frame');
+  });
+
   it('takes no end-of-line comment of a function, and no --[[ ]] one', () => {
     strictEqual(text(docAt(lines('x = 1', 'function f() end -- one line', 'f()'), 3, 0)), undefined);
     strictEqual(text(docAt(lines('x = 1', 'y = 2 --[[prot]]', 'print(y)'), 3, 6)), undefined);
@@ -94,6 +102,27 @@ describe('doc comments', () => {
     strictEqual(text(docAt(lines('local f', 'x = 1', '-- does f', 'f = function(a) end', 'f(1)'), 5, 0)), 'does f');
     // A local given a function goes to the function only, not to its declaration.
     strictEqual(text(docAt(lines('x = 1', '-- the updater', 'local update', 'update = function() end', 'update()'), 5, 0)), undefined);
+  });
+
+  it('takes the doc where Go to Definition goes for a field first set with +=', () => {
+    const { definition, doc } = documentationAt(lines('p = {}', 'function p:update()', '  -- the speed', '  self.spd += 1', '  self.spd = 0', 'end',
+      'print(p.spd)'), 7, 8);
+    strictEqual(text(doc), 'the speed');
+    strictEqual(definition!.nameLoc.start.line, 4);
+  });
+
+  it('gives the function definition, or else the first place Go to Definition goes to, when there is no doc', () => {
+    const defined = documentationAt(lines('x = 1', 'f = nil', 'function f(a) end', 'f(1)'), 4, 0);
+    strictEqual(defined.doc, undefined);
+    strictEqual(defined.definition!.nameLoc.start.line, 3);
+    const assigned = documentationAt(lines('x = 1', 'speed = 2', 'function f()', '  speed = 3', 'end', 'print(speed)'), 6, 6);
+    strictEqual(assigned.doc, undefined);
+    strictEqual(assigned.definition!.nameLoc.start.line, 2);
+  });
+
+  it('takes text the parser throws on as no code', () => {
+    const nested = '('.repeat(100000);
+    strictEqual(text(docAt(lines('x = 1', '-- ' + nested, 'speed = 2'), 3, 0)), nested);
   });
 
   it('documents a parameter with its function\'s @param, and self with its table\'s doc', () => {

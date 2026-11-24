@@ -4,6 +4,7 @@ import Parser from '../parser';
 import { isTabMarker, regionMarkerOf } from '../region-markers';
 import { ASTNode } from '../types';
 import { Analysis, Definition, LuaSymbol } from './model';
+import { placeOf, targetsOf } from './queries';
 
 // name is 'return' for @return and @returns; only @param has param.
 export type DocTag = { name: string, param?: string, text: string };
@@ -35,25 +36,11 @@ export function documentationOf(analysis: Analysis, symbol: LuaSymbol): Document
   return { definition: sites.find(definition => definition.isFunction) ?? sites[0] };
 }
 
-// The definitions Go to Definition goes to, in the order the analysis came to them.
+// The definitions Go to Definition goes to, in the order the analysis came to them. An outline entry that no
+// definition made, such as t's in t.k = 1, has none.
 export function docSites(symbol: LuaSymbol): Definition[] {
-  const { definitions } = symbol;
-  if (symbol.kind === 'local') {
-    const functions = definitions.filter(definition => definition.isFunction);
-    return functions.length > 0 ? functions : definitions.filter(definition => !definition.compound).slice(0, 1);
-  }
-  if (symbol.kind === 'global' || symbol.kind === 'member') {
-    const files = new Set<string>();
-    return definitions.filter(definition => {
-      const file = definition.nameLoc.start.filename.path;
-      const firstInFile = !definition.compound && !files.has(file);
-      if (firstInFile) {
-        files.add(file);
-      }
-      return firstInFile || definition.isFunction;
-    });
-  }
-  return definitions.slice(0, 1);
+  const targets = new Set(targetsOf(symbol).map(placeOf));
+  return symbol.definitions.filter(definition => targets.has(placeOf(definition.nameLoc)));
 }
 
 // The comment block right above the definition, or else, for a variable, table or field, the comment at the end of
@@ -70,7 +57,7 @@ export function definitionDoc(analysis: Analysis, definition: Definition): Doc |
   const { start, end } = node.loc!;
   const comment = commentsIn(analysis, start.filename.path)?.trailing.find(trailing => trailing.loc!.start.line === end.line
     && trailing.loc!.start.index >= end.index && !isLong(trailing) && /^[\s,;]*$/.test(trailing.lineBefore.slice(end.column)));
-  const text = comment?.value.trim();
+  const text = comment && linesOf(comment)[0].trim();
   return text && !isSeparator(text) && !isCode(text) ? parseDoc(text) : undefined;
 }
 
@@ -234,16 +221,21 @@ const COMMENT_FILE = new ResolvedFile('comment', 'comment');
 // #include parses as usual, but reads no file.
 const EVERY_FILE_EMPTY: FileResolver = { doesFileExist: () => true, isFile: () => true, loadFileContents: () => '' };
 
-// Lua that parses once a trailing , or ; is dropped, or that parses as the fields of a table constructor.
+// Lua that parses once a trailing , or ; is dropped, or that parses as the fields of a table constructor. Text the parser
+// throws on, such as thousands of nested brackets, is not code.
 function isCode(text: string): boolean {
   const t = text.trim().replace(/[,;]$/, '');
   if (!/[=(){}]|\bend\b|^\s*#include/m.test(t)) {
     return false;
   }
   const parse = (code: string) => new Parser(COMMENT_FILE, code, { includeFileResolver: EVERY_FILE_EMPTY }).parseChunk();
-  const chunk = parse(t);
-  if (chunk.errors.length === 0 && chunk.block.body.length > 0) {
-    return true;
+  try {
+    const chunk = parse(t);
+    if (chunk.errors.length === 0 && chunk.block.body.length > 0) {
+      return true;
+    }
+    return t.includes('=') && parse('return {' + t + '}').errors.length === 0;
+  } catch {
+    return false;
   }
-  return t.includes('=') && parse('return {' + t + '}').errors.length === 0;
 }

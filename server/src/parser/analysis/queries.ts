@@ -40,7 +40,7 @@ export function definitionsAt(analysis: Analysis, reference: Reference): Bounds[
 // A local declared first and given a function later goes to the function, not to its declaration. Anything else goes
 // where the outline lists it, or, for a symbol the outline never lists (a field set through a parameter, say), where it
 // would: its first plain definition in each file, and every function definition.
-function targetsOf(symbol: LuaSymbol): Bounds[] {
+export function targetsOf(symbol: LuaSymbol): Bounds[] {
   const functions = symbol.definitions.filter(definition => definition.isFunction).map(definition => definition.nameLoc);
   if (symbol.kind === 'local' && functions.length > 0) {
     return functions;
@@ -157,7 +157,7 @@ export function membersAt(analysis: Analysis, file: ResolvedFile, index: number,
     && !containsIndex(reference.loc, file, index)));
 }
 
-function placeOf(bounds: Bounds): string {
+export function placeOf(bounds: Bounds): string {
   return `${bounds.start.filename.path}:${bounds.start.index}:${bounds.end.index}`;
 }
 
