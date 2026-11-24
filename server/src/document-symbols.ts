@@ -2,7 +2,6 @@ import {
   DocumentSymbol, Position, Range, SymbolKind,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { Bounds } from './parser/types';
 import { CodeSymbolType, CodeSymbol } from './parser/symbols';
 import { Comment_ } from './parser/expressions';
 import { FoldingRegion, getFoldingRegions, tabAt } from './parser/folding-regions';
@@ -23,18 +22,14 @@ export function symbolKindFor(type: CodeSymbolType): SymbolKind {
   return symbolTypeLookup[type];
 }
 
-export function boundsToRange(_textDocument: TextDocument, bounds: Bounds): Range {
-  return rangeOf(bounds);
-}
-
-export function toDocumentSymbol(textDocument: TextDocument, symbol: CodeSymbol): DocumentSymbol {
+export function toDocumentSymbol(symbol: CodeSymbol): DocumentSymbol {
   return {
     name: symbol.name,
     detail: symbol.detail,
     kind: symbolKindFor(symbol.type),
-    range: boundsToRange(textDocument, symbol.loc),
-    selectionRange: boundsToRange(textDocument, symbol.selectionLoc),
-    children: symbol.children.map(child => toDocumentSymbol(textDocument, child)),
+    range: rangeOf(symbol.loc),
+    selectionRange: rangeOf(symbol.selectionLoc),
+    children: symbol.children.map(child => toDocumentSymbol(child)),
   };
 }
 
@@ -60,7 +55,7 @@ export function buildDocumentSymbols(textDocument: TextDocument, comments: Comme
   });
 
   const outsideRegions: DocumentSymbol[] = [];
-  for (const entry of symbols.map(symbol => toDocumentSymbol(textDocument, symbol))) {
+  for (const entry of symbols.map(symbol => toDocumentSymbol(symbol))) {
     let innermost: DocumentSymbol | undefined;
     for (const region of regions) {
       // Of two regions over the same lines, the later one is inside the other.

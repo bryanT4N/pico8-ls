@@ -2,7 +2,6 @@ import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { ParseError, Warning } from './parser/errors';
 import { rangeOf } from './ranges';
 
-// A finite number → Math.max(0, Math.floor(value)); anything else → 100.
 export function maxProblems(value: unknown): number {
   if (typeof value === 'number' && isFinite(value)) {
     return Math.max(0, Math.floor(value));

@@ -1,5 +1,4 @@
 import * as assert from 'assert';
-import { strictEqual } from 'assert';
 import { ParseError, Warning } from '../parser/errors';
 import ResolvedFile from '../parser/file-resolver';
 import { Bounds } from '../parser/types';
@@ -65,17 +64,17 @@ describe('errorsInFile', () => {
 
 describe('maxProblems', () => {
   it('returns the value as an integer, clamped to 0', () => {
-    strictEqual(maxProblems(100), 100);
-    strictEqual(maxProblems(0), 0);
-    strictEqual(maxProblems(-1), 0);
-    strictEqual(maxProblems(2.5), 2);
+    assert.strictEqual(maxProblems(100), 100);
+    assert.strictEqual(maxProblems(0), 0);
+    assert.strictEqual(maxProblems(-1), 0);
+    assert.strictEqual(maxProblems(2.5), 2);
   });
 
   it('returns 100 for non-finite numbers and non-numbers', () => {
-    strictEqual(maxProblems(null), 100);
-    strictEqual(maxProblems(undefined), 100);
-    strictEqual(maxProblems(NaN), 100);
-    strictEqual(maxProblems(Infinity), 100);
-    strictEqual(maxProblems('1'), 100);
+    assert.strictEqual(maxProblems(null), 100);
+    assert.strictEqual(maxProblems(undefined), 100);
+    assert.strictEqual(maxProblems(NaN), 100);
+    assert.strictEqual(maxProblems(Infinity), 100);
+    assert.strictEqual(maxProblems('1'), 100);
   });
 });

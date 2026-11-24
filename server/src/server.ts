@@ -142,7 +142,7 @@ async function getFilesRecursive(folderPath: string): Promise<string[]> {
       const stat = await fs.promises.lstat(filePath);
       if (stat.isDirectory() && !file.startsWith('.')) {
         p8andLuaFiles.push(...(await getFilesRecursive(filePath)));
-      } else if (stat.isFile() && (/\.(p8|lua)$/i.exec(filePath))) {
+      } else if (stat.isFile() && isTrackedPath(filePath)) {
         p8andLuaFiles.push(filePath);
       }
     }));
@@ -152,6 +152,15 @@ async function getFilesRecursive(folderPath: string): Promise<string[]> {
   }
 
   return p8andLuaFiles;
+}
+
+// A file is tracked only when its extension is .p8/.lua and none of its directory components starts
+// with a dot — matching getFilesRecursive's behaviour of not descending into hidden directories.
+function isTrackedPath(filePath: string): boolean {
+  if (!(/\.(p8|lua)$/i.test(filePath))) {
+    return false;
+  }
+  return path.normalize(filePath).split(path.sep).slice(0, -1).every(part => !part.startsWith('.'));
 }
 
 function parseFile(uri: string): ProjectDocument | undefined {
@@ -226,13 +235,18 @@ documents.onDidChangeContent(change => {
 
 documents.onDidClose(e => {
   const uri = e.document.uri;
+  let text: string | undefined;
   try {
-    const text = fs.readFileSync(url.fileURLToPath(uri)).toString();
-    diskText.set(uri, text);
-    publish(index.update(uri));
-  } catch {
+    text = fs.readFileSync(url.fileURLToPath(uri)).toString();
+  } catch (err) {
+    console.error('Error reading closed file ' + uri, err);
+  }
+  if (text === undefined) {
     diskText.delete(uri);
     publish(index.remove(uri));
+  } else {
+    diskText.set(uri, text);
+    publish(index.update(uri));
   }
 });
 
@@ -273,36 +287,30 @@ connection.onReferences((params: ReferenceParams) => {
 });
 
 connection.onDidChangeWatchedFiles(change => {
-  void (async () => {
-    const uris: string[] = [];
-    let anyCreated = false;
-    for (const { uri, type } of change.changes) {
-      if (type === FileChangeType.Deleted) {
-        diskText.delete(uri);
-      } else {
-        try {
-          diskText.set(uri, (await fs.promises.readFile(url.fileURLToPath(uri))).toString());
-        } catch (e) {
-          console.error('Error reading ' + uri, e);
-        }
-      }
-      if (documents.get(uri)) {
-        continue;
-      }
-      if (type === FileChangeType.Deleted) {
-        uris.push(...index.remove(uri));
-      } else {
-        uris.push(...index.update(uri));
-        if (type === FileChangeType.Created) {
-          anyCreated = true;
-        }
+  const uris: string[] = [];
+  for (const { uri, type } of change.changes) {
+    if (!isTrackedPath(url.fileURLToPath(uri))) {
+      continue;
+    }
+    if (type === FileChangeType.Deleted) {
+      diskText.delete(uri);
+    } else {
+      try {
+        diskText.set(uri, fs.readFileSync(url.fileURLToPath(uri)).toString());
+      } catch (e) {
+        console.error('Error reading ' + uri, e);
       }
     }
-    if (anyCreated) {
-      uris.push(...index.refreshAll());
+    if (documents.get(uri)) {
+      continue;
     }
-    publish(uris);
-  })();
+    if (type === FileChangeType.Deleted) {
+      uris.push(...index.remove(uri));
+    } else {
+      uris.push(...index.update(uri));
+    }
+  }
+  publish(uris);
 });
 
 // This handler provides the initial list of the completion items.

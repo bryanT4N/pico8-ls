@@ -156,12 +156,18 @@ export class ProjectIndex {
   // Returns the URIs whose diagnostics to send again. After the projects are rebuilt, that is every known one, so that a
   // file that left a project loses that project's warnings, and every dropped one.
   update(uri: string): string[] {
+    const isNew = !this.documents.has(uri);
     const document = this.parseFile(uri);
     if (!document) {
       return this.remove(uri);
     }
     const includedBefore = includedUris(this.documents.get(uri));
     this.documents.set(uri, document);
+    // A new file may resolve #includes that previously failed: the parser does not add a failed include
+    // to chunk.includes, so the includer is never re-parsed until every known document is refreshed.
+    if (isNew) {
+      return this.scan([ ...this.documents.keys() ]);
+    }
     let rebuilt = !sameSet(includedBefore, includedUris(document)) || this.projectsOf(uri).length === 0;
     if (rebuilt) {
       this.buildProjects();
@@ -183,16 +189,6 @@ export class ProjectIndex {
     this.buildProjects();
     this.projects.forEach(project => this.analyse(project));
     return [ ...this.documents.keys(), uri, ...dropped ];
-  }
-
-  // Re-parses every project root, rebuilds and re-analyses all projects. Use after a file is created to resolve
-  // #includes that named it before it existed. Returns every known URI (and dropped ones) for diagnostics.
-  refreshAll(): string[] {
-    const roots = this.projects.map(project => project.root);
-    const dropped = this.reparse(roots);
-    this.buildProjects();
-    this.projects.forEach(project => this.analyse(project));
-    return [ ...this.documents.keys(), ...dropped ];
   }
 
   outline(uri: string): CodeSymbol[] {
