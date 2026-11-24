@@ -52,7 +52,9 @@ export function declarationOf(symbol: LuaSymbol, definition?: Definition): strin
   case 'value': {
     const owner = symbol.owner && pathOf(symbol.owner);
     if (fn) {
-      return `function ${owner === undefined ? '' : owner + (isColonMethod(fn) ? ':' : '.')}${symbol.name}(${parameters})`;
+      // On a table no name holds, function update(self) would read as a global function.
+      return owner === undefined ? `(method) ${symbol.name}(${parameters})`
+        : `function ${owner}${isColonMethod(fn) ? ':' : '.'}${symbol.name}(${parameters})`;
     }
     return `(field) ${owner === undefined ? '' : owner + '.'}${symbol.name}${literalOf(value)}`;
   }

@@ -23,6 +23,14 @@ describe('hoverMarkdown', () => {
     strictEqual(hoverAt(lines('f = nil', 'function f(a) end', 'f(1)'), 3, 0), block('function f(a)'));
   });
 
+  it('shows a function on a table no name holds as a method, and its self as a parameter', () => {
+    const code = lines('add(es, { update = function(self, dt) return self end })', 'for e in all(es) do e:update(1) end');
+    strictEqual(hoverAt(code, 1, 10), block('(method) update(self, dt)'));
+    strictEqual(hoverAt(code, 1, 45), block('(parameter) self'));
+    // e has no update of its own, so the call shows the methods of that name.
+    strictEqual(hoverAt(code, 2, 22), block('(method) update(self, dt)'));
+  });
+
   it('shows a global with its literal value', () => {
     const code = lines('g_debug = false', 'speed = -2', 'title = "mole mole"', 'long = "' + 'a'.repeat(40) + '"', 'player = player or {}', 'entity = make()',
       'print(g_debug, speed, title, long, player, entity)');
