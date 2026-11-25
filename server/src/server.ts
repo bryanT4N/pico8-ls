@@ -385,7 +385,9 @@ documents.onDidChangeContent(change => {
 });
 
 documents.onDidClose(e => {
+  const joined = index.joins();
   const uri = e.document.uri;
+  const filePath = pathOf(uri);
   let text: string | undefined;
   try {
     text = fs.readFileSync(url.fileURLToPath(uri)).toString();
@@ -396,8 +398,17 @@ documents.onDidClose(e => {
     diskText.delete(uri);
     publish(index.remove(uri));
   } else {
-    diskText.set(uri, text);
+    // Outside the workspace folders no file watcher keeps the text current, so it is read again when it is needed.
+    if (filePath !== undefined && workspaceRoots.some(root => isUnder(filePath, root))) {
+      diskText.set(uri, text);
+    } else {
+      diskText.delete(uri);
+    }
     publish(index.update(uri));
+  }
+  // The text on the disk can #include files that the text in the editor did not.
+  if (index.joins() > joined) {
+    notifyCartFiles();
   }
 });
 
@@ -436,13 +447,14 @@ connection.onWorkspaceSymbol((params: WorkspaceSymbolParams) => {
 });
 
 // The client asks for a lua document, uri in VS Code's form, to give it the PICO-8 Lua language. True when a file of
-// the index #includes it, or when a cart is in its folder or a folder above it. Only the search for a cart reads the
-// disk, so that the answer does not wait for the scan to find the carts.
+// the index #includes it, whatever its name, as PICO-8 does; or when it is a .lua file and a cart is in its folder or a
+// folder above it, so that a file such as notes.txt that the user shows as Lua keeps that language. Only the search for
+// a cart reads the disk, so that the answer does not wait for the scan to find the carts.
 connection.onRequest('pico-8-ls/belongsToCart', (params: { uri: string }) => {
   try {
     const filePath = pathOf(params.uri);
     return filePath !== undefined
-      && (index.isIncluded(params.uri) || nearCart(filePath, workspaceRoots, folderHasCart));
+      && (index.isIncluded(params.uri) || (/\.lua$/i.test(filePath) && nearCart(filePath, workspaceRoots, folderHasCart)));
   } catch (e) {
     console.error('Failed to tell whether a file belongs to a cart', e);
     return false;
