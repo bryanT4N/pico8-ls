@@ -63,6 +63,20 @@ describe('code nested deep or chained long', function () {
     assert.deepStrictEqual(serve('a' + '.b'.repeat(201) + ' = 1').outline, [ 'a [Table]' ]);
   });
 
+  it('serves a method on a path of 30,000 keys that sets a field of self', () => {
+    const method = 'a' + '.b'.repeat(N) + ':m';
+    assert.deepStrictEqual(serve('a = {}\nfunction ' + method + '() self.x = 1 end\ny = 1'),
+      { errors: [], outline: [ 'a [Table]', method + '() [Method]', 'y [Variable]' ] });
+  });
+
+  it('leaves out a field of self when the keys of its method\'s path and its own add up to more than 200', () => {
+    const listed = (body: string, key: string) => serve('a = {}\nfunction a' + '.b'.repeat(150) + ':m() ' + body + ' end').outline
+      .filter(line => line.trimStart().startsWith(key + ' [')).length;
+    assert.strictEqual(listed('self' + '.c'.repeat(50) + ' = 1', 'c'), 50);
+    assert.strictEqual(listed('self' + '.c'.repeat(100) + ' = 1', 'c'), 0);
+    assert.deepStrictEqual([ 'x', 'c' ].map(key => listed('self.x = 1 self' + '.c'.repeat(51) + ' = 1', key)), [ 1, 0 ]);
+  });
+
   it('serves 1,500 nested ifs and 5,000 nested parentheses', () => {
     assert.strictEqual(serve('if a then\n'.repeat(1500) + 'end\n'.repeat(1500) + 'y = 1').outline.includes('y [Variable]'), true);
     assert.deepStrictEqual(serve('x = ' + '('.repeat(5000) + '1' + ')'.repeat(5000) + '\ny = 1').outline, [ 'y [Variable]' ]);

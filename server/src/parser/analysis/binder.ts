@@ -26,7 +26,8 @@ type Decl = {
 type Binding = Decl | { kind: 'global', symbol: LuaSymbol, entry?: OutlineEntry };
 
 // For a deeper method path (e.g. T.a:m), the last intermediate table may not exist yet;
-// selfPath holds the info to create it on the first self.k = v that needs it. loc: the range of the method's target.
+// selfPath holds the info to create it on the first self.k = v that needs it, and stays after that, since the keys
+// of self's fields count on top of its segments. loc: the range of the method's target.
 type SelfPath = { root: OutlineEntry, segments: Identifier[], loc: Bounds };
 
 // selfSymbol is the table self means in a method, as far as names tell. A flat target's symbol is the member a
@@ -633,6 +634,12 @@ class Binder extends ASTVisitor<BinderScope> {
       if (value?.type === 'FunctionDeclaration') {
         return this.addMethod(value, root, segments, variable.indexer, undefined, loc, member);
       }
+      // In a method such as function a.b:m(), self's fields go at the end of the method's path, so the keys of both
+      // count as those of one path. Checked first: resolveSelfTable makes an entry for each key of the method's path.
+      const path = this.methodPath();
+      if (path && path.segments.length + segments.length > MAX_OUTLINE_KEYS) {
+        return undefined;
+      }
       const selfTable = this.resolveSelfTable();
       if (!selfTable) {
         this.assignUnknownRoot(root, segments, value, member);
@@ -941,8 +948,18 @@ class Binder extends ASTVisitor<BinderScope> {
           entry = this.pathEntry(entry, seg.name, scope.selfPath.loc, seg.loc!);
         }
         scope.selfTable = entry;
-        scope.selfPath = undefined;
         return entry;
+      }
+    }
+    return undefined;
+  }
+
+  // The path of the method that self's table is at the end of, also after resolveSelfTable has made its entries.
+  private methodPath(): SelfPath | undefined {
+    for (let i = this.scopeStack.length - 1; i >= 0; i--) {
+      const scope = this.scopeStack[i];
+      if (scope.selfTable !== undefined || scope.selfPath) {
+        return scope.selfPath;
       }
     }
     return undefined;
