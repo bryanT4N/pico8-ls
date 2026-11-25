@@ -84,8 +84,9 @@ class Binder extends ASTVisitor<BinderScope> {
   // The function entries that callbackOwner put under an entry, with the function or file they are in.
   private readonly nestedCallbacks: Array<{ entry: OutlineEntry, natural: Owner }> = [];
   // The node of the first definition that assigns each function, where its doc is read, so that its parameters take
-  // their @param from there even when the function starts on a later line, as in t.on_hit = then function(a). The
-  // statement and table constructor hooks define a function before the visitor reaches its parameters.
+  // their @param from there even when the function starts on a later line, as with `t.on_hit =` on one line and
+  // `function(a)` on the next. The statement and table constructor hooks define a function before the visitor reaches
+  // its parameters.
   private readonly functionDocNodes = new Map<FunctionDeclaration, ASTNode>();
 
   constructor(private readonly boundaryLines: Map<string, number[]>) {

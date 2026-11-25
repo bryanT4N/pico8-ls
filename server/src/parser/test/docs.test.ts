@@ -110,6 +110,10 @@ describe('doc comments', () => {
     strictEqual(text(docAt(lines('x = 1', '--[[ a', 'b ]] y = 2', 'function f() end', 'f()'), 5, 0)), undefined);
   });
 
+  it('takes the block right above a line that starts with a long comment as the doc of the code after it', () => {
+    strictEqual(text(docAt(lines('x = 1', '-- the y', '--[[ old ]] y = 2', 'print(y)'), 4, 6)), 'the y');
+  });
+
   it('takes a long comment that only comments follow on its line, as in --[[ ]]--', () => {
     strictEqual(text(docAt(lines('x = 1', '--[[ makes a player ]]--', 'function make_player() end', 'make_player()'), 4, 0)), 'makes a player');
     strictEqual(text(docAt(lines('x = 1', '--[[', '  makes a player', ']]--', 'function make_player() end', 'make_player()'), 6, 0)),
