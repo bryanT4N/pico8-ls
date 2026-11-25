@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { ExtensionContext, Position, Range, TextEdit, TextEditorEdit, commands, languages, window, workspace } from 'vscode';
-import { CloseAction, ErrorAction, ErrorHandler, ExecuteCommandParams, LanguageClient, LanguageClientOptions, Message, ServerOptions, TransportKind } from 'vscode-languageclient/node';
-import { switchLuaDocuments } from './lua-documents';
+import { CloseAction, ErrorAction, ErrorHandler, ExecuteCommandParams, LanguageClient, LanguageClientOptions, Message, ServerOptions, State, TransportKind } from 'vscode-languageclient/node';
+import { hideKeptDiagnostics, keptLanguages, switchLuaDocuments } from './lua-documents';
 import SemanticTokenProvider, { legend } from './semantic-token-provider';
 
 // Should stay in sync with FormatterOptions in server/src/parser/formatter.ts
@@ -34,11 +34,12 @@ export function activate(context: ExtensionContext): void {
     legend,
   );
 
+  const kept = keptLanguages(context);
   const client = new LanguageClient(
     'pico-8-ls',
     'PICO-8-LS',
     getServerOptions(context),
-    getClientOptions(),
+    getClientOptions(kept),
   );
   defaultErrorHandler = client.createDefaultErrorHandler(4);
 
@@ -48,13 +49,21 @@ export function activate(context: ExtensionContext): void {
 
   refreshOutlineOnOptionsChange(context, client);
 
+  // The client tells the user itself when the server does not start, and rejects that start's onReady promise, which
+  // would otherwise be reported again as a rejection nothing handles. Each start has a new promise.
+  context.subscriptions.push(client.onDidChangeState(({ newState }) => {
+    if (newState === State.Starting) {
+      client.onReady().catch(e => console.log('The PICO-8-LS server did not start', e));
+    }
+  }));
+
   // starts both client and server
   const disposable = client.start();
 
   // So the client gets deactivated on extension deactivation
   context.subscriptions.push(disposable);
 
-  switchLuaDocuments(context, client);
+  switchLuaDocuments(context, client, kept);
 }
 
 // VS Code caches the outline by document version and list of document symbol providers, and LSP 3.16 has no request
@@ -74,13 +83,16 @@ function refreshOutlineOnOptionsChange(context: ExtensionContext, client: Langua
     },
   });
 
-  void client.onReady().then(() => {
-    context.subscriptions.push(client.onNotification('pico-8-ls/didChangeOutlineOptions', () => {
-      const old = provider;
-      provider = registerEmptyProvider();
-      old.dispose();
-    }));
-  });
+  // A server that restarts after a crash comes with a new connection, which has none of the old one's handlers.
+  context.subscriptions.push(client.onDidChangeState(({ newState }) => {
+    if (newState === State.Running) {
+      client.onNotification('pico-8-ls/didChangeOutlineOptions', () => {
+        const old = provider;
+        provider = registerEmptyProvider();
+        old.dispose();
+      });
+    }
+  }));
 }
 
 // Get options for running Node language server
@@ -104,12 +116,15 @@ function getServerOptions(context: ExtensionContext): ServerOptions {
   };
 }
 
-function getClientOptions(): LanguageClientOptions {
+function getClientOptions(kept: Set<string>): LanguageClientOptions {
   return {
     // Register the server for PICO-8 documents
     documentSelector: picoDocuments,
     synchronize: {
       fileEvents: workspace.createFileSystemWatcher('**/*.{p8,lua}'),
+    },
+    middleware: {
+      handleDiagnostics: hideKeptDiagnostics(kept),
     },
 
     errorHandler: {

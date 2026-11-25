@@ -1,13 +1,26 @@
-import { ExtensionContext, TextDocument, languages, window, workspace } from 'vscode';
-import { LanguageClient } from 'vscode-languageclient/node';
+import { Diagnostic, ExtensionContext, TextDocument, Uri, languages, window, workspace } from 'vscode';
+import { HandleDiagnosticsSignature, LanguageClient, State } from 'vscode-languageclient/node';
 
 // VS Code restores a language the user chose when the window reloads, so a choice remembered only for the session
 // would be undone when the extension starts again.
 const KEY = 'pico-8-ls.keptLanguage';
 
+// The uris of the documents the user moved away from PICO-8 Lua. They are read before the client is made, because its
+// diagnostics middleware needs them too.
+export function keptLanguages(context: ExtensionContext): Set<string> {
+  return new Set(context.workspaceState.get<string[]>(KEY, []));
+}
+
+// A .lua file near a cart stays in the cart's project whatever language its editor has, as a file stays in its tsconfig
+// project, so the server goes on sending its warnings, from its text on the disk. A file the user moved away from
+// PICO-8 Lua shows none, as a file that the TypeScript extension no longer has open as TypeScript shows no errors.
+export function hideKeptDiagnostics(kept: Set<string>) {
+  return (uri: Uri, diagnostics: Diagnostic[], next: HandleDiagnosticsSignature) =>
+    next(uri, kept.has(uri.toString()) ? [] : diagnostics);
+}
+
 // Switches the open lua documents that belong to a cart to PICO-8 Lua, and leaves alone those the user moved away from it.
-export function switchLuaDocuments(context: ExtensionContext, client: LanguageClient): void {
-  const kept = new Set(context.workspaceState.get<string[]>(KEY, []));
+export function switchLuaDocuments(context: ExtensionContext, client: LanguageClient, kept: Set<string>): void {
   const saveKept = () => void context.workspaceState.update(KEY, [ ...kept ]);
 
   const mayBecomePicoLua = (document: TextDocument) => !document.isClosed
@@ -57,11 +70,13 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
       if (kept.delete(uri)) {
         saveKept();
       }
-    } else if (oldLanguage === 'pico-8-lua' && window.activeTextEditor?.document === document) {
+    } else if (oldLanguage === 'pico-8-lua' && document.uri.scheme === 'file' && window.activeTextEditor?.document === document) {
       // Change Language Mode acts on the active editor only. A change of files.associations resets every open file
       // while the settings are the active editor, so those files go on to be checked.
       kept.add(uri);
       saveKept();
+      // The middleware drops the warnings the server sends from now on; those it sent before go now.
+      client.diagnostics?.delete(document.uri);
     } else {
       void check(document);
     }
@@ -75,10 +90,14 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
     }
   }));
 
-  void client.onReady().then(() => {
-    context.subscriptions.push(client.onNotification('pico-8-ls/didChangeCartFiles', checkAll));
-    checkAll();
-  });
+  // A server that restarts after a crash comes with a new connection, which has none of the old one's handlers, and
+  // carts and #includes can have changed while it was down.
+  context.subscriptions.push(client.onDidChangeState(({ newState }) => {
+    if (newState === State.Running) {
+      client.onNotification('pico-8-ls/didChangeCartFiles', checkAll);
+      checkAll();
+    }
+  }));
 }
 
 // files.associations comes before the languages of every extension, so a file it names has the language the user
