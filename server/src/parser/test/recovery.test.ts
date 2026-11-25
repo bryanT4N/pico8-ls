@@ -396,6 +396,13 @@ describe('Parser recovery', () => {
       check(lines('pico-8 cartridge // http://www.pico-8.com', 'version 42', '__lua__', 'x =', 'player.x = 3', '__gfx__', ''),
         [ 'main_test_file 4:3 <expression> expected near \'player\'' ], [ 'x [Variable]', 'player [Table]', '  x [Field]' ]);
     });
+
+    // The outer statement gives what it gave before any statement was parsed again: the error at 5:4, no w.
+    it('parses again the inner of two unfinished statements, one in the other\'s function value, and not the outer', () => {
+      check(lines('v = g(function()', '  x =', '  y.z = 2', 'end) +', 'w.x = 3'),
+        [ 'main_test_file 2:5 <expression> expected near \'y\'', 'main_test_file 5:4 unexpected symbol \'=\' near \'3\'' ],
+        [ 'v [Variable]', '  <anonymous function>() [Function]', 'x [Variable]', 'y [Table]', '  z [Field]' ]);
+    });
   });
 });
 

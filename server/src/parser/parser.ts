@@ -140,6 +140,8 @@ export default class Parser {
   private stopAt: Token | null = null;
   // The token that already has the error of a missing value or bracket.
   private reportedNear: Token | null = null;
+  // How many statements have been parsed again, to tell whether one was while a statement around it was parsed.
+  private reparsed = 0;
 
   // eslint-disable-next-line @typescript-eslint/ban-types
   constructor(filename: ResolvedFile, input: string, options: ParserOptions = {}) {
@@ -515,12 +517,14 @@ export default class Parser {
   // `x =` with `player.x = 3` on the line below reads as `x = player.x` and then fails at `= 3`, which takes the next
   // statement into this one. So a simple statement that fails on a line where one of its values starts is parsed
   // again with that value missing, and that line is left for a statement of its own. Code that parses is never
-  // parsed again.
+  // parsed again. A statement in a function value two levels down can hold an #include, so the snapshot holds the
+  // include fields too.
   private parseStatementOrBacktrack(flowContext: FlowContext): Statement | null {
     if (!mayParseAgain(this.token)) {
       return this.parseStatement(flowContext);
     }
     const start = this.snapshot(flowContext);
+    const reparsedBefore = this.reparsed;
     const outer = this.continuations;
     const continuations: Token[] = [];
     this.continuations = continuations;
@@ -543,8 +547,11 @@ export default class Parser {
       this.continuations = outer;
     }
 
-    const value = continuations.find(token => token.bounds.start.line === failedAt.line
-      && token.bounds.start.filename.equals(failedAt.filename));
+    // A statement in this one's value that was parsed again keeps its recovery, and this one is left as it is: parsing
+    // it again would parse the inner one twice more, which doubles at each level of nesting.
+    const value = this.reparsed === reparsedBefore
+      ? continuations.find(token => token.bounds.start.line === failedAt.line && token.bounds.start.filename.equals(failedAt.filename))
+      : undefined;
     if (!value) {
       if (thrown) {
         throw thrown;
@@ -553,6 +560,7 @@ export default class Parser {
     }
 
     this.restore(start, flowContext);
+    this.reparsed++;
     const outerStop = this.stopAt;
     this.stopAt = value;
     this.continuations = null;

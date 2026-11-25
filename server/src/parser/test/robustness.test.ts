@@ -1,5 +1,7 @@
 import * as assert from 'assert';
-import { getTestFileContents, parseManyInChild, TEST_CARTS } from './test-utils';
+import { performance } from 'perf_hooks';
+import Parser from '../parser';
+import { getTestFileContents, parseManyInChild, TEST_CARTS, testFile } from './test-utils';
 
 const SAMPLES = 40;
 const EDIT_SAMPLES = 20;
@@ -62,6 +64,46 @@ describe('robustness on half-typed lines', function () {
       assert.ok(results.reduce((sum, r) => sum + r.hovers, 0) > 0, 'no hover ran');
       assert.ok(results.reduce((sum, r) => sum + r.signatureHelps, 0) > 0, 'no signature help ran');
       assert.ok(results.reduce((sum, r) => sum + r.symbols, 0) > 0, 'no workspace symbols');
+    });
+  }
+});
+
+// Statements that each fail on the line where their value starts, each in the function value of the one around it:
+// parsing each of them again would double the work at every level.
+function nestedInFunctionValues(depth: number, innermost: string, atEachLevel = ''): string {
+  let code = innermost;
+  for (let i = 0; i < depth; i++) {
+    code = `v = g(function()\n${atEachLevel}${code}end) +\nw.x = 3\n`;
+  }
+  return code;
+}
+
+describe('robustness on unfinished statements nested in function values', function () {
+  this.timeout(120000);
+
+  // Mocha sets Error.stackTraceLimit to Infinity, so each parse error would copy the parser's whole stack, which is
+  // deep here; the server runs with Node's default.
+  let stackTraceLimit: number;
+  before(() => {
+    stackTraceLimit = Error.stackTraceLimit;
+    Error.stackTraceLimit = 10;
+  });
+  after(() => {
+    Error.stackTraceLimit = stackTraceLimit;
+  });
+
+  // The parse alone is timed: the analysis and lookups the other tests run take seconds on 3,000 locals.
+  const NESTED: [string, string][] = [
+    [ '20 deep', nestedInFunctionValues(20, 'y = 1\n') ],
+    [ '60 deep around 3,000 lines', nestedInFunctionValues(60, 'local a = b + c * d\n'.repeat(3000)) ],
+    [ '400 deep with another at each level', nestedInFunctionValues(400, 'x =\ny.z = 2\n', 'x =\ny.z = 2\n') ],
+  ];
+  for (const [ name, code ] of NESTED) {
+    it(`parses them ${name} within ${MAX_MS} ms`, () => {
+      const start = performance.now();
+      new Parser(testFile(), code).parseChunk();
+      const ms = performance.now() - start;
+      assert.ok(ms < MAX_MS, `${ms} ms`);
     });
   }
 });
