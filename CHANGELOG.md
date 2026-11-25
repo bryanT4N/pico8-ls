@@ -13,7 +13,7 @@
 - Fixed: a one-line `---` comment ending in dots, such as `--- loads the level...`, was taken for a heading and not shown.
 - Fixed: a parameter of a function written on the line after `t.on_hit =` did not show its `@param` text.
 - Fixed: a `--[[ ]]` comment followed by code on its line was shown as the doc of the next line.
-- Fixed: parameter hints could show a call that an earlier line left unclosed, also after a line starting with `local`, `if`, `for`, `while`, `repeat`, `return`, `goto` or `break`.
+- Fixed: parameter hints showed a call that an earlier line left unclosed even after a line starting with `local`, `if`, `for`, `while`, `repeat`, `return`, `goto` or `break`.
 
 ## 0.4.0 (unreleased)
 

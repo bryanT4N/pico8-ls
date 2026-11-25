@@ -26,9 +26,12 @@ Full support for `#include` statements:
 - Syntax errors
 - Warnings on undefined variable usage
 - Find symbol in document
+- Find symbol in workspace (Ctrl+T), also in `#include`d files outside it
 - Go to definition
 - Find references
 - Hover support & signature help for built-in functions
+- Hover for your own functions, variables, fields, parameters and labels: their declaration and the comment written above them
+- Signature help for your own functions, with their comment and each parameter's `@param` text
 - Auto-completion
 - Support for `#include`ing other files
 - Snippets for common idioms (functions, loops, etc) as well as pico-8 symbols (`p8-jelpi` -> 🐱, `p8-x-key` -> ❎, etc)
