@@ -1,6 +1,6 @@
 import type { LuaSymbol } from '../analysis/model';
 import { FunctionDeclaration } from '../statements';
-import { Bounds } from '../types';
+import { Bounds, CodeLocation } from '../types';
 
 export enum CodeSymbolType {
   Function = 'Function',
@@ -10,7 +10,40 @@ export enum CodeSymbolType {
   Field = 'Field',
   Variable = 'Variable',
   Label = 'Label',
+  Block = 'Block',
 }
+
+export type OutlineOptions = { showParameters: boolean, showLoopVariables: boolean, showBlocks: boolean };
+
+export const NO_OUTLINE_OPTIONS: OutlineOptions = { showParameters: false, showLoopVariables: false, showBlocks: false };
+
+export function outlineOptionsFrom(settings: unknown): OutlineOptions {
+  const given = (typeof settings === 'object' && settings !== null ? settings : {}) as Partial<Record<keyof OutlineOptions, unknown>>;
+  return {
+    showParameters: given.showParameters === true,
+    showLoopVariables: given.showLoopVariables === true,
+    showBlocks: given.showBlocks === true,
+  };
+}
+
+export type OutlineVariable = { name: string, loc: Bounds };
+
+// A for, while, repeat or do block, or one branch of an if.
+export type OutlineBlock = {
+  keyword: 'for' | 'while' | 'repeat' | 'do' | 'if' | 'elseif' | 'else',
+  // A branch followed by another ends where that one starts.
+  loc: Bounds,
+  // The keyword.
+  selectionLoc: Bounds,
+  // The end of the condition or of the last iterator; none for repeat, do and else.
+  headerEnd?: CodeLocation,
+  // The function entry whose body holds it; none at the top of the file.
+  owner?: OutlineEntry,
+  // The innermost block around it in the same body and the same file.
+  parent?: OutlineBlock,
+  // A for's loop variables.
+  variables: OutlineVariable[],
+};
 
 export type CodeSymbol = {
   name: string,
@@ -40,6 +73,10 @@ export type OutlineEntry = Owner & {
   hidden: boolean,
   // Unset for anonymous functions and the functions of tables that no name holds.
   symbol?: LuaSymbol,
+  // The innermost block of the body being analysed where the entry was created.
+  block?: OutlineBlock,
+  // A function's parameters as written, ... left out.
+  parameters?: OutlineVariable[],
 };
 
 export function addEntry(parent: Owner, name: string, type: CodeSymbolType, loc: Bounds, selectionLoc: Bounds, detail?: string): OutlineEntry {

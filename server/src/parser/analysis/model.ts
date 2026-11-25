@@ -1,6 +1,6 @@
 import { Comment_, Expression } from '../expressions';
 import ResolvedFile from '../file-resolver';
-import type { OutlineEntry } from '../outline/model';
+import type { OutlineBlock, OutlineEntry } from '../outline/model';
 import { ASTNode, Bounds } from '../types';
 
 export type SymbolKind = 'global' | 'local' | 'param' | 'loopvar' | 'member' | 'label' | 'self' | 'value';
@@ -64,4 +64,6 @@ export type Analysis = {
   includeCheckpoints: Map<string, Array<{ index: number, order: number }>>,
   // chunk.comments, then chunk.includedComments: a file included twice comes twice.
   comments: Comment_[],
+  // Every block of the chunk, in the order the analysis met them.
+  blocks: OutlineBlock[],
 };

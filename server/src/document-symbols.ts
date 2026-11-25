@@ -16,6 +16,8 @@ const symbolTypeLookup: Record<CodeSymbolType, SymbolKind> = {
   [CodeSymbolType.Variable]: SymbolKind.Variable,
   // Obviously a label is not null but there's no Label thing and the Null has a cool icon
   [CodeSymbolType.Label]: SymbolKind.Null,
+  // Like a tab or a #region: a place in the code, not a definition.
+  [CodeSymbolType.Block]: SymbolKind.Namespace,
 };
 
 export function symbolKindFor(type: CodeSymbolType): SymbolKind {

@@ -15,6 +15,9 @@ import { analyze } from '../analysis/binder';
 import { Analysis, LuaSymbol, Reference } from '../analysis/model';
 import { definitionsAt, referenceAt, referencesOf, warningsOf } from '../analysis/queries';
 import { CodeSymbol, outlineFor } from '../symbols';
+import { OutlineOptions } from '../outline/model';
+
+export const ALL_OUTLINE_OPTIONS: OutlineOptions = { showParameters: true, showLoopVariables: true, showBlocks: true };
 
 export function getTestFileContents(filename: string): string {
   const filepath = path.join(__dirname, '../../../../testfiles/', filename);

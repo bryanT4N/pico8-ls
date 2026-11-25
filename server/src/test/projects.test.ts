@@ -8,8 +8,9 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { builtinInfo } from '../parser/builtins';
 import Parser from '../parser/parser';
 import ResolvedFile, { FileResolver, fileURLToPath, pathToFileURL, RealFileResolver } from '../parser/file-resolver';
+import { NO_OUTLINE_OPTIONS } from '../parser/outline/model';
 import { outlineLines } from '../parser/test/outline-utils';
-import { deepEquals, formatError } from '../parser/test/test-utils';
+import { ALL_OUTLINE_OPTIONS, deepEquals, formatError } from '../parser/test/test-utils';
 import { findProjects, isTrackedPath, leftWorkspace, makeFileResolver, ParsedDocumentsMap, ProjectDocument, ProjectIndex } from '../projects';
 import { callContextAt } from '../signature-help';
 
@@ -774,5 +775,14 @@ describe('ProjectIndex', () => {
   it('lists nothing from a project whose analysis failed', () => {
     const { index } = failedAnalysis({ 'main.p8': 'function f() end' });
     deepStrictEqual(index.workspaceSymbols('f'), []);
+  });
+
+  it('gives the outline and workspace symbols with the options asked for', () => {
+    const index = scanned({ 'main.p8': 'function move(p)\n  for i = 1, 2 do local s = i end\nend' });
+    deepStrictEqual(outlineLines(index.outline(uriOf('main.p8'))), [ 'move(p) [Function]', '  s [Variable]' ]);
+    deepStrictEqual(outlineLines(index.outline(uriOf('main.p8'), ALL_OUTLINE_OPTIONS)),
+      [ 'move(p) [Function]', '  p [Variable]', '  for i = 1, 2 [Block]', '    i [Variable]', '    s [Variable]' ]);
+    deepStrictEqual(brief(index.workspaceSymbols('i', { ...NO_OUTLINE_OPTIONS, showLoopVariables: true })), [[ 'i', 'move', 'main.p8' ]]);
+    deepStrictEqual(brief(index.workspaceSymbols('i')), []);
   });
 });

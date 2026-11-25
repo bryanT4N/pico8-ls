@@ -13,7 +13,7 @@ import { hoverMarkdown } from '../../hover';
 import { signatureHelpAt } from '../../signature-help';
 import { searchSymbols, symbolItems } from '../../workspace-symbols';
 import { outlineLines } from './outline-utils';
-import { ChildParseJob, ChildParseResult, formatError, TestFilesResolver } from './test-utils';
+import { ALL_OUTLINE_OPTIONS, ChildParseJob, ChildParseResult, formatError, TestFilesResolver } from './test-utils';
 
 const PLACES = 25;
 
@@ -60,6 +60,7 @@ function runQueries(analysis: Analysis, file: ResolvedFile, code: string, counts
   const items = [ ...symbolItems(analysis).values() ].flat();
   counts.symbols += items.length;
   searchSymbols(items, 'e');
+  searchSymbols([ ...symbolItems(analysis, ALL_OUTLINE_OPTIONS).values() ].flat(), 'e');
   const lines = code.split('\n');
   for (let k = 0; k < PLACES; k++) {
     const index = Math.floor(k * code.length / (PLACES - 1));
@@ -102,11 +103,13 @@ function parseJob(job: ChildParseJob): ChildParseResult {
   // A throw in the analysis or in a query shows up in `threw` too, along with
   // what the parse found.
   let symbols: CodeSymbol[];
+  let allOptions: CodeSymbol[];
   const counts: Counts = { queries: 0, hovers: 0, signatureHelps: 0, symbols: 0 };
   try {
     const analysis = analyze(chunk);
     counts.queries++;
     symbols = outlineFor(analysis, mainFile);
+    allOptions = outlineFor(analysis, mainFile, ALL_OUTLINE_OPTIONS, job.code);
     runQueries(analysis, mainFile, job.code, counts);
   } catch (e) {
     return {
@@ -127,7 +130,7 @@ function parseJob(job: ChildParseJob): ChildParseResult {
     errors: chunk.errors.map(formatError),
     statements: chunk.block.body.map(s => s.type + (s.included ? '*' : '')),
     outline: outlineLines(symbols),
-    invalid: collectInvalid(symbols, mainFile),
+    invalid: [ ...collectInvalid(symbols, mainFile), ...collectInvalid(allOptions, mainFile).map(name => 'all options: ' + name) ],
     ...counts,
   };
 }

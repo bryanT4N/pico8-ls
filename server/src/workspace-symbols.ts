@@ -2,7 +2,7 @@ import { SymbolInformation } from 'vscode-languageserver/node';
 import { symbolKindFor } from './document-symbols';
 import { Analysis } from './parser/analysis/model';
 import { placeOf } from './parser/analysis/queries';
-import { CodeSymbolType, isColonMethod, OutlineEntry } from './parser/outline/model';
+import { CodeSymbolType, isColonMethod, NO_OUTLINE_OPTIONS, OutlineBlock, OutlineEntry, OutlineOptions, OutlineVariable } from './parser/outline/model';
 import { AnonymousFunctionName } from './parser/statements';
 import { Bounds } from './parser/types';
 import { rangeOf } from './ranges';
@@ -26,17 +26,18 @@ export const SYMBOL_LIMIT = 1000;
 // byPlace: by placeOf(selectionLoc).
 type Items = { byUri: Map<string, SymbolItem[]>, byPlace: Map<string, SymbolItem> };
 
-// An analysis is never changed, only replaced, so its items hold for as long as it lives.
-const cache = new WeakMap<Analysis, Items>();
+// An analysis is never changed, only replaced, so its items hold for as long as it lives. Key: what the options list.
+const cache = new WeakMap<Analysis, Map<string, Items>>();
 
-// By file URI, each entry once. Built on the first call for an analysis and kept with it.
-export function symbolItems(analysis: Analysis): Map<string, SymbolItem[]> {
-  return itemsOf(analysis).byUri;
+// By file URI, each entry once, and the parameters and loop variables the options list. Built on the first call for an
+// analysis and these options and kept with it.
+export function symbolItems(analysis: Analysis, options: OutlineOptions = NO_OUTLINE_OPTIONS): Map<string, SymbolItem[]> {
+  return itemsOf(analysis, options).byUri;
 }
 
 // The container of the item whose selectionLoc is at nameLoc; undefined when there is none.
 export function containerOf(analysis: Analysis, nameLoc: Bounds): string | undefined {
-  return itemsOf(analysis).byPlace.get(placeOf(nameLoc))?.container;
+  return itemsOf(analysis, NO_OUTLINE_OPTIONS).byPlace.get(placeOf(nameLoc))?.container;
 }
 
 // Best first, at most limit; nothing for a query that is empty once normalized. VS Code filters and ranks the result
@@ -75,11 +76,18 @@ export function toSymbolInformation(item: SymbolItem): SymbolInformation {
   return information;
 }
 
-function itemsOf(analysis: Analysis): Items {
-  let items = cache.get(analysis);
+function itemsOf(analysis: Analysis, options: OutlineOptions): Items {
+  let byOptions = cache.get(analysis);
+  if (!byOptions) {
+    byOptions = new Map<string, Items>();
+    cache.set(analysis, byOptions);
+  }
+  // A block is no definition, so showBlocks adds no items.
+  const key = `${options.showParameters} ${options.showLoopVariables}`;
+  let items = byOptions.get(key);
   if (!items) {
-    items = buildItems(analysis);
-    cache.set(analysis, items);
+    items = buildItems(analysis, options);
+    byOptions.set(key, items);
   }
   return items;
 }
@@ -88,10 +96,44 @@ function itemsOf(analysis: Analysis): Items {
 // file's root, which has no name or members.
 type Parent = { entry: OutlineEntry, name: string, container: string };
 
-function buildItems(analysis: Analysis): Items {
+function buildItems(analysis: Analysis, options: OutlineOptions): Items {
   const byUri = new Map<string, SymbolItem[]>();
   const byPlace = new Map<string, SymbolItem>();
   const listed = new Set<string>();
+  // Whether the item is new.
+  const add = (item: SymbolItem): boolean => {
+    const { start, end } = item.selectionLoc;
+    // A file included twice is in the analysis twice.
+    const key = JSON.stringify([ item.label, start.filename.path, start.index, end.index ]);
+    if (listed.has(key)) {
+      return false;
+    }
+    listed.add(key);
+    const inFile = byUri.get(start.filename.fileURL) ?? [];
+    inFile.push(item);
+    byUri.set(start.filename.fileURL, inFile);
+    return true;
+  };
+  // Left out of byPlace, so that hover does not change with the options.
+  const addVariables = (variables: OutlineVariable[], container: string) => {
+    for (const { name, loc } of variables) {
+      add({ name, own: name, label: name, container, type: CodeSymbolType.Variable, selectionLoc: loc });
+    }
+  };
+  const blocksByOwner = new Map<OutlineEntry | undefined, OutlineBlock[]>();
+  if (options.showLoopVariables) {
+    for (const block of analysis.blocks) {
+      const owned = blocksByOwner.get(block.owner) ?? [];
+      owned.push(block);
+      blocksByOwner.set(block.owner, owned);
+    }
+  }
+  const addLoopVariables = (owner: OutlineEntry | undefined, container: string) => {
+    for (const block of blocksByOwner.get(owner) ?? []) {
+      addVariables(block.variables, container);
+    }
+  };
+  addLoopVariables(undefined, '');
   const visit = (entries: OutlineEntry[], parent: Parent | undefined) => {
     for (const entry of entries) {
       const member = parent !== undefined && isMemberOf(entry, parent.entry);
@@ -109,20 +151,20 @@ function buildItems(analysis: Analysis): Items {
           type: entry.type,
           selectionLoc: entry.selectionLoc,
         };
-        const { start, end } = entry.selectionLoc;
-        // A file included twice is in the analysis twice.
-        const key = JSON.stringify([ item.label, start.filename.path, start.index, end.index ]);
-        if (!listed.has(key)) {
-          listed.add(key);
-          const inFile = byUri.get(start.filename.fileURL) ?? [];
-          inFile.push(item);
-          byUri.set(start.filename.fileURL, inFile);
+        if (add(item)) {
           const place = placeOf(entry.selectionLoc);
           if (!byPlace.has(place)) {
             byPlace.set(place, item);
           }
         }
       }
+      // A block is not in the entry tree, so a loop variable is in the function whose body holds its for, and an
+      // anonymous function's parameters are where the function is.
+      const inside = entry.name === AnonymousFunctionName ? container : name;
+      if (options.showParameters) {
+        addVariables(entry.parameters ?? [], inside);
+      }
+      addLoopVariables(entry, inside);
       // The entries left out still pass their names and containers on to their children.
       visit(entry.children, { entry, name, container });
     }

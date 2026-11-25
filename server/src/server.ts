@@ -23,6 +23,7 @@ import { errorsInFile, maxProblems } from './diagnostics';
 import { completionItems, completionRequestAt, Offered, resolveUserItem, wordAt } from './completion';
 import { builtinMarkdown } from './hover';
 import { builtinSignatureHelp, CallContext, callContextAt } from './signature-help';
+import { NO_OUTLINE_OPTIONS, OutlineOptions, outlineOptionsFrom } from './parser/outline/model';
 
 console.log('PICO-8-LS language server starting.');
 
@@ -232,21 +233,34 @@ function publish(uris: string[]) {
 
 interface DocumentSettings {
   maxNumberOfProblems: number;
+  outline: OutlineOptions;
 }
 
 // Diagnostics are sent synchronously after each parse, so they take the limit last fetched rather than asking for the
 // settings each time.
-let globalSettings: DocumentSettings = { maxNumberOfProblems: maxProblems(undefined) };
+let globalSettings: DocumentSettings = { maxNumberOfProblems: maxProblems(undefined), outline: NO_OUTLINE_OPTIONS };
+
+type PicoSettings = { maxNumberOfProblems?: unknown, outline?: unknown } | null | undefined;
 
 async function fetchGlobalSettings() {
   if (!hasConfigurationCapability) {
     return;
   }
   try {
-    const settings = await connection.workspace.getConfiguration('pico-8-ls') as { maxNumberOfProblems?: unknown } | null;
-    globalSettings = { maxNumberOfProblems: maxProblems(settings?.maxNumberOfProblems) };
+    takeSettings(await connection.workspace.getConfiguration('pico-8-ls') as PicoSettings);
   } catch (e) {
     console.error('Failed to get the pico-8-ls settings', e);
+  }
+}
+
+// VS Code keeps the outline it has until it is asked again, which the client does on the notification. The first
+// settings count too: the scan does not wait for them, so an outline given before they came had the defaults.
+function takeSettings(settings: PicoSettings) {
+  const outline = outlineOptionsFrom(settings?.outline);
+  const changed = (Object.keys(outline) as Array<keyof OutlineOptions>).some(key => outline[key] !== globalSettings.outline[key]);
+  globalSettings = { maxNumberOfProblems: maxProblems(settings?.maxNumberOfProblems), outline };
+  if (changed) {
+    connection.sendNotification('pico-8-ls/didChangeOutlineOptions');
   }
 }
 
@@ -274,7 +288,7 @@ documents.onDidClose(e => {
 
 connection.onDidChangeConfiguration(change => {
   if (!hasConfigurationCapability) {
-    globalSettings = { maxNumberOfProblems: maxProblems(change.settings?.['pico-8-ls']?.maxNumberOfProblems) };
+    takeSettings(change.settings?.['pico-8-ls']);
   }
 
   // The diagnostics come from the index, so the files need not be read again.
@@ -290,7 +304,7 @@ connection.onDocumentSymbol((params: DocumentSymbolParams) => {
     return [];
   }
   try {
-    return buildDocumentSymbols(document.textDocument, document.chunk.comments ?? [], index.outline(uri));
+    return buildDocumentSymbols(document.textDocument, document.chunk.comments ?? [], index.outline(uri, globalSettings.outline));
   } catch (e) {
     console.error('Failed to build the outline', e);
     return [];
@@ -299,7 +313,7 @@ connection.onDocumentSymbol((params: DocumentSymbolParams) => {
 
 connection.onWorkspaceSymbol((params: WorkspaceSymbolParams) => {
   try {
-    return index.workspaceSymbols(params.query);
+    return index.workspaceSymbols(params.query, globalSettings.outline);
   } catch (e) {
     console.error('Failed to give workspace symbols', e);
     return [];

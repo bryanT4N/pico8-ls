@@ -1,14 +1,15 @@
 import { deepStrictEqual, notStrictEqual, strictEqual } from 'assert';
-import { analyzeCode, getTestFileContents, TEST_CARTS, testFile } from '../parser/test/test-utils';
+import { ALL_OUTLINE_OPTIONS, analyzeCode, getTestFileContents, TEST_CARTS, testFile } from '../parser/test/test-utils';
 import { CodeSymbol, CodeSymbolType, outlineFor } from '../parser/symbols';
+import { NO_OUTLINE_OPTIONS, OutlineOptions } from '../parser/outline/model';
 import { AnonymousFunctionName } from '../parser/statements';
 import { SymbolItem, searchSymbols, symbolItems } from '../workspace-symbols';
 
 const lines = (...l: string[]) => l.join('\n');
 const shown = (item: SymbolItem) => `${item.label} [${item.container}] ${item.selectionLoc.start.line}:${item.selectionLoc.start.column}`;
 // The main file's items as `label [container] line:column`, by place.
-function itemsIn(code: string, files?: Record<string, string>): string[] {
-  const items = symbolItems(analyzeCode(code, files).analysis).get(testFile().fileURL) ?? [];
+function itemsIn(code: string, files?: Record<string, string>, options?: OutlineOptions): string[] {
+  const items = symbolItems(analyzeCode(code, files).analysis, options).get(testFile().fileURL) ?? [];
   return [ ...items ].sort((a, b) => a.selectionLoc.start.index - b.selectionLoc.start.index).map(shown);
 }
 const allItems = (code: string) => [ ...symbolItems(analyzeCode(code).analysis).values() ].flat();
@@ -54,6 +55,21 @@ describe('symbolItems', () => {
       .map(items => items.map(shown)), [[ 'helper() [] 1:9' ]]);
   });
 
+  it('lists parameters and loop variables when the outline does, in their function', () => {
+    const code = lines('entity = {}', 'function entity:update(dt)', '  for i = 1, 3 do end', 'end', 'function update_enemies()', '  foreach(es, function(e)',
+      '    for k in all(e) do end', '  end)', 'end', 'for j = 1, 2 do end', 'local t = { go = function(self, n) end }');
+    const both = [ 'entity [] 1:0', 'entity:update() [] 2:16', 'dt [entity:update] 2:23', 'i [entity:update] 3:6', 'update_enemies() [] 5:9',
+      'e [update_enemies] 6:23', 'k [update_enemies] 7:8', 'j [] 10:4', 't [] 11:6', 't.go() [] 11:12', 'self [t.go] 11:26', 'n [t.go] 11:32' ];
+    const without = (...labels: string[]) => both.filter(item => !labels.includes(item.split(' ')[0]));
+    const none = [ 'entity [] 1:0', 'entity:update() [] 2:16', 'update_enemies() [] 5:9', 't [] 11:6', 't.go() [] 11:12' ];
+    deepStrictEqual(itemsIn(code, undefined, { ...NO_OUTLINE_OPTIONS, showParameters: true, showLoopVariables: true }), both);
+    deepStrictEqual(itemsIn(code, undefined, { ...NO_OUTLINE_OPTIONS, showParameters: true }), without('i', 'k', 'j'));
+    deepStrictEqual(itemsIn(code, undefined, { ...NO_OUTLINE_OPTIONS, showLoopVariables: true }), without('dt', 'e', 'self', 'n'));
+    deepStrictEqual(itemsIn(code), none);
+    deepStrictEqual(itemsIn(code, undefined, ALL_OUTLINE_OPTIONS), both);
+    deepStrictEqual(itemsIn(code, undefined, { ...NO_OUTLINE_OPTIONS, showBlocks: true }), none);
+  });
+
   it('keeps the items until the analysis is replaced', () => {
     const a = analyzeCode('x = 1').analysis;
     strictEqual(symbolItems(a), symbolItems(a));
@@ -94,6 +110,26 @@ describe('symbolItems', () => {
       check(outlineFor(a.analysis, testFile()));
     }
     strictEqual(total, 1275);
+  });
+
+  it('lists the parameters and loop variables of the test carts on their own names', () => {
+    const added = { parameters: 0, loopVariables: 0, both: 0 };
+    for (const name of TEST_CARTS) {
+      const code = getTestFileContents(name);
+      const { analysis } = analyzeCode(code);
+      const placed = (options?: OutlineOptions) =>
+        (symbolItems(analysis, options).get(testFile().fileURL) ?? []).map(item => ({ item, place: `${item.label} ${item.selectionLoc.start.index}` }));
+      const before = new Set(placed().map(({ place }) => place));
+      const extra = (options: OutlineOptions) => placed(options).filter(({ place }) => !before.has(place)).map(({ item }) => item);
+      added.parameters += extra({ ...NO_OUTLINE_OPTIONS, showParameters: true }).length;
+      added.loopVariables += extra({ ...NO_OUTLINE_OPTIONS, showLoopVariables: true }).length;
+      const both = extra({ ...NO_OUTLINE_OPTIONS, showParameters: true, showLoopVariables: true });
+      added.both += both.length;
+      for (const item of both) {
+        strictEqual(code.slice(item.selectionLoc.start.index, item.selectionLoc.end.index), item.own, `${name}: ${shown(item)}`);
+      }
+    }
+    deepStrictEqual(added, { parameters: 364, loopVariables: 166, both: 530 });
   });
 });
 

@@ -4,7 +4,7 @@ import { AnonymousFunctionName, AssignmentStatement, Block, Chunk, ForGenericSta
 import { resolveIncludeFile } from '../file-resolver';
 import { ASTNode, Bounds, boundsContain, CodeLocation } from '../types';
 import { ASTVisitor, VisitableASTNode } from '../visitor';
-import { addEntry, CodeSymbolType, isColonMethod, moveEntry, OutlineEntry, Owner, signatureOf } from '../outline/model';
+import { addEntry, CodeSymbolType, isColonMethod, moveEntry, OutlineBlock, OutlineEntry, Owner, signatureOf } from '../outline/model';
 import { defineMember, pathMember, receiveTable, tableTypeOf, unwrapValue } from '../outline/members';
 import { findBoundaryLines, groupMethodRuns, StatementInfo } from '../outline/method-runs';
 import { Analysis, LuaSymbol, Reference, Scope } from './model';
@@ -53,6 +53,7 @@ class BinderScope {
   readonly labels = new Map<string, LuaSymbol>();
   // A goto may jump to a label further down, so a function, or the file, resolves its gotos when it ends.
   readonly gotos: PendingGoto[] = [];
+  outlineBlock?: OutlineBlock;
   // analysisScope: the scope the analysis keeps, which a table constructor shares with the scope around it.
   constructor(public owner: Owner, public kind: 'file' | 'function' | 'block', readonly analysisScope: Scope, public block?: Block) {}
 }
@@ -65,6 +66,7 @@ class Binder extends ASTVisitor<BinderScope> {
   readonly includeScopes = new Map<string, Scope>();
   readonly includeStarts = new Map<string, number>();
   readonly includeCheckpoints = new Map<string, Array<{ index: number, order: number }>>();
+  readonly blocks: OutlineBlock[] = [];
   private order = 0;
   // The chain of #includes whose content the analysis is in, outermost first.
   private readonly openIncludes: OpenInclude[] = [];
@@ -117,8 +119,70 @@ class Binder extends ASTVisitor<BinderScope> {
 
   createDefaultScope(scopeNode: VisitableASTNode | null): BinderScope {
     const loc = scopeNode ? this.rangeOf(scopeNode) : undefined;
-    return new BinderScope(this.topScope().owner, 'block', { kind: 'block', loc, children: [], declarations: [] },
+    const scope = new BinderScope(this.topScope().owner, 'block', { kind: 'block', loc, children: [], declarations: [] },
       isStatementWithBody(scopeNode) ? scopeNode.block : undefined);
+    const outlineBlock = scopeNode ? this.outlineBlockOf(scopeNode) : undefined;
+    if (outlineBlock) {
+      scope.outlineBlock = outlineBlock;
+      this.blocks.push(outlineBlock);
+    }
+    return scope;
+  }
+
+  private outlineBlockOf(node: VisitableASTNode): OutlineBlock | undefined {
+    const header = blockHeader(node);
+    const { loc } = node;
+    if (!header || !loc) {
+      return undefined;
+    }
+    const { keyword, headerEnd } = header;
+    const { start } = loc;
+    const owner = this.topScope().owner;
+    // An #include in a block of another file puts this file's blocks inside it, and a block's name is read from the
+    // text of its own file.
+    let parent = this.innermostBlock();
+    while (parent && !parent.loc.start.filename.equals(start.filename)) {
+      parent = parent.parent;
+    }
+    return {
+      keyword,
+      loc: this.branchRange(node, loc),
+      selectionLoc: { start, end: { ...start, column: start.column + keyword.length, index: start.index + keyword.length } },
+      headerEnd,
+      owner: owner === this.root ? undefined : owner as OutlineEntry,
+      parent,
+      variables: [],
+    };
+  }
+
+  // The parser's range of a branch runs over the keyword of the next one, where breadcrumbs would then show this one.
+  private branchRange(node: VisitableASTNode, loc: Bounds): Bounds {
+    const ifStatement = this.topNode()?.node;
+    if ((node.type !== 'IfClause' && node.type !== 'ElseifClause') || ifStatement?.type !== 'IfStatement') {
+      return loc;
+    }
+    const next = ifStatement.clauses[ifStatement.clauses.indexOf(node) + 1];
+    return next?.loc ? { start: loc.start, end: next.loc.start } : loc;
+  }
+
+  // Stops at the function or file being analysed: a block around a function holds the function, not what its body
+  // defines. A table constructor's scope has no block and is passed through.
+  private innermostBlock(): OutlineBlock | undefined {
+    for (let i = this.scopeStack.length - 1; i >= 0 && this.scopeStack[i].kind === 'block'; i--) {
+      const { outlineBlock } = this.scopeStack[i];
+      if (outlineBlock) {
+        return outlineBlock;
+      }
+    }
+    return undefined;
+  }
+
+  // The block an entry is created in decides which block node it goes under when the outline shows blocks. members.ts
+  // does not come here: a member stays under its table.
+  private addEntry(parent: Owner, name: string, type: CodeSymbolType, loc: Bounds, selectionLoc: Bounds, detail?: string): OutlineEntry {
+    const entry = addEntry(parent, name, type, loc, selectionLoc, detail);
+    entry.block = this.innermostBlock();
+    return entry;
   }
 
   // A scope joins the tree when it is entered. A function in a loop header or a condition is entered before the
@@ -186,7 +250,7 @@ class Binder extends ASTVisitor<BinderScope> {
       const outer = this.topScope();
       const symbol = new LuaSymbol('local', node.identifier.name);
       this.define(symbol, node.identifier, node.loc!, node, node);
-      const entry = this.link(addEntry(outer.owner, node.identifier.name, CodeSymbolType.Function,
+      const entry = this.link(this.addEntry(outer.owner, node.identifier.name, CodeSymbolType.Function,
         node.loc!, node.identifier.loc!), symbol);
       this.targets.set(node, { kind: 'entry', entry });
       outer.decls.set(node.identifier.name, { kind: 'local', symbol, entry });
@@ -200,22 +264,23 @@ class Binder extends ASTVisitor<BinderScope> {
     // A function value that nothing gave a target, such as a callback, is listed as anonymous.
     const target: ValueTarget | undefined = this.targets.get(node)
       ?? (node.identifier ? undefined : { kind: 'anonymous', ...this.callbackOwner() });
-    let owner: Owner;
+    let entry: OutlineEntry | undefined;
     if (target?.kind === 'entry') {
       target.entry.detail = signatureOf(node);
-      owner = target.entry;
+      entry = target.entry;
     } else if (target) {
-      const entry = target.kind === 'flat'
-        ? this.link(addEntry(target.owner, target.name, CodeSymbolType.Method, target.loc ?? node.loc!, target.selectionLoc ?? node.loc!,
+      entry = target.kind === 'flat'
+        ? this.link(this.addEntry(target.owner, target.name, CodeSymbolType.Method, target.loc ?? node.loc!, target.selectionLoc ?? node.loc!,
           signatureOf(node)), target.symbol)
-        : addEntry(target.owner, AnonymousFunctionName, CodeSymbolType.Function, node.loc!, node.loc!, signatureOf(node));
+        : this.addEntry(target.owner, AnonymousFunctionName, CodeSymbolType.Function, node.loc!, node.loc!, signatureOf(node));
       if (target.natural) {
         this.nestedCallbacks.push({ entry, natural: target.natural });
       }
-      owner = entry;
-    } else {
-      owner = this.topScope().owner;
     }
+    if (entry) {
+      entry.parameters = node.parameters.flatMap(parameter => parameter.type === 'Identifier' ? [{ name: parameter.name, loc: parameter.loc! }] : []);
+    }
+    const owner: Owner = entry ?? this.topScope().owner;
 
     const scope = new BinderScope(owner, 'function', { kind: 'function', loc: this.rangeOf(node), children: [], declarations: [] }, node.block);
 
@@ -279,13 +344,13 @@ class Binder extends ASTVisitor<BinderScope> {
       this.define(symbol, variable, node.loc!, node, value);
       let entry: OutlineEntry;
       if (value?.type === 'FunctionDeclaration') {
-        entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Function, loc, variable.loc!);
+        entry = this.addEntry(this.topScope().owner, variable.name, CodeSymbolType.Function, loc, variable.loc!);
         this.targets.set(value, { kind: 'entry', entry });
       } else if (unwrapped?.type === 'TableConstructorExpression') {
-        entry = addEntry(this.topScope().owner, variable.name, tableTypeOf(unwrapped), loc, variable.loc!);
+        entry = this.addEntry(this.topScope().owner, variable.name, tableTypeOf(unwrapped), loc, variable.loc!);
         this.targets.set(unwrapped, { kind: 'entry', entry });
       } else {
-        entry = addEntry(this.topScope().owner, variable.name, CodeSymbolType.Variable, loc, variable.loc!);
+        entry = this.addEntry(this.topScope().owner, variable.name, CodeSymbolType.Variable, loc, variable.loc!);
       }
       this.link(entry, symbol);
       this.recordValue(entry, value);
@@ -315,6 +380,7 @@ class Binder extends ASTVisitor<BinderScope> {
     const symbol = new LuaSymbol('loopvar', variable.name);
     this.define(symbol, variable, variable.loc!, node);
     scope.decls.set(variable.name, { kind: 'loopvar', symbol });
+    scope.outlineBlock?.variables.push({ name: variable.name, loc: variable.loc! });
     const lastInHeader = node.type === 'ForNumericStatement' ? (node.step ?? node.end) : node.iterators[node.iterators.length - 1];
     this.declare(scope, symbol, lastInHeader.loc!.end);
   }
@@ -324,7 +390,7 @@ class Binder extends ASTVisitor<BinderScope> {
     const symbol = new LuaSymbol('label', node.label.name);
     this.define(symbol, node.label, node.loc!, node);
     scope.labels.set(node.label.name, symbol);
-    this.link(addEntry(scope.owner, node.label.name, CodeSymbolType.Label, node.loc!, node.label.loc!), symbol);
+    this.link(this.addEntry(scope.owner, node.label.name, CodeSymbolType.Label, node.loc!, node.label.loc!), symbol);
   }
 
   override visitGotoStatement(node: GotoStatement): void {
@@ -382,7 +448,7 @@ class Binder extends ASTVisitor<BinderScope> {
             this.define(member, field.key, field.loc!, field, field.value);
           }
           if (field.value.type === 'FunctionDeclaration') {
-            const method = this.link(addEntry(tableEntry, field.key.name, CodeSymbolType.Method, field.loc!, field.key.loc!), member);
+            const method = this.link(this.addEntry(tableEntry, field.key.name, CodeSymbolType.Method, field.loc!, field.key.loc!), member);
             this.targets.set(field.value, { kind: 'entry', entry: method, selfTable: tableEntry, selfSymbol: table });
             continue;
           }
@@ -477,7 +543,7 @@ class Binder extends ASTVisitor<BinderScope> {
 
     if (binding.kind !== 'global') {
       if (value?.type === 'FunctionDeclaration') {
-        const entry = this.link(addEntry(this.topScope().owner, name.name, CodeSymbolType.Function,
+        const entry = this.link(this.addEntry(this.topScope().owner, name.name, CodeSymbolType.Function,
           loc, name.loc!), binding.symbol);
         this.targets.set(value, { kind: 'entry', entry });
         this.hideForwardDeclaration(binding, entry);
@@ -495,7 +561,7 @@ class Binder extends ASTVisitor<BinderScope> {
     if (value?.type === 'FunctionDeclaration') {
       // Listed under the enclosing function, if any: its range lies inside that function's, and breadcrumbs
       // only follow entries whose ranges contain the cursor.
-      const entry = this.link(addEntry(this.topScope().owner, name.name, CodeSymbolType.Function, loc, name.loc!), binding.symbol);
+      const entry = this.link(this.addEntry(this.topScope().owner, name.name, CodeSymbolType.Function, loc, name.loc!), binding.symbol);
       this.targets.set(value, { kind: 'entry', entry });
       if (!binding.entry) {
         this.setGlobalEntry(name, entry);
@@ -512,13 +578,13 @@ class Binder extends ASTVisitor<BinderScope> {
           receiveTable(binding.entry, ctor);
           this.targets.set(ctor, { kind: 'entry', entry: binding.entry });
         } else {
-          const entry = this.link(addEntry(this.root, name.name, tableTypeOf(ctor), loc, name.loc!), binding.symbol);
+          const entry = this.link(this.addEntry(this.root, name.name, tableTypeOf(ctor), loc, name.loc!), binding.symbol);
           this.setGlobalEntry(name, entry);
           this.targets.set(ctor, { kind: 'entry', entry });
         }
       } else if (!binding.entry) {
         this.setGlobalEntry(name,
-          this.link(addEntry(this.root, name.name, CodeSymbolType.Variable, loc, name.loc!), binding.symbol));
+          this.link(this.addEntry(this.root, name.name, CodeSymbolType.Variable, loc, name.loc!), binding.symbol));
       }
     }
     const table = this.globalEntry(name)!;
@@ -585,7 +651,7 @@ class Binder extends ASTVisitor<BinderScope> {
       if (binding.kind !== 'global') {
         return;
       }
-      rootEntry = this.link(addEntry(this.root, root.name, CodeSymbolType.Table, loc, root.loc!), binding.symbol);
+      rootEntry = this.link(this.addEntry(this.root, root.name, CodeSymbolType.Table, loc, root.loc!), binding.symbol);
       rootEntry.implicit = true;
       this.setGlobalEntry(root, rootEntry);
     }
@@ -619,7 +685,7 @@ class Binder extends ASTVisitor<BinderScope> {
     table: OutlineEntry | undefined, loc: Bounds, member: LuaSymbol, selfTable = table): StatementInfo | undefined {
     const key = segments[segments.length - 1];
     const name = [ root, ...segments.slice(0, -1) ].map(id => id.name).join('.') + indexer + key.name;
-    const entry = this.link(addEntry(this.topScope().owner, name, CodeSymbolType.Method, loc, key.loc!), member);
+    const entry = this.link(this.addEntry(this.topScope().owner, name, CodeSymbolType.Method, loc, key.loc!), member);
     const intermediates = segments.slice(0, -1);
     const firstParam = fn.parameters[0];
     const isSelfMethod = indexer === ':' || (firstParam?.type === 'Identifier' && firstParam.name === 'self');
@@ -890,11 +956,37 @@ function targetRange(statement: AssignmentStatement | LocalStatement, i: number)
   return { start, end: valueEnd?.filename.equals(start.filename) ? valueEnd : variables[i].loc!.end };
 }
 
+type BlockHeader = { keyword: OutlineBlock['keyword'], headerEnd?: CodeLocation };
+
+// Undefined for a scope that is not a block the outline can show.
+function blockHeader(node: VisitableASTNode): BlockHeader | undefined {
+  switch (node.type) {
+  case 'ForNumericStatement':
+    return { keyword: 'for', headerEnd: (node.step ?? node.end).loc?.end };
+  case 'ForGenericStatement':
+    return { keyword: 'for', headerEnd: node.iterators[node.iterators.length - 1]?.loc?.end };
+  case 'WhileStatement':
+    return { keyword: 'while', headerEnd: node.condition.loc?.end };
+  case 'RepeatStatement':
+    return { keyword: 'repeat' };
+  case 'DoStatement':
+    return { keyword: 'do' };
+  case 'IfClause':
+    return { keyword: 'if', headerEnd: node.condition.loc?.end };
+  case 'ElseifClause':
+    return { keyword: 'elseif', headerEnd: node.condition.loc?.end };
+  case 'ElseClause':
+    return { keyword: 'else' };
+  default:
+    return undefined;
+  }
+}
+
 export function emptyAnalysis(): Analysis {
   return {
     outline: [], globals: new Map(), referencesByFile: new Map(), membersByKey: new Map(),
     scope: { kind: 'file', children: [], declarations: [] }, includeScopes: new Map(), includeStarts: new Map(),
-    includeCheckpoints: new Map(), comments: [],
+    includeCheckpoints: new Map(), comments: [], blocks: [],
   };
 }
 
@@ -919,7 +1011,7 @@ export function analyze(chunk: Chunk): Analysis {
   return {
     outline: binder.root.children, globals: binder.globals, referencesByFile, membersByKey,
     scope: binder.fileScope, includeScopes: binder.includeScopes, includeStarts: binder.includeStarts,
-    includeCheckpoints: binder.includeCheckpoints, comments,
+    includeCheckpoints: binder.includeCheckpoints, comments, blocks: binder.blocks,
   };
 }
 

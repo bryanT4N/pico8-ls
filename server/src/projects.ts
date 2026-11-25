@@ -9,6 +9,7 @@ import { analyze, emptyAnalysis } from './parser/analysis/binder';
 import { Analysis, Reference } from './parser/analysis/model';
 import { definitionsAt, referenceAt, referencesOf, warningsOf } from './parser/analysis/queries';
 import { CodeSymbol, outlineFor } from './parser/symbols';
+import { NO_OUTLINE_OPTIONS, OutlineOptions } from './parser/outline/model';
 import { Bounds, containsIndex } from './parser/types';
 import { errorsInFile, FileDiagnostics, inThisFile, mergeDiagnostics } from './diagnostics';
 import { hoverMarkdown } from './hover';
@@ -283,9 +284,11 @@ export class ProjectIndex {
   }
 
   // A failed analysis is empty, so the outline comes from the next project, as the file's Ctrl+T symbols do.
-  outline(uri: string): CodeSymbol[] {
+  outline(uri: string, options: OutlineOptions = NO_OUTLINE_OPTIONS): CodeSymbol[] {
     const project = this.projectsOf(uri).find(({ failed }) => !failed);
-    return project ? outlineFor(project.analysis, ResolvedFile.fromFileURL(uri)) : [];
+    return project
+      ? outlineFor(project.analysis, ResolvedFile.fromFileURL(uri), options, this.documents.get(uri)?.textDocument.getText() ?? '')
+      : [];
   }
 
   definitions(uri: string, index: number): Location[] {
@@ -344,8 +347,8 @@ export class ProjectIndex {
       new Map([[ uri, errorsInFile(uri, this.documents.get(uri)?.errors ?? []) ]]), this.warnings(uri), maxPerFile));
   }
 
-  workspaceSymbols(query: string): SymbolInformation[] {
-    return searchSymbols(this.symbolItemsOfEachFile(), query).map(toSymbolInformation);
+  workspaceSymbols(query: string, options: OutlineOptions = NO_OUTLINE_OPTIONS): SymbolInformation[] {
+    return searchSymbols(this.symbolItemsOfEachFile(options), query).map(toSymbolInformation);
   }
 
   private projectsOf(uri: string): IndexedProject[] {
@@ -354,12 +357,12 @@ export class ProjectIndex {
 
   // Each file once: an indexed file from the first project that contains it, as its outline comes; a file that only an
   // #include reads, like one in a dot-folder, from the first project whose analysis has it.
-  private symbolItemsOfEachFile(): SymbolItem[] {
+  private symbolItemsOfEachFile(options: OutlineOptions): SymbolItem[] {
     const taken = new Set<string>();
     const lists: SymbolItem[][] = [];
     for (const project of this.projects) {
       const files = new Set(project.files);
-      for (const [ uri, items ] of symbolItems(project.analysis)) {
+      for (const [ uri, items ] of symbolItems(project.analysis, options)) {
         if (taken.has(uri) || (this.documents.has(uri) && !files.has(uri))) {
           continue;
         }
