@@ -119,6 +119,9 @@ export type ChildParseResult = {
   invalid: string[],
   // How many queries ran, analyze among them.
   queries: number,
+  // Hover and signature help calls that returned, whatever they gave: on some files signature help never finds a call.
+  hovers: number,
+  signatureHelps: number,
 };
 
 export function parseManyInChild(jobs: ChildParseJob[], timeoutMs: number): ChildParseResult[] {

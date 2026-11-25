@@ -25,8 +25,9 @@ function project(entries: OutlineEntry[], file: ResolvedFile): { listed: CodeSym
     // A function's members are the fields set on it (f.x = 1); the rest, like code #included in its body, go up.
     const isFunction = entry.type === CodeSymbolType.Function || entry.type === CodeSymbolType.Method;
     const members = new Set(entry.members.values());
-    const kept = project(entry.children.filter(child => !isFunction || members.has(child)), file);
-    const body = project(entry.children.filter(child => isFunction && !members.has(child)), file);
+    const stays = (child: OutlineEntry) => !isFunction || members.has(child);
+    const kept = project(entry.children.filter(stays), file);
+    const body = project(entry.children.filter(child => !stays(child)), file);
     lifted.push(...kept.lifted, ...body.listed, ...body.lifted);
     if (kept.listed.length > 0) {
       // Members this file adds to an entry of another file still need a parent in this file's outline.

@@ -82,6 +82,13 @@ describe('hoverMarkdown', () => {
     strictEqual(hoverAt(lines('entity = {}', 'function entity:become(state) end', 'guy = {}', 'function guy:update() return self.become end'), 4, 34), undefined);
   });
 
+  it('orders the methods of that name by file, then by place', () => {
+    // b:go is analysed first, but lib.lua sorts before the main file.
+    const code = lines('b = {}', 'function b:go() end', '#include lib.lua', 'guy = {}', 'function guy:u() self:go() end');
+    strictEqual(hoverAt(code, 5, 22, { 'lib.lua': lines('a = {}', 'function a:go() end') }),
+      block('function a:go()') + '\n\n---\n\n' + block('function b:go()'));
+  });
+
   it('lets a user function shadow a builtin of the same name', () => {
     strictEqual(hoverAt(lines('function print(s) end', 'print(1)'), 2, 0), block('function print(s)'));
     strictEqual(hoverAt('cls()', 1, 0), undefined);

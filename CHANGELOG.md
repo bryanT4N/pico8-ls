@@ -9,7 +9,7 @@
   - A block of comment lines right above the line where a name is defined, with no blank line between. Plain `--` and `//` comments count, and so do `---` and `--[[ ]]`.
   - For a variable, table or field, a `--` or `//` comment at the end of its last line, when no comment above documents it.
   - For a name set in several places, the comment is looked for where Go to Definition goes: its first definition in each file, and each function definition.
-  - Not shown: a tab's name (the comment right after `-->8`), the title at the top of a file, a heading, and commented-out code. A heading is a block whose last line is a row of `-`, `=`, `*` or similar characters, or a single line of text between two runs of them, as in `-- ==== player ====`.
+  - Not shown: a tab's name (the comment right after `-->8`), the title at the top of a file, a heading, and commented-out code. A heading is a block whose last line is a row of at least three `-`, `=`, `*` or similar characters, or a single line of text between two runs of at least three of them, as in `-- ==== player ====`.
   - LDoc tags such as `@param` and `@return` are listed after the description; `@param name text` also documents that parameter.
 - Expanding a completion item shows the same declaration and comment.
 - A function of your own that has the name of a built-in one, such as `print`, shows as yours in hover, completion and parameter hints.

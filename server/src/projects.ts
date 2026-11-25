@@ -216,7 +216,7 @@ export class ProjectIndex {
       this.analyseChanged();
       return [ ...this.documents.keys(), ...stopped.dropped, ...dropped ];
     }
-    let rebuilt = stopped.changed || !sameSet(includedUris(before), includedUris(document)) || this.projectsOf(uri).length === 0;
+    let rebuilt = !sameSet(includedUris(before), includedUris(document)) || this.projectsOf(uri).length === 0;
     if (rebuilt) {
       this.buildProjects();
     }

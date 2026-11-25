@@ -38,9 +38,11 @@ function collectInvalid(syms: CodeSymbol[], mainFile: ResolvedFile): string[] {
   return invalid;
 }
 
-// The lookups the editor asks for while code is being typed. Returns how many ran.
-function runQueries(analysis: Analysis, file: ResolvedFile, code: string): number {
-  let queries = 0;
+type Counts = Pick<ChildParseResult, 'queries' | 'hovers' | 'signatureHelps'>;
+
+// The lookups the editor asks for while code is being typed, counted as they return, so that a throw leaves the counts
+// of those before it.
+function runQueries(analysis: Analysis, file: ResolvedFile, code: string, counts: Counts): void {
   for (const reference of analysis.referencesByFile.get(file.path) ?? []) {
     const found = referenceAt(analysis, file, reference.loc.start.index);
     if (!found) {
@@ -49,10 +51,11 @@ function runQueries(analysis: Analysis, file: ResolvedFile, code: string): numbe
     definitionsAt(analysis, found);
     referencesOf(found.symbol, true);
     hoverMarkdown(analysis, found);
-    queries += 4;
+    counts.hovers++;
+    counts.queries += 4;
   }
   warningsOf(analysis);
-  queries++;
+  counts.queries++;
   const lines = code.split('\n');
   for (let k = 0; k < PLACES; k++) {
     const index = Math.floor(k * code.length / (PLACES - 1));
@@ -63,9 +66,9 @@ function runQueries(analysis: Analysis, file: ResolvedFile, code: string): numbe
     membersAt(analysis, file, index, [ 'self' ], false);
     completionItems([ analysis ], file, index, completionRequestAt(lines[line], column), line, column);
     signatureHelpAt([ analysis ], file, code, index);
-    queries += 4;
+    counts.signatureHelps++;
+    counts.queries += 4;
   }
-  return queries;
 }
 
 function parseJob(job: ChildParseJob): ChildParseResult {
@@ -86,18 +89,20 @@ function parseJob(job: ChildParseJob): ChildParseResult {
       outline: [],
       invalid: [],
       queries: 0,
+      hovers: 0,
+      signatureHelps: 0,
     };
   }
 
   // A throw in the analysis or in a query shows up in `threw` too, along with
   // what the parse found.
   let symbols: CodeSymbol[];
-  let queries = 0;
+  const counts: Counts = { queries: 0, hovers: 0, signatureHelps: 0 };
   try {
     const analysis = analyze(chunk);
-    queries++;
+    counts.queries++;
     symbols = outlineFor(analysis, mainFile);
-    queries += runQueries(analysis, mainFile, job.code);
+    runQueries(analysis, mainFile, job.code, counts);
   } catch (e) {
     return {
       ms: performance.now() - start,
@@ -106,7 +111,7 @@ function parseJob(job: ChildParseJob): ChildParseResult {
       statements: chunk.block.body.map(s => s.type + (s.included ? '*' : '')),
       outline: [],
       invalid: [],
-      queries,
+      ...counts,
     };
   }
 
@@ -118,7 +123,7 @@ function parseJob(job: ChildParseJob): ChildParseResult {
     statements: chunk.block.body.map(s => s.type + (s.included ? '*' : '')),
     outline: outlineLines(symbols),
     invalid: collectInvalid(symbols, mainFile),
-    queries,
+    ...counts,
   };
 }
 
