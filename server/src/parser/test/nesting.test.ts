@@ -25,6 +25,19 @@ describe('nesting limit', () => {
     assert.deepStrictEqual(errorsOf(nested('function f()\n', '', 'end\n', 201)), [ 'main_test_file 201:0 too many nested levels (limit is 200) near \'function\'' ]);
   });
 
+  // Lua 5.2 looks for `)`, `}` or the end of the block before it parses an
+  // expression there, so an empty argument list, an empty table or a bare
+  // `return` adds no level.
+  it('counts no level for an expression that is not there', () => {
+    assert.deepStrictEqual(errorsOf(nested('if a then\n', 'f()\n', 'end\n', 199)), []);
+    assert.deepStrictEqual(errorsOf(nested('if a then\n', 'f{}\n', 'end\n', 199)), []);
+    assert.deepStrictEqual(errorsOf('x = ' + nested('(', '{}', ')', 198)), []);
+    assert.deepStrictEqual(errorsOf('x = ' + Array.from({ length: 198 }, () => 'a').join('..') + '..f()'), []);
+    assert.deepStrictEqual(errorsOf(nested('if a then\n', 'repeat return until a\n', 'end\n', 198)), []);
+    assert.deepStrictEqual(errorsOf(nested('if a then\n', 'if b then return else y() end\n', 'end\n', 198)), []);
+    assert.deepStrictEqual(errorsOf(nested('if a then\n', 'f(1)\n', 'end\n', 199)), [ 'main_test_file 200:2 too many nested levels (limit is 200) near \'1\'' ]);
+  });
+
   it('reports code nested too deep once for its statement, and goes on parsing it', () => {
     const table = parse('x = ' + nested('{', '1, 2, 3', '}', 199));
     assert.deepStrictEqual([ table.errors.map(formatError), outlineLines(table.symbols) ],

@@ -1314,8 +1314,11 @@ export default class Parser {
   // it. A throw does not: the parseBlock that catches it restores the count.
   // This runs for every expression, so the check is inline and tooManyLevels
   // is only called past the limit.
+  // Some callers try for an expression that may not be there (`f()`, `{}`, a
+  // bare `return`). Lua 5.2 looks for `)`, `}` or the end of the block first
+  // and enters no level, so a level with no expression in it is not reported.
   parseSubExpression(minPrecedence: number, flowContext: FlowContext): Expression | null {
-    if (++this.levels > MAX_LEVELS) {
+    if (++this.levels > MAX_LEVELS && canStartExpression(this.token, this.lexer.lookahead!)) {
       this.tooManyLevels();
     }
     const expression = this.parseSubExpressionInLevel(minPrecedence, flowContext);
@@ -1583,6 +1586,25 @@ function canStartStatement(token: Token): boolean {
     return [ 'function', 'local', 'if', 'for', 'while', 'repeat', 'do', 'return', 'goto', 'break' ].includes(token.value as string);
   case TokenType.Punctuator:
     return [ '::', '(', '?', '#', ';' ].includes(token.value as string);
+  default:
+    return false;
+  }
+}
+
+// A `function` followed by a name is not a value: it starts the next statement.
+function canStartExpression(token: Token, lookahead: Token): boolean {
+  switch (token.type) {
+  case TokenType.Identifier:
+  case TokenType.StringLiteral:
+  case TokenType.NumericLiteral:
+  case TokenType.BooleanLiteral:
+  case TokenType.NilLiteral:
+  case TokenType.VarargLiteral:
+    return true;
+  case TokenType.Keyword:
+    return token.value === 'not' || (token.value === 'function' && lookahead.type !== TokenType.Identifier);
+  case TokenType.Punctuator:
+    return [ '(', '{', '-', '#', '~', '@', '%', '$' ].includes(token.value as string);
   default:
     return false;
   }
