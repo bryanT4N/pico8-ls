@@ -9,8 +9,8 @@
   - Go to Symbol in Workspace lists parameters and loop variables when the outline does, next to their function. Blocks are not listed.
 - A `.lua` file is PICO-8 Lua when it belongs to a cart: a `.p8` file is in its folder or a folder above it in the workspace, or a cart `#include`s it, directly or through other files. Other `.lua` files open as plain Lua: they get no PICO-8 warnings, are not in Go to Symbol in Workspace, and the server does not read them, so a folder full of other Lua code no longer slows the start.
   - A `.lua` file that belongs to a cart switches to PICO-8 Lua when you open it, or when a new cart or `#include` makes it belong while it is open. It does not switch back when it stops belonging.
-  - A file you change from PICO-8 Lua to another language is not switched again in this workspace, also after a reload, until you choose PICO-8 Lua for it again. A file that `files.associations` gives a language is not switched either.
-  - So a `.lua` file near a cart that is not PICO-8 code, such as a build script, can be kept as plain Lua, and it then shows no PICO-8 warnings.
+  - A file you change from PICO-8 Lua to another language is not switched again in this workspace, also after a reload, until you choose PICO-8 Lua for it again, and it shows no PICO-8 warnings. So a `.lua` file near a cart that is not PICO-8 code, such as a build script, can be kept as plain Lua.
+  - A file that `files.associations` gives a language is not switched either.
   - A file you open as PICO-8 Lua yourself belongs while it is open, and so do the files it `#include`s.
   - To open every `.lua` file as PICO-8 Lua, as before, add `"files.associations": { "*.lua": "pico-8-lua" }` to your settings.
 - The extension starts when you open a PICO-8 file, or when VS Code finds a `.p8` file in the workspace at startup or in a folder you add.

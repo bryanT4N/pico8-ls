@@ -505,6 +505,24 @@ describe('ProjectIndex', () => {
     deepStrictEqual(outlineLines(index.outline(uriOf('common.lua'))), [ 'helper() [Function]', '  x [Variable]' ]);
   });
 
+  it('takes the warnings from the projects whose analysis did not fail', () => {
+    const files = { 'a.p8': '#include common.lua', 'b.p8': '#include common.lua', 'common.lua': 'function helper()\n  print(undefined_thing)\nend' };
+    // The kind of node the formatter inserts, which the analysis does not know, in a.p8 only.
+    const index = indexOver(files, { tweak: doc => {
+      if (doc.textDocument.uri === uriOf('a.p8')) {
+        doc.chunk.block.body.push({ type: 'Whitespace', count: 1 } as any);
+      }
+    } });
+    const consoleError = console.error;
+    console.error = () => undefined;
+    try {
+      index.scan(Object.keys(files).map(uriOf));
+    } finally {
+      console.error = consoleError;
+    }
+    deepStrictEqual(index.warnings(uriOf('common.lua')).map(formatError), [ 'common.lua 2:8 undefined variable: undefined_thing' ]);
+  });
+
   it('takes #include Lib.lua for lib.lua on a disk that ignores case', function () {
     const dir = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'pico8-ls-case-'));
     try {

@@ -396,9 +396,10 @@ export class ProjectIndex {
   }
 
   // Only the warnings every project containing uri gives: in a file that several carts include, a warning that one
-  // cart's code proves wrong is not shown.
+  // cart's code proves wrong is not shown. A project whose analysis failed gives an empty list; intersecting with it
+  // removes all warnings from other projects, so failed projects are skipped, as outline and workspace symbols do.
   warnings(uri: string): Warning[] {
-    const [ first, ...others ] = this.projectsOf(uri).map(project => project.warnings.filter(warning => inThisFile(uri, warning)));
+    const [ first, ...others ] = this.projectsOf(uri).filter(project => !project.failed).map(project => project.warnings.filter(warning => inThisFile(uri, warning)));
     if (!first) {
       return [];
     }
