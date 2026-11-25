@@ -543,9 +543,12 @@ __music__
       assert.deepStrictEqual(lexWithErrors('x = 1 -- c\n  -- d').comments.map(c => c.lineBefore), [ 'x = 1 ', '  ' ]);
     });
 
-    it('records whether only blanks follow a comment on its last line', () => {
+    it('records whether only blanks and comments that end the line follow a comment on its last line', () => {
       assert.deepStrictEqual(lexWithErrors('--[[ a ]] x = 1\n--[[ b\n]]\n-- c').comments.map(c => c.endsLine), [ false, true, true ]);
       assert.deepStrictEqual(lexWithErrors('-- c\r\nx = 1').comments.map(c => c.endsLine), [ true ]);
+      assert.deepStrictEqual(lexWithErrors('--[[ a ]]--\n--[[ b ]] --[[ c ]] x = 1\n--[[ d ]] // e').comments.map(c => c.endsLine),
+        [ true, true, false, false, true, true ]);
+      assert.deepStrictEqual(lexWithErrors('--[[ a ]]--\r\nx = 1').comments.map(c => c.endsLine), [ true, true ]);
     });
   });
 });

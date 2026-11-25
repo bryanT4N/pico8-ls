@@ -110,6 +110,13 @@ describe('doc comments', () => {
     strictEqual(text(docAt(lines('x = 1', '--[[ a', 'b ]] y = 2', 'function f() end', 'f()'), 5, 0)), undefined);
   });
 
+  it('takes a long comment that only comments follow on its line, as in --[[ ]]--', () => {
+    strictEqual(text(docAt(lines('x = 1', '--[[ makes a player ]]--', 'function make_player() end', 'make_player()'), 4, 0)), 'makes a player');
+    strictEqual(text(docAt(lines('x = 1', '--[[', '  makes a player', ']]--', 'function make_player() end', 'make_player()'), 6, 0)),
+      'makes a player');
+    strictEqual(text(docAt(lines('x = 1', '--[[ a ]] -- b', 'function f() end', 'f()'), 4, 0)), 'a');
+  });
+
   it('gives no doc to a loop variable, and the statement\'s doc to each of its names', () => {
     strictEqual(text(docAt(lines('x = 1', '-- each enemy', 'for e in all(es) do print(e) end'), 3, 4)), undefined);
     const screen = lines('x = 1', '-- the screen size', 'w, h = 128, 128', 'print(w, h)');

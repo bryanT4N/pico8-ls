@@ -43,6 +43,9 @@ export default class Lexer {
   tokenStartLineIdx: number = 0;
 
   comments: Comment_[] = [];
+  // The comments of a run on one line, such as --[[ a ]]--, each followed by blanks and the next: they end the line
+  // when the last of the run does. lex() scans a whole run in one call.
+  private commentsBeforeComment: Comment_[] = [];
   errors: errors.ParseError[] = [];
   lookahead: Token | undefined;
   previousToken: Token | undefined;
@@ -183,12 +186,7 @@ export default class Lexer {
     for (;;) {
       this.skipWhiteSpace();
 
-      while (
-        // Skip comments beginning with --
-        (45 === this.input.charCodeAt(this.index) && 45 === this.input.charCodeAt(this.index + 1))
-        // (pico-8 specific) Also skip comments beginning with `//`
-        || (47 === this.input.charCodeAt(this.index) && 47 === this.input.charCodeAt(this.index + 1))
-      ) {
+      while (this.isCommentStart(this.index)) {
         const canBeLongComment = 45 === this.input.charCodeAt(this.index);
         this.scanComment(canBeLongComment);
         this.skipWhiteSpace();
@@ -767,7 +765,7 @@ export default class Lexer {
     // Stops at the first character that is not a blank rather than reading to the end of the line: a line of many long
     // comments would take quadratic time.
     let after = this.index;
-    while (after < this.length && /[ \t\v\f]/.test(this.input.charAt(after))) {
+    while (after < this.length && isWhiteSpace(this.input.charCodeAt(after))) {
       ++after;
     }
     const endsLine = after === this.length || isLineTerminator(this.input.charCodeAt(after));
@@ -777,6 +775,22 @@ export default class Lexer {
     // intercepted in the lexer all location data is set manually.
     node.loc = this.getCurrentBounds();
     this.comments.push(node);
+
+    // A comment, not code, follows: whether this one ends its line waits for the next comment.
+    if (this.isCommentStart(after)) {
+      this.commentsBeforeComment.push(node);
+    } else {
+      for (const before of this.commentsBeforeComment) {
+        before.endsLine = endsLine;
+      }
+      this.commentsBeforeComment = [];
+    }
+  }
+
+  // -- or, in PICO-8, //.
+  isCommentStart(index: number): boolean {
+    const charCode = this.input.charCodeAt(index);
+    return (45 === charCode || 47 === charCode) && charCode === this.input.charCodeAt(index + 1);
   }
 
   // Read a multiline string by calculating the depth of `=` characters and
