@@ -42,7 +42,15 @@ describe('outline options', () => {
       '  if this_is_a_really_long_condition_name and another then local h end', 'end'), { showBlocks: true }),
     [ 'f() [Function]', '  for k,v in pairs(t) [Block]', '    a [Variable]', '  while alive [Block]', '    b [Variable]', '  repeat [Block]', '    c [Variable]',
       '  do [Block]', '    d [Variable]', '  if (x > 0) [Block]', '    e [Variable]', '  if a and [Block]', '    g [Variable]',
-      '  if this_is_a_really_long_condition_name… [Block]', '    h [Variable]' ]);
+      '  if this_is_a_really_long_condition_name\u2026 [Block]', '    h [Variable]' ]);
+  });
+
+  it('names a block by its keyword when it has no text to read the header from', () => {
+    const { analysis } = analyzeCode(lines('function f()', '  if x > 0 then local a end', 'end'));
+    const blocks = { ...NO_OUTLINE_OPTIONS, showBlocks: true };
+    const expected = [ 'f() [Function]', '  if [Block]', '    a [Variable]' ];
+    deepStrictEqual(outlineLines(outlineFor(analysis, testFile(), blocks)), expected);
+    deepStrictEqual(outlineLines(outlineFor(analysis, testFile(), blocks, 'function f()')), expected);
   });
 
   it('lists the branches of an if side by side, each up to the next, and repeat up to its until', () => {

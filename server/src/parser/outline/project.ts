@@ -133,10 +133,14 @@ function blockName(block: OutlineBlock, text: string): string {
   if (block.headerEnd) {
     const closing = /(\s*\))*/y;
     closing.lastIndex = block.headerEnd.index;
-    header = text.slice(block.loc.start.index, block.headerEnd.index + closing.exec(text)![0].length);
+    header = text.slice(block.loc.start.index, block.headerEnd.index + (closing.exec(text)?.[0].length ?? 0));
   }
   const name = header.split(/\r\n|\r|\n/)[0].replace(/\s+/g, ' ').trim();
-  return name.length > 40 ? name.slice(0, 39) + '…' : name;
+  // A text that does not reach the block gives nothing to read, and VS Code drops an outline with an empty name in it.
+  if (name === '') {
+    return block.keyword;
+  }
+  return name.length > 40 ? name.slice(0, 39) + '\u2026' : name;
 }
 
 function inOrder(symbols: CodeSymbol[]): CodeSymbol[] {
