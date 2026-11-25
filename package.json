@@ -6,7 +6,7 @@
 	"author": "JanPaul Bergeson",
 	"publisher": "bryanT4N",
 	"license": "MIT",
-	"version": "0.5.0",
+	"version": "0.6.0",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/bryanT4N/pico8-ls"

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+
+- Three new settings, all off by default, change the outline, breadcrumbs, sticky scroll and Go to Symbol in Workspace (Ctrl+T) as soon as you change them:
+  - `pico-8-ls.outline.showParameters` lists each function's parameters under it, first. `...` is not listed.
+  - `pico-8-ls.outline.showLoopVariables` lists the variables of each `for` loop under the function the loop is in, or under the loop when blocks are shown.
+  - `pico-8-ls.outline.showBlocks` groups the outline by the `for`, `while`, `repeat` and `do` blocks and the branches of `if` that hold something it lists. A block is named after its first line, as in `for i=1,#enemies` or `if x > 0`, and has the icon of a tab or a `#region`.
+  - Go to Symbol in Workspace lists parameters and loop variables when the outline does, next to their function. Blocks are not listed.
+- A `.lua` file is PICO-8 Lua when it belongs to a cart: a `.p8` file is in its folder or a folder above it in the workspace, or a cart `#include`s it, directly or through other files. Other `.lua` files open as plain Lua: they get no PICO-8 warnings, are not in Go to Symbol in Workspace, and the server does not read them, so a folder full of other Lua code no longer slows the start.
+  - A `.lua` file that belongs to a cart switches to PICO-8 Lua when you open it, or when a new cart or `#include` makes it belong while it is open. It does not switch back when it stops belonging.
+  - A file you change from PICO-8 Lua to another language is not switched again in this workspace, also after a reload, until you choose PICO-8 Lua for it again. A file that `files.associations` gives a language is not switched either.
+  - A file you open as PICO-8 Lua yourself belongs while it is open, and so do the files it `#include`s.
+  - To open every `.lua` file as PICO-8 Lua, as before, add `"files.associations": { "*.lua": "pico-8-lua" }` to your settings.
+- The extension starts when the workspace contains a `.p8` file, or when you open a PICO-8 file.
+- A file that a cart includes from a folder whose name starts with a dot, or from outside the workspace, now gets its problems shown like the cart's other files.
+- Fixed: `#include Lib.lua` and a file named `lib.lua` were taken for two files on Windows, which gave the included file false warnings.
+- Fixed: with a workspace folder inside a folder whose name starts with a dot, next to a workspace folder above it, such as `C:\` and `C:\.proj\game`, changes to the inner folder's files were ignored, and removing the inner folder kept its files.
+- Fixed: a file of a removed workspace folder that was open in the editor stayed in Go to Symbol in Workspace after you closed it.
+- Fixed: when the analysis of the first cart that includes a file failed, that file's outline was empty, though another cart gives one.
+
 ## 0.5.0 (unreleased)
 
 - Go to Symbol in Workspace (Ctrl+T) finds the functions, methods, tables, fields and variables that the outline lists, in every file of the workspace and in the files they `#include`, also those outside the workspace or in a folder whose name starts with a dot.
