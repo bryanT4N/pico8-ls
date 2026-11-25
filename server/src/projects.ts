@@ -65,16 +65,8 @@ function reaches(root: string, filePath: string): boolean {
   return path.relative(root, filePath).split(path.sep).slice(0, -1).every(part => !part.startsWith('.'));
 }
 
-// The files under one of the removed folders and under none of the remaining ones; paths, not URIs, for the folders.
-export function leftWorkspace(uris: string[], removed: string[], remaining: string[]): string[] {
-  return uris.filter(uri => {
-    const filePath = url.fileURLToPath(uri);
-    return removed.some(folder => isUnder(filePath, folder)) && !remaining.some(folder => isUnder(filePath, folder));
-  });
-}
-
 // A drive or share root, such as c:\ or \\server\share\, already ends in a separator.
-function isUnder(filePath: string, folder: string): boolean {
+export function isUnder(filePath: string, folder: string): boolean {
   const dir = path.normalize(folder);
   return path.normalize(filePath).startsWith(dir.endsWith(path.sep) ? dir : dir + path.sep);
 }

@@ -11,7 +11,7 @@ import ResolvedFile, { FileResolver, fileURLToPath, pathToFileURL, RealFileResol
 import { NO_OUTLINE_OPTIONS } from '../parser/outline/model';
 import { outlineLines } from '../parser/test/outline-utils';
 import { ALL_OUTLINE_OPTIONS, deepEquals, formatError } from '../parser/test/test-utils';
-import { findProjects, isScanned, isTrackedPath, leftWorkspace, makeFileResolver, nearCart, ParsedDocumentsMap, ProjectDocument, ProjectIndex } from '../projects';
+import { findProjects, isScanned, isTrackedPath, makeFileResolver, nearCart, ParsedDocumentsMap, ProjectDocument, ProjectIndex } from '../projects';
 import { callContextAt } from '../signature-help';
 
 // Creates a mock ProjectDocument that just has the specified includes
@@ -81,25 +81,6 @@ describe('isTrackedPath', () => {
     eq(isTrackedPath(path.join(game, 'main.p8'), [ root, game ]), true);
     eq(isTrackedPath(path.join(game, 'main.p8'), [ game, root ]), true);
     eq(isTrackedPath(path.join(root, '.proj', 'other', 'x.lua'), [ root, game ]), false);
-  });
-});
-
-describe('leftWorkspace', () => {
-  it('lists the files under a removed folder and under no remaining one', () => {
-    const ws = path.resolve('/ws');
-    const uri = (p: string) => pathToFileURL(path.join(ws, p));
-    deepStrictEqual(leftWorkspace([ uri('b/x.lua'), uri('b/inner/y.lua'), uri('b2/z.lua'), uri('a/m.p8'), uri('b/.hidden/w.lua') ],
-      [ path.join(ws, 'b') ], [ path.join(ws, 'a'), path.join(ws, 'b', 'inner') ]), [ uri('b/x.lua'), uri('b/.hidden/w.lua') ]);
-  });
-
-  it('takes a filesystem root, which ends in a separator, as a folder like any other', () => {
-    const root = path.parse(process.cwd()).root;
-    const games = path.join(root, 'games');
-    const uri = (p: string) => pathToFileURL(path.join(root, p));
-    const files = [ uri('games/a.lua'), uri('b.lua') ];
-    deepStrictEqual(leftWorkspace(files, [ root ], []), files);
-    deepStrictEqual(leftWorkspace(files, [ root ], [ games ]), [ uri('b.lua') ]);
-    deepStrictEqual(leftWorkspace(files, [ games ], [ root ]), []);
   });
 });
 

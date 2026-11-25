@@ -13,7 +13,7 @@ import { builtinInfo } from './parser/builtins';
 import ResolvedFile, { pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
 import Formatter, { FormatterOptions } from './parser/formatter';
-import { isTrackedPath, leftWorkspace, makeFileResolver, ProjectDocument, ProjectIndex } from './projects';
+import { isScanned, isTrackedPath, isUnder, makeFileResolver, nearCart, ProjectDocument, ProjectIndex } from './projects';
 import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -34,16 +34,70 @@ const documents = new TextDocuments(TextDocument);
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 
-// The text of the workspace's files as the scan or the file watcher read them.
+// The text of the index's files as the scan, the file watcher or a first read took it from the disk.
 const diskText = new Map<string, string>();
 
-// The paths of the workspace folders, which change as folders are added and removed: isTrackedPath checks the file
-// watcher's events against them, and a removed folder's file leaves the index only when no remaining folder holds it.
+// The paths of the workspace folders, which change as folders are added and removed. Which files belong to a cart
+// depends on them: the scan of the folders lists the carts and the .lua files, and a .lua file looks for a cart up to
+// the outermost folder that lists it.
 let workspaceRoots: string[] = [];
+
+// The carts that the scan and the file watcher found, by path.normalize. The index asks whether a file belongs for
+// every file it settles, so the folders that hold a cart are kept as a set, made again after the carts change.
+const carts = new Set<string>();
+let cartFolders: Set<string> | undefined;
+
+function addCart(filePath: string) {
+  carts.add(path.normalize(filePath));
+  cartFolders = undefined;
+}
+
+function deleteCart(filePath: string) {
+  carts.delete(path.normalize(filePath));
+  cartFolders = undefined;
+}
+
+function hasCart(folder: string): boolean {
+  cartFolders ??= new Set([ ...carts ].map(cart => path.dirname(cart)));
+  return cartFolders.has(folder);
+}
+
+// Reads the disk, for a file the scan has not seen yet, or one outside the workspace folders.
+function folderHasCart(folder: string): boolean {
+  try {
+    return fs.readdirSync(folder).some(name => /\.p8$/i.test(name));
+  } catch {
+    return false;
+  }
+}
+
+function pathOf(uri: string): string | undefined {
+  try {
+    return url.fileURLToPath(uri);
+  } catch {
+    return undefined;
+  }
+}
+
+// A file open in the editor, a cart the scan lists, or a .lua file the scan lists near a cart. The index asks while it
+// changes, so this answers false for a URI that is not a file's rather than throw.
+function isMember(uri: string): boolean {
+  if (documents.get(uri)) {
+    return true;
+  }
+  const filePath = pathOf(uri);
+  return filePath !== undefined && isScanned(filePath, workspaceRoots)
+    && (/\.p8$/i.test(filePath) || nearCart(filePath, workspaceRoots, hasCart));
+}
 
 const fileResolver = makeFileResolver(uri => documents.get(uri)?.getText(), diskText);
 
-const index = new ProjectIndex(parseFile);
+const index = new ProjectIndex(parseFile, isMember);
+
+// The client asks again whether its open lua documents belong to a cart, and switches those that do to PICO-8 Lua.
+function notifyCartFiles() {
+  connection.sendNotification('pico-8-ls/didChangeCartFiles');
+}
 
 // Set up some initial configs
 connection.onInitialize((params: InitializeParams) => {
@@ -97,16 +151,29 @@ connection.onInitialized(() => {
       const removed = event.removed.map(folder => url.fileURLToPath(folder.uri));
       const added = event.added.map(folder => url.fileURLToPath(folder.uri));
       workspaceRoots = [ ...workspaceRoots.filter(root => !removed.includes(root)), ...added ];
-      // Open files stay, as the editor still shows them.
-      const left = leftWorkspace(index.uris(), removed, workspaceRoots).filter(uri => !documents.get(uri));
-      for (const uri of left) {
-        // So that a cart that includes it reads it from disk from now on.
-        diskText.delete(uri);
+      for (const cart of [ ...carts ]) {
+        if (!isScanned(cart, workspaceRoots)) {
+          deleteCart(cart);
+        }
       }
-      // A removed file gets empty diagnostics, which clears its warnings from the Problems panel. With none removed,
-      // the scan of the added folders sends every file's diagnostics anyway.
-      if (left.length > 0) {
-        publish(index.removeAll(left));
+      // The file watcher reports nothing under a removed folder, so an includer reads such a file from the disk from
+      // now on, as textOf keeps the text of none outside the workspace folders.
+      for (const uri of [ ...diskText.keys() ]) {
+        const filePath = pathOf(uri);
+        if (filePath === undefined || !workspaceRoots.some(root => isUnder(filePath, root))) {
+          diskText.delete(uri);
+        }
+      }
+      const joined = index.joins();
+      const left = index.prune();
+      // A file that left gets empty diagnostics, which clears its warnings from the Problems panel. With none leaving
+      // there is nothing to send here: the scans of the added folders send every file's diagnostics, and with no folder
+      // added nothing changed. A file can still join, one whose parse failed before, and it gets its diagnostics too.
+      if (left.length > 0 || index.joins() > joined) {
+        publish([ ...index.uris(), ...left ]);
+      }
+      if (index.joins() > joined) {
+        notifyCartFiles();
       }
       Promise.all(event.added.map(scanWorkspaceFolder)).catch(e => {
         console.log('Error scanning workspace folders', e);
@@ -138,28 +205,56 @@ function scanWorkspace() {
 }
 
 async function scanWorkspaceFolder(workspaceFolder: WorkspaceFolder) {
-  const folderPath = url.fileURLToPath(workspaceFolder.uri);
+  try {
+    const folderPath = url.fileURLToPath(workspaceFolder.uri);
 
-  // List all files in directory & subdirs
-  const allFiles = await getFilesRecursive(folderPath, folderPath);
+    // List all files in directory & subdirs
+    const allFiles = await getFilesRecursive(folderPath, folderPath);
 
-  const uris = await Promise.all(allFiles.map(async filePath => {
-    const uri = pathToFileURL(filePath);
+    // The folder can have been removed while it was being listed.
+    for (const filePath of allFiles) {
+      if (/\.p8$/i.test(filePath) && isScanned(filePath, workspaceRoots)) {
+        addCart(filePath);
+      }
+    }
+    // A .lua file that belongs to no cart is not read at all, so a folder of plain Lua costs only its listing.
+    const members = allFiles.map(filePath => pathToFileURL(filePath)).filter(isMember);
+    await readFromDisk(members);
+
+    // The folder can have been removed while its files were being read, when the index did not have them yet for the
+    // removal to drop. Files open in the editor stay, as they do when a folder is removed.
+    const stillMembers = new Set(members.filter(isMember));
+    for (const uri of members) {
+      if (!stillMembers.has(uri)) {
+        diskText.delete(uri);
+      }
+    }
+    publish(index.scan([ ...stillMembers ]));
+  } finally {
+    // Also after a scan that failed, so that whatever waits for the end of the scan is not left waiting.
+    notifyCartFiles();
+  }
+}
+
+// A new cart brings in the .lua files of its folder, which the scan left out while no cart was near them.
+async function scanCartFolder(cartPath: string) {
+  const folder = path.dirname(cartPath);
+  const uris = (await getFilesRecursive(folder, folder)).map(filePath => pathToFileURL(filePath))
+    .filter(uri => isMember(uri) && !index.document(uri));
+  await readFromDisk(uris);
+  publish(index.scan(uris));
+  notifyCartFiles();
+}
+
+async function readFromDisk(uris: string[]) {
+  await Promise.all(uris.map(async uri => {
+    const filePath = url.fileURLToPath(uri);
     try {
       diskText.set(uri, (await fs.promises.readFile(filePath)).toString());
     } catch (e) {
       console.error('Error reading ' + filePath, e);
     }
-    return uri;
   }));
-
-  // The folder can have been removed while its files were being read, when the index did not have them yet for the
-  // removal to drop. Files open in the editor stay, as they do when a folder is removed.
-  const gone = new Set(leftWorkspace(uris, [ folderPath ], workspaceRoots).filter(uri => !documents.get(uri)));
-  for (const uri of gone) {
-    diskText.delete(uri);
-  }
-  publish(index.scan(uris.filter(uri => !gone.has(uri))));
 }
 
 async function getFilesRecursive(folderPath: string, root: string): Promise<string[]> {
@@ -205,7 +300,17 @@ function textOf(uri: string): string | undefined {
   }
   try {
     const filePath = url.fileURLToPath(uri);
-    return fileResolver.doesFileExist(filePath) ? fileResolver.loadFileContents(filePath) : undefined;
+    if (!fileResolver.doesFileExist(filePath)) {
+      return undefined;
+    }
+    const kept = diskText.has(uri);
+    const text = fileResolver.loadFileContents(filePath);
+    // A file the scan did not read, like one only an #include brings in, is kept too, so that its includers do not read
+    // the disk on every keystroke; only under a workspace folder, where the file watcher keeps it current.
+    if (!kept && workspaceRoots.some(root => isUnder(filePath, root))) {
+      diskText.set(uri, text);
+    }
+    return text;
   } catch (e) {
     console.error('Error reading ' + uri, e);
     return undefined;
@@ -228,6 +333,12 @@ function parseText(uri: string, text: string): Chunk | undefined {
 function publish(uris: string[]) {
   for (const diagnostics of index.diagnostics(uris, globalSettings.maxNumberOfProblems)) {
     connection.sendDiagnostics(diagnostics);
+  }
+  // The file watcher skips a file that belongs to no cart, so the text of one that left would not be kept current.
+  for (const uri of uris) {
+    if (!index.document(uri)) {
+      diskText.delete(uri);
+    }
   }
 }
 
@@ -266,7 +377,11 @@ function takeSettings(settings: PicoSettings) {
 
 // Set up validation handler for when document changes
 documents.onDidChangeContent(change => {
+  const joined = index.joins();
   publish(index.update(change.document.uri));
+  if (index.joins() > joined) {
+    notifyCartFiles();
+  }
 });
 
 documents.onDidClose(e => {
@@ -320,6 +435,20 @@ connection.onWorkspaceSymbol((params: WorkspaceSymbolParams) => {
   }
 });
 
+// The client asks for a lua document, uri in VS Code's form, to give it the PICO-8 Lua language. True when a file of
+// the index #includes it, or when a cart is in its folder or a folder above it. Only the search for a cart reads the
+// disk, so that the answer does not wait for the scan to find the carts.
+connection.onRequest('pico-8-ls/belongsToCart', (params: { uri: string }) => {
+  try {
+    const filePath = pathOf(params.uri);
+    return filePath !== undefined
+      && (index.isIncluded(params.uri) || nearCart(filePath, workspaceRoots, folderHasCart));
+  } catch (e) {
+    console.error('Failed to tell whether a file belongs to a cart', e);
+    return false;
+  }
+});
+
 function offsetOf(params: TextDocumentPositionParams): number | undefined {
   return documents.get(params.textDocument.uri)?.offsetAt(params.position);
 }
@@ -335,30 +464,68 @@ connection.onReferences((params: ReferenceParams) => {
 });
 
 connection.onDidChangeWatchedFiles(change => {
+  const joined = index.joins();
   const uris: string[] = [];
+  const newCarts: string[] = [];
+  let cartDeleted = false;
   for (const { uri, type } of change.changes) {
-    if (!isTrackedPath(url.fileURLToPath(uri), workspaceRoots)) {
+    const filePath = pathOf(uri);
+    if (filePath === undefined) {
       continue;
+    }
+    // A file in a dot-folder is in the index when a file of the index #includes it, and an #include can wait for one
+    // to appear.
+    const known = index.document(uri) !== undefined;
+    if (!known && !isScanned(filePath, workspaceRoots) && !index.isAwaited(uri)) {
+      continue;
+    }
+    if (/\.p8$/i.test(filePath) && isScanned(filePath, workspaceRoots)) {
+      if (type === FileChangeType.Created) {
+        addCart(filePath);
+        newCarts.push(filePath);
+      } else if (type === FileChangeType.Deleted) {
+        deleteCart(filePath);
+        cartDeleted = true;
+      }
     }
     if (type === FileChangeType.Deleted) {
       diskText.delete(uri);
-    } else {
-      try {
-        diskText.set(uri, fs.readFileSync(url.fileURLToPath(uri)).toString());
-      } catch (e) {
-        console.error('Error reading ' + uri, e);
+      if (known && !documents.get(uri)) {
+        uris.push(...index.remove(uri));
       }
-    }
-    if (documents.get(uri)) {
       continue;
     }
-    if (type === FileChangeType.Deleted) {
-      uris.push(...index.remove(uri));
-    } else {
+    // A file that belongs to no cart is neither read nor parsed.
+    if (!known && !isMember(uri) && !index.isAwaited(uri)) {
+      continue;
+    }
+    try {
+      diskText.set(uri, fs.readFileSync(filePath).toString());
+    } catch (e) {
+      console.error('Error reading ' + uri, e);
+    }
+    if (!documents.get(uri)) {
       uris.push(...index.update(uri));
     }
   }
+  if (cartDeleted) {
+    // The files near the deleted carts that nothing #includes leave; a file that one of them included can now be the
+    // root of its own project, and a file whose parse failed before can join.
+    const joinedBefore = index.joins();
+    const left = index.prune();
+    if (left.length > 0 || index.joins() > joinedBefore) {
+      uris.push(...index.uris(), ...left);
+    }
+  }
   publish(uris);
+  for (const cart of newCarts) {
+    void scanCartFolder(cart).catch(e => {
+      console.error('Error scanning the folder of ' + cart, e);
+    });
+  }
+  if (index.joins() > joined) {
+    notifyCartFiles();
+  }
 });
 
 // The user symbols of the last completion list, which the items being resolved come from.
