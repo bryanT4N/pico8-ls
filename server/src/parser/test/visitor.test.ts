@@ -37,3 +37,56 @@ describe('ASTVisitor scopes', () => {
     assert.deepStrictEqual(depths('repeat local done = true until done'), [ 'done@2', 'done@2' ]);
   });
 });
+
+// Records each visit with how many nodes are on the stack.
+class Order extends ASTVisitor<number> {
+  seen: string[] = [];
+  createDefaultScope(): number {
+    return 0;
+  }
+  private see(name: string) {
+    this.seen.push(`${name}/${this.nodeStack.length}`);
+  }
+  override visitIdentifier(node: Identifier): void {
+    this.see(node.name);
+  }
+  override visitBinaryExpression(): void {
+    this.see('Binary');
+  }
+  override visitLogicalExpression(): void {
+    this.see('Logical');
+  }
+  override visitMemberExpression(): void {
+    this.see('Member');
+  }
+  override visitIndexExpression(): void {
+    this.see('Index');
+  }
+  override visitCallExpression(): void {
+    this.see('Call');
+  }
+  override visitStringCallExpression(): void {
+    this.see('StringCall');
+  }
+  override visitTableCallExpression(): void {
+    this.see('TableCall');
+  }
+  override visitStringLiteral(): void {
+    this.see('StringLiteral');
+  }
+  override visitTableConstructorExpression(): number {
+    this.see('TableConstructor');
+    return 0;
+  }
+}
+
+describe('ASTVisitor chains', () => {
+  it('visits a chain of calls, members and operators in order, with its links on the node stack', () => {
+    const visitor = new Order();
+    visitor.visit(parse('x = a.b(c)[d]:e"s"{f} + g * h and i'));
+    assert.deepStrictEqual(visitor.seen, [
+      'x/1', 'Logical/1', 'Binary/2', 'TableCall/3', 'StringCall/4', 'Member/5', 'Index/6', 'Call/7', 'Member/8', 'a/9', 'b/9',
+      'c/8', 'd/7', 'e/6', 'StringLiteral/5', 'TableConstructor/4', 'f/6', 'Binary/3', 'g/4', 'h/4', 'i/2',
+    ]);
+  });
+});

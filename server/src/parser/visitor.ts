@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-empty-function */
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { BinaryExpression, BooleanLiteral, CallExpression, Expression, GeneralTableField, Identifier, IndexExpression, LogicalExpression,
-  MemberExpression, NilLiteral, NumericLiteral, StringCallExpression, StringLiteral, TableCallExpression,
-  TableConstructorExpression, TableKey, TableKeyString, TableValue, UnaryExpression, VarargLiteral,
+import { BinaryExpression, BooleanLiteral, CallExpression, ChainLink, Expression, firstOperand, GeneralTableField, Identifier,
+  IndexExpression, isChainLink, LogicalExpression, MemberExpression, NilLiteral, NumericLiteral, StringCallExpression, StringLiteral,
+  TableCallExpression, TableConstructorExpression, TableKey, TableKeyString, TableValue, UnaryExpression, VarargLiteral,
 } from './expressions';
 import { LabelStatement, BreakStatement, GotoStatement, ReturnStatement, IfStatement, WhileStatement,
   DoStatement, RepeatStatement, LocalStatement, AssignmentStatement, CallStatement, FunctionDeclaration,
@@ -27,6 +27,10 @@ export abstract class ASTVisitor<T> {
 
   // Parent tracking.
   nodeStack: NodeGettingVisited[] = [];
+
+  // The links of the chains being walked, innermost last. One array serves every chain, since a right operand or an
+  // argument can hold a chain of its own.
+  private readonly chain: ChainLink[] = [];
 
   constructor() {}
 
@@ -159,9 +163,49 @@ export abstract class ASTVisitor<T> {
     }
   }
 
+  // A long chain nests on its first operands, so recursing down them would go as deep as the chain is long. The
+  // loop goes down that side and back up, calling the visit methods and keeping the node stack as the recursion did.
+  private visitChain(top: ChainLink) {
+    const links = this.chain;
+    const outer = links.length;
+    let node: VisitableASTNode = top;
+    while (isChainLink(node)) {
+      switch (node.type) {
+      case 'BinaryExpression': this.visitBinaryExpression(node); break;
+      case 'LogicalExpression': this.visitLogicalExpression(node); break;
+      case 'MemberExpression': this.visitMemberExpression(node); break;
+      case 'IndexExpression': this.visitIndexExpression(node); break;
+      case 'CallExpression': this.visitCallExpression(node); break;
+      case 'StringCallExpression': this.visitStringCallExpression(node); break;
+      case 'TableCallExpression': this.visitTableCallExpression(node); break;
+      }
+      this.nodeStack.push({ node });
+      links.push(node);
+      node = firstOperand(node);
+    }
+    this.visitNode(node);
+    for (let i = links.length - 1; i >= outer; i--) {
+      const link = links[i];
+      switch (link.type) {
+      case 'BinaryExpression': case 'LogicalExpression': this.visitNode(link.right); break;
+      case 'MemberExpression': this.visitNode(link.identifier); break;
+      case 'IndexExpression': this.visitNode(link.index); break;
+      case 'CallExpression': this.visitAll(link.arguments); break;
+      case 'StringCallExpression': this.visitNode(link.argument); break;
+      case 'TableCallExpression': this.visitNode(link.arguments); break;
+      }
+      this.nodeStack.pop();
+    }
+    links.length = outer;
+  }
+
   private visitNode(node: VisitableASTNode) {
     // console.log('\nvisitNode ' + node.type + ', node stack: [' + this.nodeStack.map(node => node.node.type).join(' | ') + ']');
     // logObj(node, 'current node');
+    if (isChainLink(node)) {
+      this.visitChain(node);
+      return;
+    }
     switch (node.type) {
     case 'AssignmentStatement':
       this.visitAssignmentStatement(node);
@@ -351,52 +395,12 @@ export abstract class ASTVisitor<T> {
       this.visitIncludeStatement(node);
       break;
 
-    case 'BinaryExpression':
-      this.visitBinaryExpression(node);
-      this.nodeStack.push({ node });
-      this.visitNode(node.left);
-      this.visitNode(node.right);
-      this.nodeStack.pop();
-      break;
-
     case 'BooleanLiteral':
       this.visitBooleanLiteral(node);
       break;
 
-    case 'CallExpression':
-      this.visitCallExpression(node);
-      this.nodeStack.push({ node });
-      this.visitNode(node.base);
-      this.visitAll(node.arguments);
-      this.nodeStack.pop();
-      break;
-
     case 'Identifier':
       this.visitIdentifier(node);
-      break;
-
-    case 'IndexExpression':
-      this.visitIndexExpression(node);
-      this.nodeStack.push({ node });
-      this.visitNode(node.base);
-      this.visitNode(node.index);
-      this.nodeStack.pop();
-      break;
-
-    case 'LogicalExpression':
-      this.visitLogicalExpression(node);
-      this.nodeStack.push({ node });
-      this.visitNode(node.left);
-      this.visitNode(node.right);
-      this.nodeStack.pop();
-      break;
-
-    case 'MemberExpression':
-      this.visitMemberExpression(node);
-      this.nodeStack.push({ node });
-      this.visitNode(node.base);
-      this.visitNode(node.identifier);
-      this.nodeStack.pop();
       break;
 
     case 'NilLiteral':
@@ -407,24 +411,8 @@ export abstract class ASTVisitor<T> {
       this.visitNumericLiteral(node);
       break;
 
-    case 'StringCallExpression':
-      this.visitStringCallExpression(node);
-      this.nodeStack.push({ node });
-      this.visitNode(node.base);
-      this.visitNode(node.argument);
-      this.nodeStack.pop();
-      break;
-
     case 'StringLiteral':
       this.visitStringLiteral(node);
-      break;
-
-    case 'TableCallExpression':
-      this.visitTableCallExpression(node);
-      this.nodeStack.push({ node });
-      this.visitNode(node.base);
-      this.visitNode(node.arguments);
-      this.nodeStack.pop();
       break;
 
     case 'TableConstructorExpression': {

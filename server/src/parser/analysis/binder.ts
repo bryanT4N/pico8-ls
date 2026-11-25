@@ -43,6 +43,11 @@ type PendingGoto = { label: Identifier, blocks: BinderScope[], order: number };
 // An #include whose content the analysis is in. file and included are ResolvedFile paths; end is where it ends in file.
 type OpenInclude = { file: string, included: string, end: number };
 
+// The outline leaves out a member path with more keys than this. It nests an entry per key and Ctrl+T names each
+// entry with its whole path, so a longer path would give names whose total length grows with the square of its keys,
+// and nesting that can overflow the stack where the outline is walked recursively.
+const MAX_OUTLINE_KEYS = 200;
+
 class BinderScope {
   decls = new Map<string, Decl>();
   // undefined = inherit from enclosing scope; null = this function binds self but its table is unknown
@@ -90,6 +95,10 @@ class Binder extends ASTVisitor<BinderScope> {
   // `function(a)` on the next. The statement and table constructor hooks define a function before the visitor reaches
   // its parameters.
   private readonly functionDocNodes = new Map<FunctionDeclaration, ASTNode>();
+  // The symbol of each member path that pathSymbol has gone down. The visitor reaches a chain's links from the
+  // outside in and each asks for the symbol of its base, so going down every path again would take time that grows
+  // with the square of its length.
+  private readonly paths = new Map<MemberExpression, LuaSymbol | undefined>();
 
   constructor(private readonly boundaryLines: Map<string, number[]>) {
     super();
@@ -611,9 +620,10 @@ class Binder extends ASTVisitor<BinderScope> {
     const segments: Identifier[] = [ variable.identifier ];
     let base: Expression = variable.base;
     while (base.type === 'MemberExpression') {
-      segments.unshift(base.identifier);
+      segments.push(base.identifier);
       base = base.base;
     }
+    segments.reverse();
     if (base.type !== 'Identifier') {
       return;
     }
@@ -660,6 +670,9 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   private addMemberField(rootEntry: OutlineEntry, segments: Identifier[], value: Expression | undefined, loc: Bounds): StatementInfo {
+    if (segments.length > MAX_OUTLINE_KEYS) {
+      return { about: rootEntry };
+    }
     const unwrapped = unwrapValue(value);
     let tableEntry = rootEntry;
     for (let i = 0; i < segments.length - 1; i++) {
@@ -843,14 +856,24 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   private pathSymbol(expression: Expression): LuaSymbol | undefined {
-    if (expression.type === 'Identifier') {
-      const { symbol } = this.resolve(expression);
-      return symbol.table ?? symbol;
+    const keys: MemberExpression[] = [];
+    let base = expression;
+    while (base.type === 'MemberExpression' && !this.paths.has(base)) {
+      keys.push(base);
+      base = base.base;
     }
-    if (expression.type === 'MemberExpression') {
-      return this.pathSymbol(expression.base)?.member(expression.identifier.name);
+    let symbol: LuaSymbol | undefined;
+    if (base.type === 'MemberExpression') {
+      symbol = this.paths.get(base);
+    } else if (base.type === 'Identifier') {
+      const { symbol: named } = this.resolve(base);
+      symbol = named.table ?? named;
     }
-    return undefined;
+    for (let i = keys.length - 1; i >= 0; i--) {
+      symbol = symbol?.member(keys[i].identifier.name);
+      this.paths.set(keys[i], symbol);
+    }
+    return symbol;
   }
 
   private globalSymbol(name: string): LuaSymbol {

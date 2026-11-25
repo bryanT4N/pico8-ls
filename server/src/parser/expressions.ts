@@ -105,27 +105,18 @@ export type MemberExpression = ASTNode & {
 };
 
 export function getMemberExpressionName(memberExpression: MemberExpression): string | undefined {
-  let baseName: string;
-  switch (memberExpression.base.type) {
-  case 'Identifier':
-    baseName = memberExpression.base.name;
-    break;
-
-  case 'MemberExpression':
-    const maybeBaseName = getMemberExpressionName(memberExpression.base);
-    if (maybeBaseName === undefined) {
-      return undefined;
-    } else {
-      baseName = maybeBaseName;
-    }
-    break;
-
-  default:
+  const names = [ memberExpression.identifier.name ];
+  let base = memberExpression.base;
+  while (base.type === 'MemberExpression') {
+    names.push(base.identifier.name);
+    base = base.base;
+  }
+  if (base.type !== 'Identifier') {
     // It's a more complicated expression like `getValue().blah`
     return undefined;
   }
-
-  return baseName + '.' + memberExpression.identifier.name;
+  names.push(base.name);
+  return names.reverse().join('.');
 }
 
 // base[index]
@@ -161,6 +152,25 @@ export type Expression = (TableConstructorExpression | BinaryExpression | Logica
   /** Whether this expression is surrounded by parentheses. */
   parens?: boolean;
 };
+
+// A link of a chain of operators, calls or member accesses. a+b+c is (a+b)+c and a.b(c).d is ((a.b)(c)).d, so a
+// long chain nests on the first operand of each link.
+export type ChainLink = BinaryExpression | LogicalExpression | MemberExpression | IndexExpression | CallExpression
+  | StringCallExpression | TableCallExpression;
+
+export function isChainLink(node: ASTNode): node is ChainLink {
+  switch (node.type) {
+  case 'BinaryExpression': case 'LogicalExpression': case 'MemberExpression': case 'IndexExpression':
+  case 'CallExpression': case 'StringCallExpression': case 'TableCallExpression':
+    return true;
+  default:
+    return false;
+  }
+}
+
+export function firstOperand(link: ChainLink): Expression {
+  return link.type === 'BinaryExpression' || link.type === 'LogicalExpression' ? link.left : link.base;
+}
 
 export type Comment_ = ASTNode & {
   type: 'Comment',
