@@ -18,21 +18,18 @@ import { searchSymbols, SymbolItem, symbolItems, toSymbolInformation } from './w
 
 export type ProjectDocument = { textDocument: TextDocument, chunk: Chunk, errors: ParseError[] };
 
-// A file is tracked when it has a .p8/.lua extension and none of its directory components below the
-// matching root starts with a dot, matching the recursive scan's behaviour of not descending into
-// hidden directories. With no matching root, only the extension is checked.
+// A file is tracked when it has a .p8/.lua extension and the scan of some workspace folder holding it reaches it: the
+// scan does not descend into folders whose names start with a dot, so with C:\ and C:\.proj\game both open, the second
+// one's scan reaches its files although the first one's does not. With no folder holding it, only the extension counts.
 export function isTrackedPath(filePath: string, roots: string[]): boolean {
   if (!(/\.(p8|lua)$/i.test(filePath))) {
     return false;
   }
   const normalizedFile = path.normalize(filePath);
-  const matchingRoot = roots.map(r => path.normalize(r))
-    .find(r => isUnder(normalizedFile, r) || normalizedFile === r);
-  if (matchingRoot === undefined) {
-    return true;
-  }
-  const relative = path.relative(matchingRoot, normalizedFile);
-  return relative.split(path.sep).slice(0, -1).every(part => !part.startsWith('.'));
+  const holding = roots.map(r => path.normalize(r))
+    .filter(r => isUnder(normalizedFile, r) || normalizedFile === r);
+  return holding.length === 0 || holding.some(root =>
+    path.relative(root, normalizedFile).split(path.sep).slice(0, -1).every(part => !part.startsWith('.')));
 }
 
 // The files under one of the removed folders and under none of the remaining ones; paths, not URIs, for the folders.
@@ -177,8 +174,8 @@ export function makeFileResolver(editorText: (uri: string) => string | undefined
 // The file's current text, parsed; undefined when it cannot be read.
 export type ParseFile = (uri: string) => ProjectDocument | undefined;
 
-// analysed: the parse of the root that analysis comes from.
-type IndexedProject = { root: string, files: string[], analysis: Analysis, warnings: Warning[], analysed?: ProjectDocument };
+// analysed: the parse of the root that analysis comes from. failed: that analysis threw, and an empty one stands in.
+type IndexedProject = { root: string, files: string[], analysis: Analysis, warnings: Warning[], analysed?: ProjectDocument, failed: boolean };
 
 // One analysis per project, of its root's syntax tree, into which the parser has pasted every #include. Each file takes
 // its outline, lookups and warnings from the projects that contain it. Every change is analysed before the call
@@ -279,9 +276,10 @@ export class ProjectIndex {
     return [ ...this.documents.keys() ];
   }
 
+  // A failed analysis is empty, so the outline comes from the next project, as the file's Ctrl+T symbols do.
   outline(uri: string): CodeSymbol[] {
-    const [ first ] = this.projectsOf(uri);
-    return first ? outlineFor(first.analysis, ResolvedFile.fromFileURL(uri)) : [];
+    const project = this.projectsOf(uri).find(({ failed }) => !failed);
+    return project ? outlineFor(project.analysis, ResolvedFile.fromFileURL(uri)) : [];
   }
 
   definitions(uri: string, index: number): Location[] {
@@ -380,8 +378,8 @@ export class ProjectIndex {
     this.projects = trees
       .map(project => {
         const root = project.root.document.textDocument.uri;
-        const { analysis, warnings, analysed } = previous.get(root) ?? { analysis: emptyAnalysis(), warnings: [] };
-        return { root, files: getProjectFiles(project), analysis, warnings, analysed };
+        const { analysis, warnings, analysed, failed } = previous.get(root) ?? { analysis: emptyAnalysis(), warnings: [], failed: false };
+        return { root, files: getProjectFiles(project), analysis, warnings, analysed, failed };
       })
       .sort((a, b) => compare(a.root, b.root));
   }
@@ -430,10 +428,12 @@ export class ProjectIndex {
     try {
       project.analysis = analyze(this.documents.get(project.root)!.chunk);
       project.warnings = warningsOf(project.analysis);
+      project.failed = false;
     } catch (e) {
       console.error(`Failed to analyse the project of ${project.root}`, e);
       project.analysis = emptyAnalysis();
       project.warnings = [];
+      project.failed = true;
     }
   }
 

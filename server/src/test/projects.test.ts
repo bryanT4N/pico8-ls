@@ -71,6 +71,14 @@ describe('isTrackedPath', () => {
     eq(isTrackedPath(path.join(root, '.hidden', 'a.lua'), [ root ]), false);
     eq(isTrackedPath(path.join(root, 'games', '.history', 'a.lua'), [ root ]), false);
   });
+
+  it('tracks a file that one of the folders holding it reaches with no dot-directory between', () => {
+    const root = path.parse(process.cwd()).root;
+    const game = path.join(root, '.proj', 'game');
+    eq(isTrackedPath(path.join(game, 'main.p8'), [ root, game ]), true);
+    eq(isTrackedPath(path.join(game, 'main.p8'), [ game, root ]), true);
+    eq(isTrackedPath(path.join(root, '.proj', 'other', 'x.lua'), [ root, game ]), false);
+  });
 });
 
 describe('leftWorkspace', () => {
@@ -447,6 +455,24 @@ describe('ProjectIndex', () => {
     deepStrictEqual(index.outline(uriOf('main.p8')), []);
     deepStrictEqual(index.warnings(uriOf('main.p8')), []);
     eq(logged, 1);
+  });
+
+  it('takes the outline from the next project when the first one\'s analysis failed', () => {
+    const files = { 'a.p8': '#include common.lua', 'b.p8': '#include common.lua', 'common.lua': 'function helper()\n  local x = 1\nend' };
+    // The kind of node the formatter inserts, which the analysis does not know, in a.p8 only.
+    const index = indexOver(files, { tweak: doc => {
+      if (doc.textDocument.uri === uriOf('a.p8')) {
+        doc.chunk.block.body.push({ type: 'Whitespace', count: 1 } as any);
+      }
+    } });
+    const consoleError = console.error;
+    console.error = () => undefined;
+    try {
+      index.scan(Object.keys(files).map(uriOf));
+    } finally {
+      console.error = consoleError;
+    }
+    deepStrictEqual(outlineLines(index.outline(uriOf('common.lua'))), [ 'helper() [Function]', '  x [Variable]' ]);
   });
 
   it('gives no hover and the builtin signature help when the analysis failed', () => {
