@@ -644,11 +644,13 @@ export default class Parser {
     return false;
   }
 
-  // A token that only starts statements cannot be in a table, an argument list or an index, so one first on a line no
-  // more indented than the bracket's is the code after a bracket left open: indentation tells, as for a missing end.
+  // A token that only starts statements, or end, else, elseif or until, cannot be in a table, an argument list or an
+  // index, so one first on a line no more indented than the bracket's is the code after a bracket left open:
+  // indentation tells, as for a missing end. The end of the file closes none: a bracket left open there is most likely
+  // the one being typed, so its error stays at the end.
   private closesUnfinished(opener: Token): boolean {
     const token = this.token;
-    return isStatementOnly(token, this.lexer.lookahead!)
+    return (isStatementOnly(token, this.lexer.lookahead!) || (isBlockFollow(token) && token.type !== TokenType.EOF))
       && token.bounds.start.filename.equals(opener.bounds.start.filename)
       && this.isFirstOnLine(token.bounds.start)
       && this.indentOf(token.bounds.start) <= this.indentOf(opener.bounds.start);
@@ -1634,6 +1636,12 @@ export default class Parser {
         const opener = this.token;
         this.pushLocation(marker);
         this.lexerNext();
+        // An index needs a key, so one closed before it is left out and the value is what it was indexing.
+        if (this.closesUnfinished(opener)) {
+          this.expectCloser(']', opener);
+          this.popLocation();
+          return base;
+        }
         expression = this.parseExpectedExpression(flowContext);
         this.expectCloser(']', opener);
         return this.finishNode(AST.indexExpression(base, expression));

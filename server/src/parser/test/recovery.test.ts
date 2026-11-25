@@ -222,8 +222,8 @@ describe('Parser recovery', () => {
   it('keeps the start of a function after an error inside it', () => {
     const { symbols } = check(
       lines('function f()', '  x = foo(1', 'end'),
-      [ 'main_test_file 2:11 \')\' expected near \'end\'' ],
-      [ 'f() [Function]' ],
+      [ 'main_test_file 2:9 \')\' expected (to close \'(\' at line 2) near \'end\'' ],
+      [ 'f() [Function]', 'x [Variable]' ],
     );
     const { loc, selectionLoc } = symbols[0];
     assert.deepStrictEqual([ loc.start.line, loc.start.column ], [ 1, 0 ]);
@@ -419,6 +419,29 @@ describe('Parser recovery', () => {
       check(lines('x = a[i', 'local y = 1'), [ 'main_test_file 1:5 \']\' expected (to close \'[\' at line 1) near \'local\'' ], [ 'x [Variable]', 'y [Variable]' ]);
     });
 
+    it('closes at end, else, elseif or until no more indented than its line, and keeps what it has', () => {
+      check(lines('function _init()', '  player = {', '    x = 64,', 'end'),
+        [ 'main_test_file 2:11 \'}\' expected (to close \'{\' at line 2) near \'end\'' ], [ '_init() [Function]', 'player [Table]', '  x [Field]' ]);
+      check(lines('function _init()', '  player = {', '    x = 64,', '  end'),
+        [ 'main_test_file 2:11 \'}\' expected (to close \'{\' at line 2) near \'end\'' ], [ '_init() [Function]', 'player [Table]', '  x [Field]' ]);
+      check(lines('if a then', '  t = {', 'else', 'end'), [ 'main_test_file 2:6 \'}\' expected (to close \'{\' at line 2) near \'else\'' ], [ 't [Table]' ]);
+      check(lines('repeat', '  t = {', '    a = 1,', 'until done'),
+        [ 'main_test_file 2:6 \'}\' expected (to close \'{\' at line 2) near \'until\'' ], [ 't [Table]', '  a [Field]' ]);
+      check(lines('function f()', '  t = {', '    a =', 'end'), [ 'main_test_file 2:6 \'}\' expected (to close \'{\' at line 2) near \'end\'' ], [ 'f() [Function]', 't [Table]' ]);
+      check(lines('function f()', '  print("x",', 'end'), [ 'main_test_file 2:7 \')\' expected (to close \'(\' at line 2) near \'end\'' ], [ 'f() [Function]' ]);
+      check(lines('if a then', '  f(1,', 'elseif b then', 'end'), [ 'main_test_file 2:3 \')\' expected (to close \'(\' at line 2) near \'elseif\'' ], []);
+      check(lines('repeat', '  f(', 'until x'), [ 'main_test_file 2:3 \')\' expected (to close \'(\' at line 2) near \'until\'' ], []);
+      check(lines('function f()', '  x = a[i', 'end'), [ 'main_test_file 2:7 \']\' expected (to close \'[\' at line 2) near \'end\'' ], [ 'f() [Function]', 'x [Variable]' ]);
+      check(lines('if a then', '  x = t[1', 'else', 'end'), [ 'main_test_file 2:7 \']\' expected (to close \'[\' at line 2) near \'else\'' ], [ 'x [Variable]' ]);
+      check(lines('function f()', '  t = {', '    a = g(', 'end'),
+        [ 'main_test_file 3:9 \')\' expected (to close \'(\' at line 3) near \'end\'' ], [ 'f() [Function]', 't [Table]', '  a [Field]' ]);
+    });
+
+    it('closes an index left open before its key', () => {
+      check(lines('x = a[', 'local y = 1'), [ 'main_test_file 1:5 \']\' expected (to close \'[\' at line 1) near \'local\'' ], [ 'x [Variable]', 'y [Variable]' ]);
+      check(lines('repeat', '  x = t[', 'until x'), [ 'main_test_file 2:7 \']\' expected (to close \'[\' at line 2) near \'until\'' ], [ 'x [Variable]' ]);
+    });
+
     it('reports only the innermost of the brackets a statement closes', () => {
       check(lines('t = {', '  a = {', '    b = 1,', 'function _update()', 'end'),
         [ 'main_test_file 2:6 \'}\' expected (to close \'{\' at line 2) near \'function\'' ],
@@ -428,12 +451,25 @@ describe('Parser recovery', () => {
     it('reports only the bracket when the statement around it fails where the bracket closed', () => {
       check(lines('if f(a,', 'local x = 1'), [ 'main_test_file 1:4 \')\' expected (to close \'(\' at line 1) near \'local\'' ], [ 'x [Variable]' ]);
       check(lines('for k,v in pairs(b', 'if x then end'), [ 'main_test_file 1:16 \')\' expected (to close \'(\' at line 1) near \'if\'' ], []);
+      check(lines('function f()', '  if g(a,', 'end'), [ 'main_test_file 2:6 \')\' expected (to close \'(\' at line 2) near \'end\'' ], [ 'f() [Function]' ]);
+      check(lines('if (border(t', 'if (a) b()'), [ 'main_test_file 1:10 \')\' expected (to close \'(\' at line 1) near \'if\'' ], []);
+      check(lines('x = f(', '  a,', '  {', '    b = 1,', '  local y = 1'),
+        [ 'main_test_file 3:2 \'}\' expected (to close \'{\' at line 3) near \'local\'' ], [ 'y [Variable]' ]);
+      check(lines('t = {', '  a = f(', '    {', '      b = 1,', '  local y = 1'),
+        [ 'main_test_file 3:4 \'}\' expected (to close \'{\' at line 3) near \'local\'' ], [ 'y [Variable]' ]);
+    });
+
+    // Unchanged from before: these pass before the change too.
+    it('reports a statement that fails at its first token apart from the statement before it, which stopped there', () => {
+      check(lines('x = 1 +', ')'), [ 'main_test_file 1:7 <expression> expected near \')\'', 'main_test_file 2:0 unexpected symbol \')\' near \'<eof>\'' ],
+        [ 'x [Variable]' ]);
     });
 
     // Unchanged from before: these pass before the change too.
     it('leaves a statement indented deeper than the opening line, and code that closes its brackets, as they are', () => {
       check(lines('function f()', '  t = {', '    a = 1,', '    local b = 2', '  }', 'end'),
         [ 'main_test_file 3:10 \'}\' expected near \'local\'', 'main_test_file 5:2 unexpected symbol \'}\' near \'end\'' ], [ 'f() [Function]', '  b [Variable]' ]);
+      check(lines('function f()', '  t = {', '    a = 1,', '    end'), [ 'main_test_file 3:10 \'}\' expected near \'end\'' ], [ 'f() [Function]' ]);
       check(lines('t = {', '  a = 1,', '  b = 2,', '}'), [], [ 't [Table]', '  a [Field]', '  b [Field]' ]);
       check(lines('foo(', '  1,', '  2', ')'), [], []);
     });
