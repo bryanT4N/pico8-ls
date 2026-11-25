@@ -44,15 +44,22 @@ function cutAfterAssignment(line: string): string | undefined {
   return match ? line.slice(0, match.index + 2) : undefined;
 }
 
+// A table being typed, before its } is.
+function deleteLastBrace(line: string): string | undefined {
+  const i = line.lastIndexOf('}');
+  return i === -1 ? undefined : line.slice(0, i) + line.slice(i + 1);
+}
+
 describe('robustness on half-typed lines', function () {
   this.timeout(120000);
 
   for (const name of TEST_CARTS) {
-    it(`parses ${name} with sampled lines cut in half or after an =`, () => {
+    it(`parses ${name} with sampled lines cut in half or after an =, or missing a }`, () => {
       const text = getTestFileContents(name);
       const versions = [
         ...editedVersions(name, text, SAMPLES, cutInHalf),
         ...editedVersions(name, text, EDIT_SAMPLES, cutAfterAssignment),
+        ...editedVersions(name, text, EDIT_SAMPLES, deleteLastBrace),
       ];
       const results = parseManyInChild(versions.map(code => ({ code })), 60000);
       results.forEach((r, i) => {

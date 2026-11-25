@@ -239,9 +239,9 @@ describe('Parser recovery', () => {
   });
 
   const UNFINISHED_LINES: [string, string, string[]][] = [
-    [ 't = {', '3:5 <expression> expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
-    [ 'foo(', '3:4 <expression> expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
-    [ 'print(x', '3:7 \')\' expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
+    [ 't = {', '3:4 \'}\' expected (to close \'{\' at line 3) near \'function\'', [ '_init() [Function]', 't [Table]', '_update() [Function]' ]],
+    [ 'foo(', '3:3 \')\' expected (to close \'(\' at line 3) near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
+    [ 'print(x', '3:5 \')\' expected (to close \'(\' at line 3) near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
     [ 'x.', '3:2 <name> expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
     [ 'goto', '3:4 <name> expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
     [ 'if x', '3:4 \'then\' expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
@@ -402,6 +402,35 @@ describe('Parser recovery', () => {
       check(lines('v = g(function()', '  x =', '  y.z = 2', 'end) +', 'w.x = 3'),
         [ 'main_test_file 2:5 <expression> expected near \'y\'', 'main_test_file 5:4 unexpected symbol \'=\' near \'3\'' ],
         [ 'v [Variable]', '  <anonymous function>() [Function]', 'x [Variable]', 'y [Table]', '  z [Field]' ]);
+    });
+  });
+
+  describe('a table, an argument list or an index left open', () => {
+    it('closes at a statement no more indented than its line, and keeps what it has', () => {
+      check(lines('t = {', '  a = 1,', 'function _update()', 'end'), [ 'main_test_file 1:4 \'}\' expected (to close \'{\' at line 1) near \'function\'' ],
+        [ 't [Table]', '  a [Field]', '_update() [Function]' ]);
+      check(lines('t = {', '  a = 1', 'function _update()', 'end'), [ 'main_test_file 1:4 \'}\' expected (to close \'{\' at line 1) near \'function\'' ],
+        [ 't [Table]', '  a [Field]', '_update() [Function]' ]);
+      check(lines('t = {', '  a =', 'local x = 1'), [ 'main_test_file 1:4 \'}\' expected (to close \'{\' at line 1) near \'local\'' ],
+        [ 't [Table]', 'x [Variable]' ]);
+      check(lines('function f()', '  t = {', '    a = 1,', '  local b = 2', 'end'),
+        [ 'main_test_file 2:6 \'}\' expected (to close \'{\' at line 2) near \'local\'' ], [ 'f() [Function]', '  b [Variable]', 't [Table]', '  a [Field]' ]);
+      check(lines('foo(a,', 'if b then end'), [ 'main_test_file 1:3 \')\' expected (to close \'(\' at line 1) near \'if\'' ], []);
+      check(lines('x = a[i', 'local y = 1'), [ 'main_test_file 1:5 \']\' expected (to close \'[\' at line 1) near \'local\'' ], [ 'x [Variable]', 'y [Variable]' ]);
+    });
+
+    it('reports only the innermost of the brackets a statement closes', () => {
+      check(lines('t = {', '  a = {', '    b = 1,', 'function _update()', 'end'),
+        [ 'main_test_file 2:6 \'}\' expected (to close \'{\' at line 2) near \'function\'' ],
+        [ 't [Table]', '  a [Table]', '    b [Field]', '_update() [Function]' ]);
+    });
+
+    // Unchanged from before: these pass before the change too.
+    it('leaves a statement indented deeper than the opening line, and code that closes its brackets, as they are', () => {
+      check(lines('function f()', '  t = {', '    a = 1,', '    local b = 2', '  }', 'end'),
+        [ 'main_test_file 3:10 \'}\' expected near \'local\'', 'main_test_file 5:2 unexpected symbol \'}\' near \'end\'' ], [ 'f() [Function]', '  b [Variable]' ]);
+      check(lines('t = {', '  a = 1,', '  b = 2,', '}'), [], [ 't [Table]', '  a [Field]', '  b [Field]' ]);
+      check(lines('foo(', '  1,', '  2', ')'), [], []);
     });
   });
 });

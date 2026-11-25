@@ -638,6 +638,24 @@ export default class Parser {
     return false;
   }
 
+  // A token that only starts statements cannot be in a table, an argument list or an index, so one first on a line no
+  // more indented than the bracket's is the code after a bracket left open: indentation tells, as for a missing end.
+  private closesUnfinished(opener: Token): boolean {
+    const token = this.token;
+    return isStatementOnly(token, this.lexer.lookahead!)
+      && token.bounds.start.filename.equals(opener.bounds.start.filename)
+      && this.isFirstOnLine(token.bounds.start)
+      && this.indentOf(token.bounds.start) <= this.indentOf(opener.bounds.start);
+  }
+
+  private expectCloser(closer: '}' | ')' | ']', opener: Token) {
+    if (this.closesUnfinished(opener)) {
+      this.report(errors.createErrForToken(opener, errMessages.expectedToClose, closer, opener.value, opener.bounds.start.line, this.token.value), this.token);
+      return;
+    }
+    this.lexer.expect(closer);
+  }
+
   // One error for each place: none when near already has a missing value's or bracket's error, or when the last error
   // starts where this one does.
   private report(error: errors.ParseError, near?: Token) {
@@ -1411,10 +1429,14 @@ export default class Parser {
   //     fieldsep ::= ',' | ';'
 
   parseTableConstructor(flowContext: FlowContext): TableConstructorExpression {
+    const opener = this.previousToken;
     const fields = [];
     let key, value;
 
     while (true) {
+      if (this.closesUnfinished(opener)) {
+        break;
+      }
       this.markLocation();
       if (this.token.type === TokenType.Punctuator && this.lexer.consume('[')) {
         key = this.parseExpectedExpression(flowContext);
@@ -1426,6 +1448,10 @@ export default class Parser {
         if ('=' === this.lexer.lookahead!.value) {
           key = this.parseIdentifier();
           this.lexerNext();
+          if (this.closesUnfinished(opener)) {
+            this.popLocation();
+            break;
+          }
           value = this.parseExpectedExpression(flowContext);
           fields.push(this.finishNode(AST.tableKeyString(key, value)));
         } else {
@@ -1445,7 +1471,7 @@ export default class Parser {
       }
       break;
     }
-    this.lexer.expect('}');
+    this.expectCloser('}', opener);
     return this.finishNode(AST.tableConstructorExpression(fields));
   }
 
@@ -1598,12 +1624,14 @@ export default class Parser {
 
     if (this.token.type === TokenType.Punctuator) {
       switch (this.token.value) {
-      case '[':
+      case '[': {
+        const opener = this.token;
         this.pushLocation(marker);
         this.lexerNext();
         expression = this.parseExpectedExpression(flowContext);
-        this.lexer.expect(']');
+        this.expectCloser(']', opener);
         return this.finishNode(AST.indexExpression(base, expression));
+      }
       case '.':
         this.pushLocation(marker);
         this.lexerNext();
@@ -1666,20 +1694,24 @@ export default class Parser {
     if (TokenType.Punctuator === this.token.type) {
       switch (this.token.value) {
       case '(':
+        const opener = this.token;
         this.lexerNext();
 
         // List of expressions
         const expressions = [];
-        let expression = this.parseExpression(flowContext);
+        let expression = this.closesUnfinished(opener) ? null : this.parseExpression(flowContext);
         if (null != expression) {
           expressions.push(expression);
         }
         while (this.lexer.consume(',')) {
+          if (this.closesUnfinished(opener)) {
+            break;
+          }
           expression = this.parseExpectedExpression(flowContext);
           expressions.push(expression);
         }
 
-        this.lexer.expect(')');
+        this.expectCloser(')', opener);
         return this.finishNode(AST.callExpression(base, expressions));
 
       case '{':
@@ -1776,6 +1808,16 @@ function mayParseAgain(token: Token): boolean {
 // A statement that stops anywhere else has failed.
 function canFollowStatement(token: Token): boolean {
   return canStartStatement(token) || isBlockFollow(token) || token.type === TokenType.Newline;
+}
+
+function isStatementOnly(token: Token, lookahead: Token): boolean {
+  if (token.type !== TokenType.Keyword) {
+    return false;
+  }
+  if (token.value === 'function') {
+    return lookahead.type === TokenType.Identifier;
+  }
+  return [ 'local', 'if', 'for', 'while', 'repeat', 'return', 'goto', 'break' ].includes(token.value as string);
 }
 
 // A `function` followed by a name is not a value: it starts the next statement.
