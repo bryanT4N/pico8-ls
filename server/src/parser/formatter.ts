@@ -280,7 +280,7 @@ export default class Formatter {
     case 'BinaryExpression':
     case 'LogicalExpression': {
       // A long chain nests on its left sides, so a loop goes down them; the right sides then follow from the innermost
-      // out, in the order the recursion took.
+      // out, which is their order in the source.
       const rights: Expression[] = [];
       let left: Expression = node as BinaryExpression | LogicalExpression;
       while ((left.type === 'BinaryExpression' || left.type === 'LogicalExpression') && !left.included) {
@@ -909,8 +909,9 @@ export default class Formatter {
 
   // ****************************** Expressions *****************************
 
-  // A long chain nests on its first operands, so recursing down them would go as deep as the chain is long. The loop
-  // goes down that side and back up, keeping the order of the output and the indentation the recursion had.
+  // A long chain nests on its first operands, so recursing down them would go as deep as the chain is long. Whether a
+  // link needs parentheses and how deep it is indented depend on the links around it, and its text on the ones inside
+  // it, so the loop goes down that side and back up.
   private visitChain(top: ChainLink, childContext: ChildContext): string {
     const frames: { link: ChainLink, prevIndent: number, prefix: string, wrapped: boolean }[] = [];
     let node: Expression = top;

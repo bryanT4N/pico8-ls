@@ -163,8 +163,8 @@ export abstract class ASTVisitor<T> {
     }
   }
 
-  // A long chain nests on its first operands, so recursing down them would go as deep as the chain is long. The
-  // loop goes down that side and back up, calling the visit methods and keeping the node stack as the recursion did.
+  // A long chain nests on its first operands, so recursing down them would go as deep as the chain is long. Visitors
+  // depend on the order of the visit calls and on the node stack, so a link is visited as any other node is.
   private visitChain(top: ChainLink) {
     const links = this.chain;
     const outer = links.length;

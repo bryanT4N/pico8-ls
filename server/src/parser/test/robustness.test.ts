@@ -99,7 +99,8 @@ describe('robustness on unfinished statements nested in function values', functi
     Error.stackTraceLimit = stackTraceLimit;
   });
 
-  // The parse alone is timed: the analysis and lookups the other tests run take seconds on 3,000 locals.
+  // The parse alone is timed: the helper the other tests run looks up each reference in turn, which takes seconds on
+  // 3,000 locals.
   const NESTED: [string, string][] = [
     [ '20 deep', nestedInFunctionValues(20, 'y = 1\n') ],
     [ '60 deep around 3,000 lines', nestedInFunctionValues(60, 'local a = b + c * d\n'.repeat(3000)) ],
