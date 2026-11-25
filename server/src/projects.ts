@@ -168,6 +168,12 @@ export function makeFileResolver(editorText: (uri: string) => string | undefined
       const uri = ResolvedFile.fromPath(filepath).fileURL;
       return editorText(uri) ?? cache.get(uri) ?? disk.loadFileContents(filepath);
     },
+    // A name the editor or the scan gave is already the disk's spelling, so only an #include they do not know asks the
+    // disk, which costs a system call.
+    onDiskName: filepath => {
+      const uri = ResolvedFile.fromPath(filepath).fileURL;
+      return editorText(uri) !== undefined || cache.has(uri) ? filepath : disk.onDiskName?.(filepath);
+    },
   };
 }
 

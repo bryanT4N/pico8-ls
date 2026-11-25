@@ -91,6 +91,9 @@ export type CallStatement = ASTNode & {
 export type IncludeStatement = ASTNode & {
   type: 'IncludeStatement',
   filename: string,
+  // The file the parser resolved it to. The binder takes it rather than resolving the name again, since the included
+  // file's nodes carry this path, spelled as the disk does.
+  resolvedFile?: ResolvedFile,
 };
 
 export type ForNumericStatement = ASTNode & {

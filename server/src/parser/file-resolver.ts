@@ -67,16 +67,36 @@ function percentEncode(text: string, keep: RegExp): string {
   return encoded;
 }
 
-export function resolveIncludeFile(currFile: ResolvedFile, includeFilename: string): ResolvedFile {
+// On a disk that ignores case, #include Lib.lua finds lib.lua, and the file must get the URI the editor and the scan
+// give lib.lua. Only the names the #include itself adds take the disk's spelling: the includer's folder comes from VS
+// Code's URI, and the disk's path for it can differ in more than case (the drive letter's case, a short name spelled
+// out). A disk path that is not the same path in another case, as through a link, leaves the #include as written.
+export function resolveIncludeFile(currFile: ResolvedFile, includeFilename: string, resolver?: FileResolver): ResolvedFile {
   const currFileDir = path.dirname(currFile.path);
   const resolvedPath = path.normalize(path.join(currFileDir, includeFilename));
-  return ResolvedFile.fromPath(resolvedPath);
+  const real = resolver?.onDiskName?.(resolvedPath);
+  if (real === undefined) {
+    return ResolvedFile.fromPath(resolvedPath);
+  }
+  const written = resolvedPath.split(path.sep);
+  const onDisk = real.split(path.sep);
+  if (written.length !== onDisk.length || written.some((part, i) => part.toLowerCase() !== onDisk[i].toLowerCase())) {
+    return ResolvedFile.fromPath(resolvedPath);
+  }
+  const dir = path.normalize(currFileDir).split(path.sep);
+  let keep = 0;
+  while (keep < dir.length && keep < written.length && written[keep] === dir[keep]) {
+    keep++;
+  }
+  return ResolvedFile.fromPath([ ...written.slice(0, keep), ...onDisk.slice(keep) ].join(path.sep));
 }
 
 export interface FileResolver {
   doesFileExist: (filepath: string) => boolean;
   isFile: (filepath: string) => boolean;
   loadFileContents: (filepath: string) => string;
+  // The path as the disk spells it, for a file that exists; undefined when that is not known.
+  onDiskName?: (filepath: string) => string | undefined;
 }
 
 export class RealFileResolver implements FileResolver {
@@ -90,5 +110,13 @@ export class RealFileResolver implements FileResolver {
 
   loadFileContents(filepath: string): string {
     return fs.readFileSync(filepath).toString();
+  }
+
+  onDiskName(filepath: string): string | undefined {
+    try {
+      return fs.realpathSync.native(filepath);
+    } catch {
+      return undefined;
+    }
   }
 }

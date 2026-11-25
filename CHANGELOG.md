@@ -14,6 +14,7 @@
 - Fixed: a parameter of a function written on the line after `t.on_hit =` did not show its `@param` text.
 - Fixed: a `--[[ ]]` comment followed by code on its line was shown as the doc of the next line.
 - Fixed: parameter hints showed a call that an earlier line left unclosed even after a line starting with `local`, `if`, `for`, `while`, `repeat`, `return`, `goto` or `break`.
+- Fixed: with a workspace folder at the root of a drive or a network share, such as `C:\` or `\\server\share`, a file in a folder whose name starts with a dot was read when it changed, and removing the workspace folder did not forget its files.
 
 ## 0.4.0 (unreleased)
 

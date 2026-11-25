@@ -313,7 +313,8 @@ export default class Parser {
         const statement = this.parseStatement(flowContext);
 
         if (statement?.type === 'IncludeStatement') {
-          const resolvedInclude = resolveIncludeFile(this.filename, statement.filename);
+          const resolvedInclude = resolveIncludeFile(this.filename, statement.filename, this.includeFileResolver);
+          statement.resolvedFile = resolvedInclude;
 
           // Check for circular dependencies
           if (this.lexerStack.some(l => l.lexer.filename.equals(resolvedInclude))) {

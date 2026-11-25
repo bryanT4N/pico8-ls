@@ -1,11 +1,13 @@
 import { deepStrictEqual, strictEqual as eq } from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as url from 'url';
 import { Location, SymbolInformation, SymbolKind } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { builtinInfo } from '../parser/builtins';
 import Parser from '../parser/parser';
-import ResolvedFile, { FileResolver, fileURLToPath, pathToFileURL } from '../parser/file-resolver';
+import ResolvedFile, { FileResolver, fileURLToPath, pathToFileURL, RealFileResolver } from '../parser/file-resolver';
 import { outlineLines } from '../parser/test/outline-utils';
 import { deepEquals, formatError } from '../parser/test/test-utils';
 import { findProjects, isTrackedPath, leftWorkspace, makeFileResolver, ParsedDocumentsMap, ProjectDocument, ProjectIndex } from '../projects';
@@ -473,6 +475,26 @@ describe('ProjectIndex', () => {
       console.error = consoleError;
     }
     deepStrictEqual(outlineLines(index.outline(uriOf('common.lua'))), [ 'helper() [Function]', '  x [Variable]' ]);
+  });
+
+  it('takes #include Lib.lua for lib.lua on a disk that ignores case', function () {
+    const dir = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'pico8-ls-case-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'main.lua'), 'speed = 2\n#include Lib.lua');
+      fs.writeFileSync(path.join(dir, 'lib.lua'), 'function move(p)\n  p.x += speed\nend');
+      if (!fs.existsSync(path.join(dir, 'LIB.LUA'))) {
+        // A disk that tells case apart does not find Lib.lua, as PICO-8 does not.
+        this.skip();
+      }
+      const uri = (name: string) => ResolvedFile.fromPath(path.join(dir, name)).fileURL;
+      const index = indexOver({}, { disk: new RealFileResolver() });
+      index.scan([ uri('main.lua'), uri('lib.lua') ]);
+      eq(index.document(uri('main.lua'))!.chunk.includes![0].resolvedFile.fileURL, uri('lib.lua'));
+      eq(index.analyses(uri('lib.lua')).length, 1);
+      deepStrictEqual(index.warnings(uri('lib.lua')), []);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('gives no hover and the builtin signature help when the analysis failed', () => {

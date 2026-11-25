@@ -2,8 +2,9 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { analyze } from '../analysis/binder';
 import { Identifier } from '../expressions';
-import { FileResolver, RealFileResolver } from '../file-resolver';
+import ResolvedFile, { FileResolver, RealFileResolver, resolveIncludeFile } from '../file-resolver';
 import { AssignmentStatement, FunctionDeclaration, Statement } from '../statements';
 import { formatError, parse, parseInChild, TestFilesResolver } from './test-utils';
 
@@ -221,5 +222,30 @@ describe('#include', function () {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('spells the names an #include adds as the disk does, and keeps the includer\'s folder as it is', () => {
+    const disk = (onDiskName: (p: string) => string | undefined): FileResolver =>
+      ({ doesFileExist: () => true, isFile: () => true, loadFileContents: () => '', onDiskName });
+    const from = ResolvedFile.fromPath(path.resolve('/carts/game/main.p8'));
+    const game = path.resolve('/carts/game');
+    assert.strictEqual(resolveIncludeFile(from, 'lib/Util.lua', disk(p => p.toUpperCase())).path, path.join(game, 'LIB', 'UTIL.LUA'));
+    assert.strictEqual(resolveIncludeFile(from, '../shared/Lib.lua', disk(p => p.replace('Lib.lua', 'lib.lua'))).path,
+      path.join(path.resolve('/carts'), 'shared', 'lib.lua'));
+    // Through a link or a short name the disk's path is not the same path in another case: the #include is taken as written.
+    assert.strictEqual(resolveIncludeFile(from, 'Lib.lua', disk(() => path.resolve('/elsewhere/lib.lua'))).path, path.join(game, 'Lib.lua'));
+    assert.strictEqual(resolveIncludeFile(from, 'Lib.lua', disk(() => undefined)).path, path.join(game, 'Lib.lua'));
+    assert.strictEqual(resolveIncludeFile(from, 'Lib.lua').path, path.join(game, 'Lib.lua'));
+  });
+
+  it('resolves an #include and binds its file under the name the disk gives', () => {
+    class CaseResolver extends TestFilesResolver {
+      onDiskName(p: string): string | undefined {
+        return p === path.normalize('Lib.lua') ? path.normalize('lib.lua') : undefined;
+      }
+    }
+    const chunk = parse('#include Lib.lua\nhelper()', { includeFileResolver: new CaseResolver({ 'lib.lua': 'function helper() end' }) });
+    assert.strictEqual(chunk.includes![0].resolvedFile.path, path.normalize('lib.lua'));
+    assert.strictEqual(analyze(chunk).includeScopes.has(path.normalize('lib.lua')), true);
   });
 });

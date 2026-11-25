@@ -158,7 +158,7 @@ class Binder extends ASTVisitor<BinderScope> {
   override visitIncludeStatement(node: IncludeStatement): void {
     const file = node.loc!.start.filename;
     this.closeIncludes(file.path);
-    const included = resolveIncludeFile(file, node.filename).path;
+    const included = (node.resolvedFile ?? resolveIncludeFile(file, node.filename)).path;
     if (!this.includeScopes.has(included)) {
       this.includeScopes.set(included, this.topScope().analysisScope);
       this.includeStarts.set(included, this.order);
