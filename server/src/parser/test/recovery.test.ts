@@ -425,6 +425,11 @@ describe('Parser recovery', () => {
         [ 't [Table]', '  a [Table]', '    b [Field]', '_update() [Function]' ]);
     });
 
+    it('reports only the bracket when the statement around it fails where the bracket closed', () => {
+      check(lines('if f(a,', 'local x = 1'), [ 'main_test_file 1:4 \')\' expected (to close \'(\' at line 1) near \'local\'' ], [ 'x [Variable]' ]);
+      check(lines('for k,v in pairs(b', 'if x then end'), [ 'main_test_file 1:16 \')\' expected (to close \'(\' at line 1) near \'if\'' ], []);
+    });
+
     // Unchanged from before: these pass before the change too.
     it('leaves a statement indented deeper than the opening line, and code that closes its brackets, as they are', () => {
       check(lines('function f()', '  t = {', '    a = 1,', '    local b = 2', '  }', 'end'),

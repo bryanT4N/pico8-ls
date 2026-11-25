@@ -393,8 +393,14 @@ export default class Parser {
             flowContext.popScope();
           }
 
-          // Caught a parse error. Add it to errors and synchronize.
-          this.report(this.token === startToken ? e : this.atEndOfPreviousLine(e));
+          // Caught a parse error. Add it to errors and synchronize. A statement
+          // that fails at the token where a bracket in it was closed, or a value
+          // in it found missing, has its error there already. An error near its
+          // first token belongs to the statement before it.
+          if (!(this.token !== startToken && this.token === this.reportedNear
+              && codeLocationsEqual(e.bounds.start, this.token.bounds.start))) {
+            this.report(this.token === startToken ? e : this.atEndOfPreviousLine(e));
+          }
           this.appendHoisted(block);
 
           // `x =` stops at the `function` that starts the next line, which
