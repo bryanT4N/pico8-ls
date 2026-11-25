@@ -1,6 +1,7 @@
 import * as path from 'path';
 import { ExtensionContext, Position, Range, TextEdit, TextEditorEdit, commands, languages, window, workspace } from 'vscode';
 import { CloseAction, ErrorAction, ErrorHandler, ExecuteCommandParams, LanguageClient, LanguageClientOptions, Message, ServerOptions, TransportKind } from 'vscode-languageclient/node';
+import { switchLuaDocuments } from './lua-documents';
 import SemanticTokenProvider, { legend } from './semantic-token-provider';
 
 // Should stay in sync with FormatterOptions in server/src/parser/formatter.ts
@@ -14,6 +15,11 @@ type FormatterOptions = {
 };
 
 let defaultErrorHandler: ErrorHandler | undefined;
+
+const picoDocuments = [
+  { scheme: 'file', language: 'pico-8' },
+  { scheme: 'file', language: 'pico-8-lua' },
+];
 
 export function activate(context: ExtensionContext): void {
   languages.registerDocumentSemanticTokensProvider(
@@ -40,11 +46,41 @@ export function activate(context: ExtensionContext): void {
   registerFormattingCommand(client, context, 'formatFile', false);
   registerFormattingCommand(client, context, 'formatFileSeparateLines', true);
 
+  refreshOutlineOnOptionsChange(context, client);
+
   // starts both client and server
   const disposable = client.start();
 
   // So the client gets deactivated on extension deactivation
   context.subscriptions.push(disposable);
+
+  switchLuaDocuments(context, client);
+}
+
+// VS Code caches the outline by document version and list of document symbol providers, and LSP 3.16 has no request
+// to refresh document symbols. Only a provider list VS Code has not seen before makes the outline, breadcrumbs, sticky
+// scroll and Ctrl+Shift+O ask again, so an empty provider is swapped for a new one when the server says the outline
+// options changed; the server says so after it has taken the new options, so the new outline has them. Registering the
+// new provider before disposing the old one makes the list differ at each step, and registering one from activation
+// on makes the LSP provider's place in the list change only on the first swap.
+function refreshOutlineOnOptionsChange(context: ExtensionContext, client: LanguageClient): void {
+  const registerEmptyProvider = () => languages.registerDocumentSymbolProvider(picoDocuments, {
+    provideDocumentSymbols: () => undefined,
+  });
+  let provider = registerEmptyProvider();
+  context.subscriptions.push({
+    dispose: () => {
+      provider.dispose();
+    },
+  });
+
+  void client.onReady().then(() => {
+    context.subscriptions.push(client.onNotification('pico-8-ls/didChangeOutlineOptions', () => {
+      const old = provider;
+      provider = registerEmptyProvider();
+      old.dispose();
+    }));
+  });
 }
 
 // Get options for running Node language server
@@ -71,10 +107,7 @@ function getServerOptions(context: ExtensionContext): ServerOptions {
 function getClientOptions(): LanguageClientOptions {
   return {
     // Register the server for PICO-8 documents
-    documentSelector: [
-      { scheme: 'file', language: 'pico-8' },
-      { scheme: 'file', language: 'pico-8-lua' },
-    ],
+    documentSelector: picoDocuments,
     synchronize: {
       fileEvents: workspace.createFileSystemWatcher('**/*.{p8,lua}'),
     },

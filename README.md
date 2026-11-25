@@ -1,6 +1,6 @@
 # PICO-8-LS
 
-A personal fork of [PICO-8 LS](https://github.com/japhib/pico8-ls) by JanPaul Bergeson. It keeps the original features and changes how the outline is built: it lists definitions instead of every assignment, groups table members under their table, and leaves out function parameters and loop variables. See [CHANGELOG.md](CHANGELOG.md) for details.
+A personal fork of [PICO-8 LS](https://github.com/japhib/pico8-ls) by JanPaul Bergeson. It keeps the original features and changes how the outline is built: it lists definitions instead of every assignment, groups table members under their table, and leaves out function parameters, loop variables and blocks unless you turn them on in the settings (`pico-8-ls.outline.*`). See [CHANGELOG.md](CHANGELOG.md) for details.
 
 Full language support for the [PICO-8](https://www.lexaloffle.com/pico-8.php)
 dialect of Lua. 
@@ -25,7 +25,7 @@ Full support for `#include` statements:
 - Code folding (functions, blocks, `-->8` tabs, `#region` markers, and cartridge sections)
 - Syntax errors
 - Warnings on undefined variable usage
-- Find symbol in document
+- Find symbol in document, with options to list parameters and loop variables and to group by `for` and `if` blocks
 - Find symbol in workspace (Ctrl+T), also in `#include`d files outside it
 - Go to definition
 - Find references
@@ -36,6 +36,23 @@ Full support for `#include` statements:
 - Support for `#include`ing other files
 - Snippets for common idioms (functions, loops, etc) as well as pico-8 symbols (`p8-jelpi` -> 🐱, `p8-x-key` -> ❎, etc)
 - Code formatting
+
+## Which `.lua` files are PICO-8 Lua
+
+A `.lua` file opens as PICO-8 Lua when it belongs to a cart:
+
+- a `.p8` file is in its folder, or in a folder above it inside the workspace folder (a folder whose name starts with a dot does not count), or
+- a cart `#include`s it, directly or through other files, wherever it is.
+
+Other `.lua` files open as plain Lua, and the language server leaves them alone. A file you switch to PICO-8 Lua yourself, with Change Language Mode, is PICO-8 Lua while it is open. A file near a cart that you switch to another language keeps it, also after a reload, until you choose PICO-8 Lua for it again; so does a file that `files.associations` gives a language.
+
+The extension starts when the workspace contains a `.p8` file, or when you open a PICO-8 file.
+
+To open every `.lua` file as PICO-8 Lua, as versions before 0.6.0 did, add this to your settings:
+
+```json
+"files.associations": { "*.lua": "pico-8-lua" }
+```
 
 ## Support for other platforms
 

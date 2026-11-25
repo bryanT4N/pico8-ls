@@ -16,7 +16,8 @@
 	},
 	"activationEvents": [
 		"onLanguage:pico-8",
-		"onLanguage:pico-8-lua"
+		"onLanguage:pico-8-lua",
+		"workspaceContains:**/*.p8"
 	],
 	"main": "./client/out-min/main.js",
 	"categories": [
@@ -55,6 +56,24 @@
 					],
 					"default": "off",
 					"description": "Traces the communication between VS Code and the language server."
+				},
+				"pico-8-ls.outline.showParameters": {
+					"scope": "window",
+					"type": "boolean",
+					"default": false,
+					"markdownDescription": "List each function's parameters under it in the outline, breadcrumbs and sticky scroll, and in Go to Symbol in Workspace. `...` is not listed."
+				},
+				"pico-8-ls.outline.showLoopVariables": {
+					"scope": "window",
+					"type": "boolean",
+					"default": false,
+					"markdownDescription": "List the variables of each `for` loop in the outline, breadcrumbs and sticky scroll, and in Go to Symbol in Workspace: under the function the loop is in, or under the loop when `#pico-8-ls.outline.showBlocks#` is on."
+				},
+				"pico-8-ls.outline.showBlocks": {
+					"scope": "window",
+					"type": "boolean",
+					"default": false,
+					"markdownDescription": "Group the outline, breadcrumbs and sticky scroll by the `for`, `while`, `repeat` and `do` blocks and the branches of `if` that hold something they list. A block is named after its first line, as in `for i=1,#enemies`."
 				}
 			}
 		},
@@ -80,9 +99,6 @@
 				"id": "pico-8-lua",
 				"aliases": [
 					"PICO-8 Lua"
-				],
-				"extensions": [
-					".lua"
 				],
 				"configuration": "./syntaxes/language-configuration.json",
 				"icon": {
