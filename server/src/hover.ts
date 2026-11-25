@@ -5,15 +5,20 @@ import { BuiltinFunctionInfo } from './parser/builtins';
 import { Expression } from './parser/expressions';
 import { unwrapValue } from './parser/outline/members';
 import { isColonMethod, parameterNames } from './parser/outline/model';
+import { containerOf } from './workspace-symbols';
 
 // Undefined when the reference names nothing the user defined, so that a builtin can answer. A method call that its
 // table does not define shows each method of that name, as Go to Definition offers them all.
 export function hoverMarkdown(analysis: Analysis, reference: Reference): string | undefined {
   const { symbol } = reference;
-  const describe = (described: LuaSymbol) => {
+  // candidate: one of the methods of that name. Several of them can sit on tables no name holds, where only what holds
+  // the table tells them apart.
+  const describe = (described: LuaSymbol, candidate = false) => {
     const { definition, doc } = documentationOf(analysis, described);
     const text = doc ? renderDoc(doc) : '';
-    return '```pico-8-lua\n' + declarationOf(described, definition) + '\n```' + (text === '' ? '' : '\n\n' + text);
+    const declaration = declarationOf(described, definition);
+    const container = candidate && definition && declaration.startsWith('(method) ') ? containerOf(analysis, definition.nameLoc) : undefined;
+    return '```pico-8-lua\n' + declaration + (container ? ' -- in ' + container : '') + '\n```' + (text === '' ? '' : '\n\n' + text);
   };
   if (symbol.definitions.length > 0 || symbol.kind === 'self') {
     return describe(symbol);
@@ -21,7 +26,7 @@ export function hoverMarkdown(analysis: Analysis, reference: Reference): string 
   if (symbol.kind === 'member' && reference.isCall) {
     const methods = methodsNamed(analysis, symbol.name);
     if (methods.length > 0) {
-      return methods.map(describe).join('\n\n---\n\n');
+      return methods.map(method => describe(method, true)).join('\n\n---\n\n');
     }
   }
   return undefined;

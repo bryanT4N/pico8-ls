@@ -1,7 +1,7 @@
 import { deepStrictEqual, strictEqual as eq } from 'assert';
 import * as path from 'path';
 import * as url from 'url';
-import { Location } from 'vscode-languageserver/node';
+import { Location, SymbolInformation, SymbolKind } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { builtinInfo } from '../parser/builtins';
 import Parser from '../parser/parser';
@@ -167,6 +167,7 @@ function scanned(files: Record<string, string>): ProjectIndex {
 }
 
 describe('ProjectIndex', () => {
+  const brief = (list: SymbolInformation[]) => list.map(s => [ s.name, s.containerName, nameOf(s.location.uri) ]);
   const sharedGlobals = () => ({
     'main.p8': '#include lib.lua\nshared = 5\nplayer.hp = 3\nfunction _draw() print(shared) end',
     'lib.lua': 'shared = 0\nplayer = { x = 1 }',
@@ -617,5 +618,49 @@ describe('ProjectIndex', () => {
     const help = scanned(files).signatureHelp(uriOf('main.p8'), files['main.p8'].length, callContextAt(files['main.p8'], files['main.p8'].length)!)!;
     eq(help.signatures[0].label, 'dist(a, b)');
     eq(help.activeParameter, 1);
+  });
+
+  it('lists each file once in workspace symbols, from the first project that contains it', () => {
+    const index = scanned({ 'a.p8': 'function a_init()\n  #include common.lua\nend', 'b.p8': '#include common.lua', 'common.lua': 'function helper() end' });
+    deepStrictEqual(brief(index.workspaceSymbols('helper')), [[ 'helper()', 'a_init', 'common.lua' ]]);
+  });
+
+  it('lists a global set in two files in each of them', () => {
+    const index = scanned(sharedGlobals());
+    deepStrictEqual(brief(index.workspaceSymbols('shared')), [[ 'shared', undefined, 'lib.lua' ], [ 'shared', undefined, 'main.p8' ]]);
+    // main.p8 only sets a field of player, so player itself is listed in lib.lua alone.
+    deepStrictEqual(brief(index.workspaceSymbols('player')),
+      [[ 'player', undefined, 'lib.lua' ], [ 'player.x', undefined, 'lib.lua' ], [ 'player.hp', undefined, 'main.p8' ]]);
+  });
+
+  it('gives workspace symbols as SymbolInformation, and none for an empty query', () => {
+    const index = scanned({ 'main.p8': 'entity = {}\nfunction entity:update() end', 'f.lua': 'function f()\n  local x = 1\nend' });
+    deepStrictEqual(index.workspaceSymbols('update'), [{ name: 'entity:update()', kind: SymbolKind.Method,
+      location: { uri: uriOf('main.p8'), range: { start: { line: 1, character: 16 }, end: { line: 1, character: 22 } } } }]);
+    deepStrictEqual(index.workspaceSymbols('x'), [{ name: 'x', kind: SymbolKind.Variable,
+      location: { uri: uriOf('f.lua'), range: { start: { line: 1, character: 8 }, end: { line: 1, character: 9 } } }, containerName: 'f' }]);
+    deepStrictEqual(index.workspaceSymbols(''), []);
+  });
+
+  it('lists a file that only an #include reads', () => {
+    const onDisk = new Map([[ 'main.p8', '#include .shared/lib (2).lua\nhelper()' ], [ 'lib (2).lua', 'function helper() end' ]]);
+    const index = indexOver({}, { disk: diskOf(onDisk) });
+    // The scan leaves out the dot-folder.
+    index.scan([ uriOf('main.p8') ]);
+    deepStrictEqual(index.workspaceSymbols('helper').map(s => s.location.uri), [ uriOf('.shared/lib (2).lua') ]);
+  });
+
+  it('shows the symbols of the current text', () => {
+    const files: Record<string, string> = { 'main.p8': 'function old_name() end' };
+    const index = scanned(files);
+    deepStrictEqual(brief(index.workspaceSymbols('name')), [[ 'old_name()', undefined, 'main.p8' ]]);
+    files['main.p8'] = 'function new_name() end';
+    index.update(uriOf('main.p8'));
+    deepStrictEqual(brief(index.workspaceSymbols('name')), [[ 'new_name()', undefined, 'main.p8' ]]);
+  });
+
+  it('lists nothing from a project whose analysis failed', () => {
+    const { index } = failedAnalysis({ 'main.p8': 'function f() end' });
+    deepStrictEqual(index.workspaceSymbols('f'), []);
   });
 });

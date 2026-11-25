@@ -122,6 +122,8 @@ export type ChildParseResult = {
   // Hover and signature help calls that returned, whatever they gave: on some files signature help never finds a call.
   hovers: number,
   signatureHelps: number,
+  // Workspace symbol items built.
+  symbols: number,
 };
 
 export function parseManyInChild(jobs: ChildParseJob[], timeoutMs: number): ChildParseResult[] {

@@ -11,6 +11,7 @@ import { codeLocationToString } from '../types';
 import { completionItems, completionRequestAt } from '../../completion';
 import { hoverMarkdown } from '../../hover';
 import { signatureHelpAt } from '../../signature-help';
+import { searchSymbols, symbolItems } from '../../workspace-symbols';
 import { outlineLines } from './outline-utils';
 import { ChildParseJob, ChildParseResult, formatError, TestFilesResolver } from './test-utils';
 
@@ -38,7 +39,7 @@ function collectInvalid(syms: CodeSymbol[], mainFile: ResolvedFile): string[] {
   return invalid;
 }
 
-type Counts = Pick<ChildParseResult, 'queries' | 'hovers' | 'signatureHelps'>;
+type Counts = Pick<ChildParseResult, 'queries' | 'hovers' | 'signatureHelps' | 'symbols'>;
 
 // The lookups the editor asks for while code is being typed, counted as they return, so that a throw leaves the counts
 // of those before it.
@@ -56,6 +57,9 @@ function runQueries(analysis: Analysis, file: ResolvedFile, code: string, counts
   }
   warningsOf(analysis);
   counts.queries++;
+  const items = [ ...symbolItems(analysis).values() ].flat();
+  counts.symbols += items.length;
+  searchSymbols(items, 'e');
   const lines = code.split('\n');
   for (let k = 0; k < PLACES; k++) {
     const index = Math.floor(k * code.length / (PLACES - 1));
@@ -91,13 +95,14 @@ function parseJob(job: ChildParseJob): ChildParseResult {
       queries: 0,
       hovers: 0,
       signatureHelps: 0,
+      symbols: 0,
     };
   }
 
   // A throw in the analysis or in a query shows up in `threw` too, along with
   // what the parse found.
   let symbols: CodeSymbol[];
-  const counts: Counts = { queries: 0, hovers: 0, signatureHelps: 0 };
+  const counts: Counts = { queries: 0, hovers: 0, signatureHelps: 0, symbols: 0 };
   try {
     const analysis = analyze(chunk);
     counts.queries++;

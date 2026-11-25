@@ -1,4 +1,4 @@
-import { Location, SignatureHelp } from 'vscode-languageserver/node';
+import { Location, SignatureHelp, SymbolInformation } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Chunk } from './parser/statements';
 import * as url from 'url';
@@ -14,6 +14,7 @@ import { errorsInFile, FileDiagnostics, inThisFile, mergeDiagnostics } from './d
 import { hoverMarkdown } from './hover';
 import { rangeOf } from './ranges';
 import { CallContext, signatureHelpFor } from './signature-help';
+import { searchSymbols, SymbolItem, symbolItems, toSymbolInformation } from './workspace-symbols';
 
 export type ProjectDocument = { textDocument: TextDocument, chunk: Chunk, errors: ParseError[] };
 
@@ -302,8 +303,30 @@ export class ProjectIndex {
       new Map([[ uri, errorsInFile(uri, this.documents.get(uri)?.errors ?? []) ]]), this.warnings(uri), maxPerFile));
   }
 
+  workspaceSymbols(query: string): SymbolInformation[] {
+    return searchSymbols(this.symbolItemsOfEachFile(), query).map(toSymbolInformation);
+  }
+
   private projectsOf(uri: string): IndexedProject[] {
     return this.projects.filter(project => project.files.includes(uri));
+  }
+
+  // Each file once: an indexed file from the first project that contains it, as its outline comes; a file that only an
+  // #include reads, like one in a dot-folder, from the first project whose analysis has it.
+  private symbolItemsOfEachFile(): SymbolItem[] {
+    const taken = new Set<string>();
+    const lists: SymbolItem[][] = [];
+    for (const project of this.projects) {
+      const files = new Set(project.files);
+      for (const [ uri, items ] of symbolItems(project.analysis)) {
+        if (taken.has(uri) || (this.documents.has(uri) && !files.has(uri))) {
+          continue;
+        }
+        taken.add(uri);
+        lists.push(items);
+      }
+    }
+    return lists.flat();
   }
 
   private buildProjects(): void {

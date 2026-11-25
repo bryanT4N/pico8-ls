@@ -89,6 +89,17 @@ describe('hoverMarkdown', () => {
       block('function a:go()') + '\n\n---\n\n' + block('function b:go()'));
   });
 
+  it('names what holds a candidate on a table no name holds', () => {
+    const code = lines('function new_hud()', '  return { _draw = function(game) end }', 'end', 'function new_bullet()', '  return { _draw = function() end }', 'end',
+      'hud = new_hud()', 'hud:_draw()');
+    strictEqual(hoverAt(code, 8, 4), block('(method) _draw(game) -- in new_hud') + '\n\n---\n\n' + block('(method) _draw() -- in new_bullet'));
+    // On the definition itself it is not a candidate.
+    strictEqual(hoverAt(code, 2, 11), block('(method) _draw(game)'));
+    const make = lines('function make()', '  return {', '    update = function(self) self:draw() end,', '    draw = function(self) end,', '  }', 'end');
+    strictEqual(hoverAt(make, 3, 33), block('(method) draw(self) -- in make'));
+    strictEqual(hoverAt(make, 3, 28), block('(parameter) self'));
+  });
+
   it('lets a user function shadow a builtin of the same name', () => {
     strictEqual(hoverAt(lines('function print(s) end', 'print(1)'), 2, 0), block('function print(s)'));
     strictEqual(hoverAt('cls()', 1, 0), undefined);

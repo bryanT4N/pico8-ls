@@ -45,6 +45,7 @@ describe('robustness on half-typed lines', function () {
       assert.ok(results.reduce((sum, r) => sum + r.queries, 0) > 0, 'no queries ran');
       assert.ok(results.reduce((sum, r) => sum + r.hovers, 0) > 0, 'no hover ran');
       assert.ok(results.reduce((sum, r) => sum + r.signatureHelps, 0) > 0, 'no signature help ran');
+      assert.ok(results.reduce((sum, r) => sum + r.symbols, 0) > 0, 'no workspace symbols');
     });
   }
 });
