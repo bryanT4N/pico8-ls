@@ -146,12 +146,17 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
 // wrote there.
 function associated(document: TextDocument): boolean {
   const associations = workspace.getConfiguration('files').get<Record<string, string>>('associations') ?? {};
-  return Object.keys(associations).some(pattern => matches(pattern, document));
+  return Object.keys(associations).some(pattern => matches(pattern, document.uri));
 }
 
-// VS Code matches a key of files.associations without a slash against the file name only.
-function matches(pattern: string, document: TextDocument): boolean {
-  return languages.match({ pattern: pattern.includes('/') ? pattern : '**/' + pattern }, document) > 0;
+// VS Code matches a key of files.associations without a slash against the file name only, and ignores case, which
+// languages.match does not, so the key and the path are both lowercased. languages.match scores a pattern by the
+// document's uri alone (the extension host's match calls score(selector, document.uri, document.languageId, ...)), so a
+// stand-in with that uri will do, for a closed file as well.
+function matches(pattern: string, uri: Uri): boolean {
+  const key = pattern.toLowerCase();
+  const document = { uri: Uri.file(uri.fsPath.toLowerCase()), languageId: '' } as unknown as TextDocument;
+  return languages.match({ pattern: key.includes('/') ? key : '**/' + key }, document) > 0;
 }
 
 // An open document has the language its editor shows. A closed one has the language that files.associations gives
@@ -163,12 +168,9 @@ function givenOtherLanguage(uri: Uri): boolean {
     return !isPico(open.languageId) && associated(open);
   }
   const associations = workspace.getConfiguration('files').get<Record<string, string>>('associations') ?? {};
-  // VS Code scores a pattern by the document's uri alone (the extension host's match calls
-  // score(selector, document.uri, document.languageId, ...)), so a closed file needs no real document.
-  const closed = { uri, languageId: '' } as unknown as TextDocument;
   let longest: string | undefined;
   for (const pattern of Object.keys(associations)) {
-    if ((longest === undefined || pattern.length >= longest.length) && matches(pattern, closed)) {
+    if ((longest === undefined || pattern.length >= longest.length) && matches(pattern, uri)) {
       longest = pattern;
     }
   }
