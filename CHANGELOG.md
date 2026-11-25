@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 (unreleased)
+
+- Go to Symbol in Workspace (Ctrl+T) finds the functions, methods, tables, fields and variables that the outline lists, in every file of the workspace and in the files they `#include`, also those outside the workspace or in a folder whose name starts with a dot.
+  - Names are written as in the code, with their tables: `entity:update()`, `player.x`, `game.state.level`. Functions and methods end in `()`.
+  - Next to a name is where it is defined: the function a local or a field is in, or the variable that holds a function written in a table passed to a call, as with `on_damaged()` in `player`.
+  - Choosing one goes to its name, where Go to Definition goes.
+  - A file that several carts include, or that a cart includes twice, is listed once. Anonymous functions and labels are not listed.
+- Hover over a method call that its table does not define names what holds each candidate on a table no name holds, as in `(method) _draw(game) -- in new_hud`.
+- Adding a folder to the workspace reads its files, and a cart elsewhere that includes one of them reads it again. Removing a folder forgets its files, except those open in the editor; a file that a cart still includes stays part of that cart.
+- The files are read as soon as the server starts, without waiting for the settings. Changing `pico-8-ls.maxNumberOfProblems` sends the problems again with the new limit, without reading every file again.
+- Fixed: a one-line `---` comment ending in dots, such as `--- loads the level...`, was taken for a heading and not shown.
+- Fixed: a parameter of a function written on the line after `t.on_hit =` did not show its `@param` text.
+- Fixed: a `--[[ ]]` comment followed by code on its line was shown as the doc of the next line.
+- Fixed: parameter hints could show a call that an earlier line left unclosed, also after a line starting with `local`, `if`, `for`, `while`, `repeat`, `return`, `goto` or `break`.
+
 ## 0.4.0 (unreleased)
 
 - Hover shows your own functions, variables, fields, parameters and labels: their declaration, such as `function vector:dot(v2)` or `(global) g_debug = false`, and the comment written right above them.
