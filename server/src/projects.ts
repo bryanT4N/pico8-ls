@@ -31,7 +31,7 @@ export function isTrackedPath(filePath: string, roots: string[]): boolean {
   if (matchingRoot === undefined) {
     return true;
   }
-  const relative = normalizedFile.slice(matchingRoot.length + path.sep.length);
+  const relative = path.relative(matchingRoot, normalizedFile);
   return relative.split(path.sep).slice(0, -1).every(part => !part.startsWith('.'));
 }
 
@@ -43,8 +43,10 @@ export function leftWorkspace(uris: string[], removed: string[], remaining: stri
   });
 }
 
+// A drive or share root, such as c:\ or \\server\share\, already ends in a separator.
 function isUnder(filePath: string, folder: string): boolean {
-  return path.normalize(filePath).startsWith(path.normalize(folder) + path.sep);
+  const dir = path.normalize(folder);
+  return path.normalize(filePath).startsWith(dir.endsWith(path.sep) ? dir : dir + path.sep);
 }
 
 export type ParsedDocumentsMap = Map<string, ProjectDocument>;

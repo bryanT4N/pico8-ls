@@ -63,6 +63,14 @@ describe('isTrackedPath', () => {
   it('tracks any .p8/.lua file when no roots are given', () => {
     eq(isTrackedPath(path.join(path.resolve('/anywhere'), '.x', 'a.lua'), []), true);
   });
+
+  it('leaves out the dot-directories below a filesystem root, which ends in a separator', () => {
+    const root = path.parse(process.cwd()).root;
+    eq(isTrackedPath(path.join(root, 'main.p8'), [ root ]), true);
+    eq(isTrackedPath(path.join(root, 'games', 'a.lua'), [ root ]), true);
+    eq(isTrackedPath(path.join(root, '.hidden', 'a.lua'), [ root ]), false);
+    eq(isTrackedPath(path.join(root, 'games', '.history', 'a.lua'), [ root ]), false);
+  });
 });
 
 describe('leftWorkspace', () => {
@@ -71,6 +79,16 @@ describe('leftWorkspace', () => {
     const uri = (p: string) => pathToFileURL(path.join(ws, p));
     deepStrictEqual(leftWorkspace([ uri('b/x.lua'), uri('b/inner/y.lua'), uri('b2/z.lua'), uri('a/m.p8'), uri('b/.hidden/w.lua') ],
       [ path.join(ws, 'b') ], [ path.join(ws, 'a'), path.join(ws, 'b', 'inner') ]), [ uri('b/x.lua'), uri('b/.hidden/w.lua') ]);
+  });
+
+  it('takes a filesystem root, which ends in a separator, as a folder like any other', () => {
+    const root = path.parse(process.cwd()).root;
+    const games = path.join(root, 'games');
+    const uri = (p: string) => pathToFileURL(path.join(root, p));
+    const files = [ uri('games/a.lua'), uri('b.lua') ];
+    deepStrictEqual(leftWorkspace(files, [ root ], []), files);
+    deepStrictEqual(leftWorkspace(files, [ root ], [ games ]), [ uri('b.lua') ]);
+    deepStrictEqual(leftWorkspace(files, [ games ], [ root ]), []);
   });
 });
 

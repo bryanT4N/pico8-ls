@@ -36,7 +36,8 @@ let hasWorkspaceFolderCapability = false;
 // The text of the workspace's files as the scan or the file watcher read them.
 const diskText = new Map<string, string>();
 
-// Workspace root paths, populated when the workspace is scanned and kept for isTrackedPath checks.
+// The paths of the workspace folders, which change as folders are added and removed: isTrackedPath checks the file
+// watcher's events against them, and a removed folder's file leaves the index only when no remaining folder holds it.
 let workspaceRoots: string[] = [];
 
 const fileResolver = makeFileResolver(uri => documents.get(uri)?.getText(), diskText);
@@ -101,8 +102,11 @@ connection.onInitialized(() => {
         // So that a cart that includes it reads it from disk from now on.
         diskText.delete(uri);
       }
-      // A removed file gets empty diagnostics, which clears its warnings from the Problems panel.
-      publish(index.removeAll(left));
+      // A removed file gets empty diagnostics, which clears its warnings from the Problems panel. With none removed,
+      // the scan of the added folders sends every file's diagnostics anyway.
+      if (left.length > 0) {
+        publish(index.removeAll(left));
+      }
       Promise.all(event.added.map(scanWorkspaceFolder)).catch(e => {
         console.log('Error scanning workspace folders', e);
       });
@@ -112,7 +116,9 @@ connection.onInitialized(() => {
   // The scan does not wait for the settings, which a client can leave unanswered; once they come, the diagnostics are
   // sent again with their limit.
   scanWorkspace();
-  void fetchGlobalSettings().then(() => publish(index.uris()));
+  fetchGlobalSettings().then(() => publish(index.uris())).catch(e => {
+    console.error('Failed to send the diagnostics', e);
+  });
 });
 
 function scanWorkspace() {
@@ -146,7 +152,13 @@ async function scanWorkspaceFolder(workspaceFolder: WorkspaceFolder) {
     return uri;
   }));
 
-  publish(index.scan(uris));
+  // The folder can have been removed while its files were being read, when the index did not have them yet for the
+  // removal to drop. Files open in the editor stay, as they do when a folder is removed.
+  const gone = new Set(leftWorkspace(uris, [ folderPath ], workspaceRoots).filter(uri => !documents.get(uri)));
+  for (const uri of gone) {
+    diskText.delete(uri);
+  }
+  publish(index.scan(uris.filter(uri => !gone.has(uri))));
 }
 
 async function getFilesRecursive(folderPath: string, root: string): Promise<string[]> {
@@ -266,7 +278,9 @@ connection.onDidChangeConfiguration(change => {
   }
 
   // The diagnostics come from the index, so the files need not be read again.
-  void fetchGlobalSettings().then(() => publish(index.uris()));
+  fetchGlobalSettings().then(() => publish(index.uris())).catch(e => {
+    console.error('Failed to send the diagnostics', e);
+  });
 });
 
 connection.onDocumentSymbol((params: DocumentSymbolParams) => {
