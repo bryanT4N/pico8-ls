@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0 (unreleased)
+
+- Code being typed no longer takes in the line below:
+  - `x =` with a statement on the next line, such as `player.x = 3`, is reported at the `=` as a value still to write, and the next line stays a statement of its own. `x` stays in the outline. So do `local x =`, `x +=` and the like, `return`, and an operator at the end of a line, as in `x = a +`.
+  - A value written on the next line, as in `x =` and then `foo()`, is still the value of `x`.
+  - A table, an argument list or an index left open, as in `t = {` with code below it, ends at the next line that starts with `local`, `function` and a name, `if`, `for`, `while`, `repeat`, `return`, `goto` or `break` and is indented no deeper than the line of the `{`. The error is reported at the `{`, and the table keeps its fields in the outline.
+  - A place where several of these meet gets one error.
+- Code nested more than 200 levels deep, as PICO-8 counts them, is reported where it goes over, since PICO-8 rejects it too; a chain of about 200 strings joined with `..` is enough. The code is still read, so the outline keeps it.
+- Very long expressions, such as a line of 30,000 `+1` terms or `a.b.b.b…`, no longer make folding, the outline, hover or formatting fail. A path of more than 200 keys, as in `a.b.b…b = 1`, is left out of the outline.
+- A request that fails in the language server gets an empty answer, instead of the message "A request has failed".
+- `#include file.lua -- comment` still reports that the file does not exist, and now says that the rest of the line is taken as the file name.
+- `#region` and `#endregion` in a `--[[ ]]` comment no longer mark regions, as in VS Code: only `--` and `//` comments do.
+- A file that `files.associations` gives a language other than PICO-8 or PICO-8 Lua shows no PICO-8 warnings, open or closed, like a file you switch to another language yourself.
+- Switching a file to PICO-8, the language of `.p8` files, counts as choosing PICO-8 Lua: its warnings stay, and an earlier choice of another language is forgotten, also for a file you set back to PICO-8 Lua while the extension was not running.
+- Fixed: a file that two carts include showed none of its warnings when the analysis of one of the carts failed.
+
 ## 0.6.0 (unreleased)
 
 - Three new settings, all off by default, change the outline, breadcrumbs, sticky scroll and Go to Symbol in Workspace (Ctrl+T) as soon as you change them:
