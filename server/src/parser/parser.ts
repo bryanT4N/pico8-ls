@@ -56,6 +56,17 @@ const MAX_INCLUDE_DEPTH = 32;
 // one twice take 2^depth parses, even within MAX_INCLUDE_DEPTH.
 const MAX_INCLUDE_PARSES = 256;
 
+// PICO-8's Lua, as Lua 5.2 (LUAI_MAXCCALLS), counts a level for each statement
+// and each subexpression, and rejects code nested more than 200 levels deep.
+const MAX_LEVELS = 200;
+
+// Past MAX_LEVELS the parser reports once and goes on, so that a long `..`
+// chain keeps its statement and the lines after it are not each reported as
+// errors. It stops here so that the parser and the code that walks the syntax
+// tree stay within the call stack: on a cold start they overflow at about
+// 1,300 levels.
+const MAX_PARSED_LEVELS = 500;
+
 export type ParserOptions = {
   includeFileResolver?: FileResolver,
 };
@@ -106,6 +117,11 @@ export default class Parser {
 
   private includeParses = 0;
   private reportedTooManyIncludeParses = false;
+
+  private levels = 0;
+  // Code nested too deep is reported once, for the innermost statement within
+  // MAX_LEVELS, rather than at every level past it.
+  private reportedTooManyLevels = false;
 
   // eslint-disable-next-line @typescript-eslint/ban-types
   constructor(filename: ResolvedFile, input: string, options: ParserOptions = {}) {
@@ -308,9 +324,12 @@ export default class Parser {
       const startToken = this.token;
       const locationDepth = this.locations.length;
       const flowDepth = flowContext.scopes.length;
+      const levels = this.levels;
 
       try {
+        this.enterStatementLevel();
         const statement = this.parseStatement(flowContext);
+        this.levels--;
 
         if (statement?.type === 'IncludeStatement') {
           const resolvedInclude = resolveIncludeFile(this.filename, statement.filename, this.includeFileResolver);
@@ -343,11 +362,13 @@ export default class Parser {
       } catch (e) {
         if (errors.isParseError(e)) {
           // A statement that throws part-way through leaves its location
-          // markers and flow scopes behind: the nodes around it would get the
-          // wrong start, and later breaks and labels would count as inside it.
+          // markers, nesting levels and flow scopes behind: the nodes around it
+          // would get the wrong start, later statements would count as nested
+          // in it, and later breaks and labels would count as inside it.
           // Its flow scopes are popped, not dropped, so the gotos in them are
           // still checked.
           this.locations.length = locationDepth;
+          this.levels = levels;
           while (flowContext.scopes.length > flowDepth) {
             flowContext.popScope();
           }
@@ -1289,6 +1310,39 @@ export default class Parser {
     }
   }
 
+  // The level is counted around the whole parse so that every return leaves
+  // it. A throw does not: the parseBlock that catches it restores the count.
+  // This runs for every expression, so the check is inline and tooManyLevels
+  // is only called past the limit.
+  parseSubExpression(minPrecedence: number, flowContext: FlowContext): Expression | null {
+    if (++this.levels > MAX_LEVELS) {
+      this.tooManyLevels();
+    }
+    const expression = this.parseSubExpressionInLevel(minPrecedence, flowContext);
+    this.levels--;
+    return expression;
+  }
+
+  private enterStatementLevel() {
+    if (++this.levels > MAX_LEVELS) {
+      this.tooManyLevels();
+    } else {
+      // A statement within the limit gets its own report of what is nested in
+      // it too deep.
+      this.reportedTooManyLevels = false;
+    }
+  }
+
+  private tooManyLevels() {
+    if (!this.reportedTooManyLevels) {
+      this.reportedTooManyLevels = true;
+      this.errors.push(errors.createErrForToken(this.token, errMessages.tooManyLevels, MAX_LEVELS, this.token.value));
+    }
+    if (this.levels > MAX_PARSED_LEVELS) {
+      raiseErrForToken(this.token, errMessages.tooManyLevels, MAX_LEVELS, this.token.value);
+    }
+  }
+
   // Implement an operator-precedence parser to handle binary operator
   // precedence.
   //
@@ -1298,7 +1352,7 @@ export default class Parser {
   //
   //     exp ::= (unop exp | primary | prefixexp ) { binop exp }
 
-  parseSubExpression(minPrecedence: number, flowContext: FlowContext): Expression | null {
+  private parseSubExpressionInLevel(minPrecedence: number, flowContext: FlowContext): Expression | null {
     let operator = this.token.value as string;
     // The left-hand side in binary operations.
     let expression: Expression | null = null;

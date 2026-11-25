@@ -1,8 +1,8 @@
 import {
   CompletionItem, CompletionItemTag, createConnection, DefinitionParams,
   DidChangeConfigurationNotification, DocumentFormattingParams, DocumentSymbolParams,
-  ExecuteCommandParams, FileChangeType, FoldingRange, FoldingRangeParams, HoverParams, InitializeParams, InitializeResult, Position, ProposedFeatures,
-  ReferenceParams, SignatureHelpParams, TextDocumentPositionParams,
+  ExecuteCommandParams, FileChangeType, FoldingRange, FoldingRangeParams, Hover, HoverParams, InitializeParams, InitializeResult, Position, ProposedFeatures,
+  ReferenceParams, SignatureHelp, SignatureHelpParams, TextDocumentPositionParams,
   TextDocuments, TextDocumentSyncKind, TextEdit, WorkspaceFolder, WorkspaceSymbolParams,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -24,6 +24,7 @@ import { completionItems, completionRequestAt, Offered, resolveUserItem, wordAt 
 import { builtinMarkdown } from './hover';
 import { builtinSignatureHelp, CallContext, callContextAt } from './signature-help';
 import { NO_OUTLINE_OPTIONS, OutlineOptions, outlineOptionsFrom } from './parser/outline/model';
+import { guarded } from './guarded';
 
 console.log('PICO-8-LS language server starting.');
 
@@ -423,57 +424,42 @@ connection.onDidChangeConfiguration(change => {
   });
 });
 
-connection.onDocumentSymbol((params: DocumentSymbolParams) => {
+connection.onDocumentSymbol(guarded('build the outline', () => [], (params: DocumentSymbolParams) => {
   const { uri } = params.textDocument;
   const document = index.document(uri);
   if (!document) {
     return [];
   }
-  try {
-    return buildDocumentSymbols(document.textDocument, document.chunk.comments ?? [], index.outline(uri, globalSettings.outline));
-  } catch (e) {
-    console.error('Failed to build the outline', e);
-    return [];
-  }
-});
+  return buildDocumentSymbols(document.textDocument, document.chunk.comments ?? [], index.outline(uri, globalSettings.outline));
+}));
 
-connection.onWorkspaceSymbol((params: WorkspaceSymbolParams) => {
-  try {
-    return index.workspaceSymbols(params.query, globalSettings.outline);
-  } catch (e) {
-    console.error('Failed to give workspace symbols', e);
-    return [];
-  }
-});
+connection.onWorkspaceSymbol(guarded('give workspace symbols', () => [], (params: WorkspaceSymbolParams) => {
+  return index.workspaceSymbols(params.query, globalSettings.outline);
+}));
 
 // The client asks for a lua document, uri in VS Code's form, to give it the PICO-8 Lua language. True when a file of
 // the index #includes it, whatever its name, as PICO-8 does; or when it is a .lua file and a cart is in its folder or a
 // folder above it, so that a file such as notes.txt that the user shows as Lua keeps that language. Only the search for
 // a cart reads the disk, so that the answer does not wait for the scan to find the carts.
-connection.onRequest('pico-8-ls/belongsToCart', (params: { uri: string }) => {
-  try {
-    const filePath = pathOf(params.uri);
-    return filePath !== undefined
-      && (index.isIncluded(params.uri) || (/\.lua$/i.test(filePath) && nearCart(filePath, workspaceRoots, folderHasCart)));
-  } catch (e) {
-    console.error('Failed to tell whether a file belongs to a cart', e);
-    return false;
-  }
-});
+connection.onRequest('pico-8-ls/belongsToCart', guarded('tell whether a file belongs to a cart', () => false, (params: { uri: string }) => {
+  const filePath = pathOf(params.uri);
+  return filePath !== undefined
+    && (index.isIncluded(params.uri) || (/\.lua$/i.test(filePath) && nearCart(filePath, workspaceRoots, folderHasCart)));
+}));
 
 function offsetOf(params: TextDocumentPositionParams): number | undefined {
   return documents.get(params.textDocument.uri)?.offsetAt(params.position);
 }
 
-connection.onDefinition((params: DefinitionParams) => {
+connection.onDefinition(guarded('give definitions', () => [], (params: DefinitionParams) => {
   const offset = offsetOf(params);
   return offset === undefined ? [] : index.definitions(params.textDocument.uri, offset);
-});
+}));
 
-connection.onReferences((params: ReferenceParams) => {
+connection.onReferences(guarded('give references', () => [], (params: ReferenceParams) => {
   const offset = offsetOf(params);
   return offset === undefined ? [] : index.references(params.textDocument.uri, offset, params.context.includeDeclaration);
-});
+}));
 
 connection.onDidChangeWatchedFiles(change => {
   const joined = index.joins();
@@ -544,7 +530,7 @@ connection.onDidChangeWatchedFiles(change => {
 let lastOffered: Offered = new Map();
 
 // This handler provides the initial list of the completion items.
-connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] => {
+connection.onCompletion(guarded('give completions', () => [], (params: TextDocumentPositionParams): CompletionItem[] => {
   lastOffered = new Map();
   const { uri } = params.textDocument;
   const offset = offsetOf(params);
@@ -555,9 +541,9 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
   const { line, character } = params.position;
   return completionItems(index.analyses(uri), ResolvedFile.fromFileURL(uri), offset, completionRequestAt(lineText, character), line, character,
     lastOffered);
-});
+}));
 
-connection.onCompletionResolve((item: CompletionItem) => {
+connection.onCompletionResolve(guarded('resolve a completion item', item => item, (item: CompletionItem) => {
   try {
     if (resolveUserItem(item, lastOffered)) {
       return item;
@@ -581,7 +567,7 @@ connection.onCompletionResolve((item: CompletionItem) => {
   }
 
   return item;
-});
+}));
 
 function getTextOnLine(textDocumentUri: string, position: Position): string | undefined {
   const text = documents.get(textDocumentUri);
@@ -595,7 +581,7 @@ function getTextOnLine(textDocumentUri: string, position: Position): string | un
   });
 }
 
-connection.onHover((params: HoverParams) => {
+connection.onHover(guarded<HoverParams, Hover | null | undefined>('give the hover', () => null, (params: HoverParams) => {
   const offset = offsetOf(params);
   try {
     const value = offset === undefined ? undefined : index.hover(params.textDocument.uri, offset);
@@ -618,9 +604,9 @@ connection.onHover((params: HoverParams) => {
       contents: builtinMarkdown(identifier, info),
     };
   }
-});
+}));
 
-connection.onSignatureHelp((params: SignatureHelpParams) => {
+connection.onSignatureHelp(guarded<SignatureHelpParams, SignatureHelp | null | undefined>('give signature help', () => null, (params: SignatureHelpParams) => {
   const { uri } = params.textDocument;
   const document = documents.get(uri);
   if (!document) {
@@ -644,19 +630,19 @@ connection.onSignatureHelp((params: SignatureHelpParams) => {
     // With no analysis, only the builtins.
     return builtinSignatureHelp(call);
   }
-});
+}));
 
-connection.onDocumentFormatting((params: DocumentFormattingParams) => {
+connection.onDocumentFormatting(guarded('format the document', () => null, (params: DocumentFormattingParams) => {
   const formatResult = executeCommand_formatDocument(params.textDocument.uri, params.options);
   return formatResult ? [ formatResult ] : null;
-});
+}));
 
-connection.onFoldingRanges((params: FoldingRangeParams): FoldingRange[] => {
+connection.onFoldingRanges(guarded('give folding ranges', () => [], (params: FoldingRangeParams): FoldingRange[] => {
   const document = index.document(params.textDocument.uri);
   return document ? computeFoldingRanges(document.textDocument, document.chunk) : [];
-});
+}));
 
-connection.onExecuteCommand((params: ExecuteCommandParams) => {
+connection.onExecuteCommand(guarded('run a command', () => null, (params: ExecuteCommandParams) => {
   switch (params.command) {
   // Both these commands trigger a format operation -- the difference should be expressed in the FormatterOptions.
   case 'pico-8-ls.server.formatFile':
@@ -666,7 +652,7 @@ connection.onExecuteCommand((params: ExecuteCommandParams) => {
     console.error(`onExecuteCommand received unexpected command: ${params.command}`);
     break;
   }
-});
+}));
 
 const formatterSupportedLanguages = [ 'pico-8', 'pico-8-lua' ];
 

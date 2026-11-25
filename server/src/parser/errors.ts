@@ -29,6 +29,7 @@ export const errMessages = Object.freeze({
   cannotUseVararg: 'cannot use \'...\' outside a Vararg function near \'%1\'',
   invalidCodeUnit: 'code unit U+%1 is not allowed in the current encoding mode',
   undefinedVariable: 'undefined variable: %1',
+  tooManyLevels: 'too many nested levels (limit is %1) near \'%2\'',
   unusedLocal: '%1 is defined but not used',
 });
 
