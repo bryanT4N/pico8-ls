@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1 (unreleased)
+
+- Formatting is turned off for now: Format Document and the PICO-8-LS: Format File commands are gone. The formatter could change what code means, for example by dropping parentheses that matter, as in `(-a) ^ 2` or `return (f())`, or by turning `- -a` into a comment.
+
 ## 0.7.0 (unreleased)
 
 - Code being typed no longer takes in the line below:

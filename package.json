@@ -6,7 +6,7 @@
 	"author": "JanPaul Bergeson",
 	"publisher": "bryanT4N",
 	"license": "MIT",
-	"version": "0.7.0",
+	"version": "0.7.1",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/bryanT4N/pico8-ls"
@@ -25,16 +25,6 @@
 		"Snippets"
 	],
 	"contributes": {
-		"commands": [
-			{
-				"command": "pico-8-ls.formatFile",
-				"title": "PICO-8-LS: Format File"
-			},
-			{
-				"command": "pico-8-ls.formatFileSeparateLines",
-				"title": "PICO-8-LS: Format File - Each Statement on Separate Line"
-			}
-		],
 		"configuration": {
 			"type": "object",
 			"title": "PICO-8-LS configuration",

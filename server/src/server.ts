@@ -1,9 +1,9 @@
 import {
   CompletionItem, CompletionItemTag, createConnection, DefinitionParams,
-  DidChangeConfigurationNotification, DocumentFormattingParams, DocumentSymbolParams,
-  ExecuteCommandParams, FileChangeType, FoldingRange, FoldingRangeParams, Hover, HoverParams, InitializeParams, InitializeResult, Position, ProposedFeatures,
+  DidChangeConfigurationNotification, DocumentSymbolParams,
+  FileChangeType, FoldingRange, FoldingRangeParams, Hover, HoverParams, InitializeParams, InitializeResult, Position, ProposedFeatures,
   ReferenceParams, SignatureHelp, SignatureHelpParams, TextDocumentPositionParams,
-  TextDocuments, TextDocumentSyncKind, TextEdit, WorkspaceFolder, WorkspaceSymbolParams,
+  TextDocuments, TextDocumentSyncKind, WorkspaceFolder, WorkspaceSymbolParams,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import Parser from './parser/parser';
@@ -12,14 +12,13 @@ import { isParseError } from './parser/errors';
 import { builtinInfo } from './parser/builtins';
 import ResolvedFile, { pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
-import Formatter, { FormatterOptions } from './parser/formatter';
 import { isScanned, isTrackedPath, isUnder, makeFileResolver, nearCart, ProjectDocument, ProjectIndex } from './projects';
 import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
 import { buildDocumentSymbols } from './document-symbols';
 import { computeFoldingRanges } from './folding-ranges';
-import { errorsInFile, maxProblems } from './diagnostics';
+import { maxProblems } from './diagnostics';
 import { completionItems, completionRequestAt, Offered, resolveUserItem, wordAt } from './completion';
 import { builtinMarkdown } from './hover';
 import { builtinSignatureHelp, CallContext, callContextAt } from './signature-help';
@@ -119,14 +118,7 @@ connection.onInitialize((params: InitializeParams) => {
       completionProvider: { triggerCharacters: [ '.', ':' ], resolveProvider: true },
       hoverProvider: true,
       signatureHelpProvider: { triggerCharacters: [ '(' ], retriggerCharacters: [ ',' ] },
-      documentFormattingProvider: true,
       foldingRangeProvider: true,
-      executeCommandProvider: {
-        commands: [
-          'pico-8-ls.server.formatFile',
-          'pico-8-ls.server.formatFileSeparateLines',
-        ],
-      },
     },
   };
 
@@ -632,69 +624,10 @@ connection.onSignatureHelp(guarded<SignatureHelpParams, SignatureHelp | null | u
   }
 }));
 
-connection.onDocumentFormatting(guarded('format the document', () => null, (params: DocumentFormattingParams) => {
-  const formatResult = executeCommand_formatDocument(params.textDocument.uri, params.options);
-  return formatResult ? [ formatResult ] : null;
-}));
-
 connection.onFoldingRanges(guarded('give folding ranges', () => [], (params: FoldingRangeParams): FoldingRange[] => {
   const document = index.document(params.textDocument.uri);
   return document ? computeFoldingRanges(document.textDocument, document.chunk) : [];
 }));
-
-connection.onExecuteCommand(guarded('run a command', () => null, (params: ExecuteCommandParams) => {
-  switch (params.command) {
-  // Both these commands trigger a format operation -- the difference should be expressed in the FormatterOptions.
-  case 'pico-8-ls.server.formatFile':
-  case 'pico-8-ls.server.formatFileSeparateLines':
-    return executeCommand_formatDocument(params.arguments![0] as string, params.arguments![1] as FormatterOptions);
-  default:
-    console.error(`onExecuteCommand received unexpected command: ${params.command}`);
-    break;
-  }
-}));
-
-const formatterSupportedLanguages = [ 'pico-8', 'pico-8-lua' ];
-
-function executeCommand_formatDocument(documentUri: string, opts: FormatterOptions): TextEdit | null {
-  const textDocument = documents.get(documentUri);
-  if (!textDocument) {
-    console.error('Can\'t find textDocument at uri ' + documentUri);
-    return null;
-  }
-
-  // Make sure the document language is supported for formatting
-  if (!formatterSupportedLanguages.includes(textDocument.languageId)) {
-    console.error('Unsupported language for formatter: ' + textDocument.languageId);
-    return null;
-  }
-
-  // A parse of its own: the formatter adds nodes to the syntax tree that the analysis cannot take.
-  const chunk = parseText(documentUri, textDocument.getText());
-  if (!chunk || errorsInFile(documentUri, chunk.errors).length > 0) {
-    console.error(`Can't format document when there are parsing errors! (document: "${textDocument.uri}")`);
-    return null;
-  }
-
-  // Actually format it
-  const formatResult = new Formatter(opts).formatChunk(
-    chunk,
-    textDocument.getText(),
-    textDocument.languageId === 'pico-8-lua',
-    documentUri,
-  );
-
-  if (!formatResult) {
-    // Couldn't format, for whatever reason
-    console.error('Unknown error formatting document');
-    return null;
-  }
-
-  return TextEdit.replace(
-    formatResult.formattedRange,
-    formatResult.formattedText,
-  );
-}
 
 // Make the text document manager listen on the connection
 // for open, change and close text document events

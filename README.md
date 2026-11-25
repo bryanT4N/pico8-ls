@@ -35,7 +35,6 @@ Full support for `#include` statements:
 - Auto-completion
 - Support for `#include`ing other files
 - Snippets for common idioms (functions, loops, etc) as well as pico-8 symbols (`p8-jelpi` -> 🐱, `p8-x-key` -> ❎, etc)
-- Code formatting
 
 ## Which `.lua` files are PICO-8 Lua
 

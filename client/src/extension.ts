@@ -1,18 +1,8 @@
 import * as path from 'path';
-import { ExtensionContext, Position, Range, TextEdit, TextEditorEdit, commands, languages, window, workspace } from 'vscode';
-import { CloseAction, ErrorAction, ErrorHandler, ExecuteCommandParams, LanguageClient, LanguageClientOptions, Message, ServerOptions, State, TransportKind } from 'vscode-languageclient/node';
+import { ExtensionContext, languages, workspace } from 'vscode';
+import { CloseAction, ErrorAction, ErrorHandler, LanguageClient, LanguageClientOptions, Message, ServerOptions, State, TransportKind } from 'vscode-languageclient/node';
 import { DiagnosticsFilter, diagnosticsFilter, keptLanguages, switchLuaDocuments } from './lua-documents';
 import SemanticTokenProvider, { legend } from './semantic-token-provider';
-
-// Should stay in sync with FormatterOptions in server/src/parser/formatter.ts
-type FormatterOptions = {
-  // Size of a tab in spaces.
-  tabSize: number,
-  // Prefer spaces over tabs.
-  insertSpaces: boolean,
-  // Force each statement to be on a separate line.
-  forceSeparateLines?: boolean,
-};
 
 let defaultErrorHandler: ErrorHandler | undefined;
 
@@ -43,10 +33,6 @@ export function activate(context: ExtensionContext): void {
     getClientOptions(filter),
   );
   defaultErrorHandler = client.createDefaultErrorHandler(4);
-
-  // register commands
-  registerFormattingCommand(client, context, 'formatFile', false);
-  registerFormattingCommand(client, context, 'formatFileSeparateLines', true);
 
   refreshOutlineOnOptionsChange(context, client);
 
@@ -138,51 +124,4 @@ function getClientOptions(filter: DiagnosticsFilter): LanguageClientOptions {
       },
     },
   };
-}
-
-function registerFormattingCommand(client: LanguageClient, context: ExtensionContext, commandName: string, forceSeparateLines: boolean): void {
-  const disposable = commands.registerCommand('pico-8-ls.' + commandName, async () => {
-    const editor = window.activeTextEditor;
-    if (!editor) {
-      return;
-    }
-
-    const uri = editor.document.uri;
-
-    const opts: FormatterOptions = {
-      tabSize: Number(editor.options.tabSize) || 4,
-      insertSpaces: !!editor.options.insertSpaces,
-      forceSeparateLines: forceSeparateLines,
-    };
-
-    const params: ExecuteCommandParams = {
-      command: 'pico-8-ls.server.' + commandName,
-      arguments: [
-        uri.toString(),
-        opts,
-      ],
-    };
-
-    const result: TextEdit | null = await client.sendRequest(
-      'workspace/executeCommand',
-      params,
-    ) ;
-
-    if (!result) {
-      // The server doesn't format a document that has errors in it
-      void window.showErrorMessage('Can\'t format the document. Make sure it doesn\'t have any errors.');
-      return;
-    }
-
-    if (result.range && result.newText) {
-      await editor.edit((editBuilder: TextEditorEdit) => {
-        // Convert the plain object result.range into an instance of the vscode.Range class
-        const editRange = new Range(new Position(result.range.start.line, result.range.start.character), new Position(result.range.end.line, result.range.end.character));
-        editBuilder.replace(editRange, result.newText);
-      });
-    } else {
-      void window.showErrorMessage('Invalid formatting result from language server backend. Please report an issue on GitHub.');
-    }
-  });
-  context.subscriptions.push(disposable);
 }
