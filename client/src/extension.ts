@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { ExtensionContext, Position, Range, TextEdit, TextEditorEdit, commands, languages, window, workspace } from 'vscode';
 import { CloseAction, ErrorAction, ErrorHandler, ExecuteCommandParams, LanguageClient, LanguageClientOptions, Message, ServerOptions, State, TransportKind } from 'vscode-languageclient/node';
-import { hideKeptDiagnostics, keptLanguages, switchLuaDocuments } from './lua-documents';
+import { DiagnosticsFilter, diagnosticsFilter, keptLanguages, switchLuaDocuments } from './lua-documents';
 import SemanticTokenProvider, { legend } from './semantic-token-provider';
 
 // Should stay in sync with FormatterOptions in server/src/parser/formatter.ts
@@ -35,11 +35,12 @@ export function activate(context: ExtensionContext): void {
   );
 
   const kept = keptLanguages(context);
+  const filter = diagnosticsFilter(kept);
   const client = new LanguageClient(
     'pico-8-ls',
     'PICO-8-LS',
     getServerOptions(context),
-    getClientOptions(kept),
+    getClientOptions(filter),
   );
   defaultErrorHandler = client.createDefaultErrorHandler(4);
 
@@ -63,7 +64,7 @@ export function activate(context: ExtensionContext): void {
   // So the client gets deactivated on extension deactivation
   context.subscriptions.push(disposable);
 
-  switchLuaDocuments(context, client, kept);
+  switchLuaDocuments(context, client, kept, filter);
 }
 
 // VS Code caches the outline by document version and list of document symbol providers, and LSP 3.16 has no request
@@ -116,7 +117,7 @@ function getServerOptions(context: ExtensionContext): ServerOptions {
   };
 }
 
-function getClientOptions(kept: Set<string>): LanguageClientOptions {
+function getClientOptions(filter: DiagnosticsFilter): LanguageClientOptions {
   return {
     // Register the server for PICO-8 documents
     documentSelector: picoDocuments,
@@ -124,7 +125,7 @@ function getClientOptions(kept: Set<string>): LanguageClientOptions {
       fileEvents: workspace.createFileSystemWatcher('**/*.{p8,lua}'),
     },
     middleware: {
-      handleDiagnostics: hideKeptDiagnostics(kept),
+      handleDiagnostics: filter.middleware,
     },
 
     errorHandler: {

@@ -5,22 +5,62 @@ import { HandleDiagnosticsSignature, LanguageClient, State } from 'vscode-langua
 // would be undone when the extension starts again.
 const KEY = 'pico-8-ls.keptLanguage';
 
-// The uris of the documents the user moved away from PICO-8 Lua. They are read before the client is made, because its
-// diagnostics middleware needs them too.
-export function keptLanguages(context: ExtensionContext): Set<string> {
-  return new Set(context.workspaceState.get<string[]>(KEY, []));
+// PICO-8, the language of .p8 files, is as much PICO-8 as PICO-8 Lua.
+function isPico(languageId: string): boolean {
+  return languageId === 'pico-8' || languageId === 'pico-8-lua';
 }
+
+// The uris of the documents the user moved away from PICO-8 Lua. They are read before the client is made, because its
+// diagnostics middleware needs them too. Also drops the uris of documents already open in a PICO-8 language, which no
+// open event reports: they were given it back while the extension was not running.
+export function keptLanguages(context: ExtensionContext): Set<string> {
+  const kept = new Set(context.workspaceState.get<string[]>(KEY, []));
+  let changed = false;
+  for (const document of workspace.textDocuments) {
+    if (isPico(document.languageId) && kept.delete(document.uri.toString())) {
+      changed = true;
+    }
+  }
+  if (changed) {
+    void context.workspaceState.update(KEY, [ ...kept ]);
+  }
+  return kept;
+}
+
+export type DiagnosticsFilter = {
+  middleware: (uri: Uri, diagnostics: Diagnostic[], next: HandleDiagnosticsSignature) => void,
+  // Shows or hides again what the server sent, after the kept languages or files.associations changed.
+  refresh: (client: LanguageClient) => void,
+};
 
 // A .lua file near a cart stays in the cart's project whatever language its editor has, as a file stays in its tsconfig
 // project, so the server goes on sending its warnings, from its text on the disk. A file the user moved away from
-// PICO-8 Lua shows none, as a file that the TypeScript extension no longer has open as TypeScript shows no errors.
-export function hideKeptDiagnostics(kept: Set<string>) {
-  return (uri: Uri, diagnostics: Diagnostic[], next: HandleDiagnosticsSignature) =>
-    next(uri, kept.has(uri.toString()) ? [] : diagnostics);
+// PICO-8 Lua, or that files.associations gives a language other than PICO-8, shows none, as a file that the TypeScript
+// extension no longer has open as TypeScript shows no errors.
+export function diagnosticsFilter(kept: Set<string>): DiagnosticsFilter {
+  // A change of the kept languages or of files.associations shows or hides what the server sent before, which it has
+  // no reason to send again: for a closed file it does not know about the change at all.
+  const received = new Map<string, { uri: Uri, diagnostics: Diagnostic[] }>();
+  const hidden = (uri: Uri) => kept.has(uri.toString()) || givenOtherLanguage(uri);
+  return {
+    middleware: (uri, diagnostics, next) => {
+      if (diagnostics.length > 0) {
+        received.set(uri.toString(), { uri, diagnostics });
+      } else {
+        received.delete(uri.toString());
+      }
+      next(uri, hidden(uri) ? [] : diagnostics);
+    },
+    refresh: client => {
+      for (const { uri, diagnostics } of received.values()) {
+        client.diagnostics?.set(uri, hidden(uri) ? [] : diagnostics);
+      }
+    },
+  };
 }
 
 // Switches the open lua documents that belong to a cart to PICO-8 Lua, and leaves alone those the user moved away from it.
-export function switchLuaDocuments(context: ExtensionContext, client: LanguageClient, kept: Set<string>): void {
+export function switchLuaDocuments(context: ExtensionContext, client: LanguageClient, kept: Set<string>, filter: DiagnosticsFilter): void {
   const saveKept = () => void context.workspaceState.update(KEY, [ ...kept ]);
 
   const mayBecomePicoLua = (document: TextDocument) => !document.isClosed
@@ -66,17 +106,18 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
     const oldLanguage = lastClosed?.document === document ? lastClosed.languageId : undefined;
     lastClosed = undefined;
     const uri = document.uri.toString();
-    if (document.languageId === 'pico-8-lua') {
+    if (isPico(document.languageId)) {
       if (kept.delete(uri)) {
         saveKept();
+        filter.refresh(client);
       }
-    } else if (oldLanguage === 'pico-8-lua' && document.uri.scheme === 'file' && window.activeTextEditor?.document === document) {
+    } else if (oldLanguage !== undefined && isPico(oldLanguage) && document.uri.scheme === 'file' && window.activeTextEditor?.document === document) {
       // Change Language Mode acts on the active editor only. A change of files.associations resets every open file
       // while the settings are the active editor, so those files go on to be checked.
       kept.add(uri);
       saveKept();
-      // The middleware drops the warnings the server sends from now on; those it sent before go now.
-      client.diagnostics?.delete(document.uri);
+      // The middleware hides the warnings the server sends from now on; those it sent before are hidden now.
+      filter.refresh(client);
     } else {
       void check(document);
     }
@@ -86,6 +127,7 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
     // Removing an association turns a file from the lua it gave into the default lua, which VS Code does not report
     // as a change of language.
     if (event.affectsConfiguration('files.associations')) {
+      filter.refresh(client);
       checkAll();
     }
   }));
@@ -101,9 +143,34 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
 }
 
 // files.associations comes before the languages of every extension, so a file it names has the language the user
-// wrote there. VS Code matches a pattern without a slash against the file name only.
+// wrote there.
 function associated(document: TextDocument): boolean {
   const associations = workspace.getConfiguration('files').get<Record<string, string>>('associations') ?? {};
-  return Object.keys(associations)
-    .some(pattern => languages.match({ pattern: pattern.includes('/') ? pattern : '**/' + pattern }, document) > 0);
+  return Object.keys(associations).some(pattern => matches(pattern, document));
+}
+
+// VS Code matches a key of files.associations without a slash against the file name only.
+function matches(pattern: string, document: TextDocument): boolean {
+  return languages.match({ pattern: pattern.includes('/') ? pattern : '**/' + pattern }, document) > 0;
+}
+
+// An open document has the language its editor shows. A closed one has the language that files.associations gives
+// it as VS Code picks it: the longest key that matches, and of two as long the later one. VS Code registers every key
+// as a pattern, never as a file name, so its rule that an exact file name comes first does not apply to them.
+function givenOtherLanguage(uri: Uri): boolean {
+  const open = workspace.textDocuments.find(document => document.uri.toString() === uri.toString());
+  if (open) {
+    return !isPico(open.languageId) && associated(open);
+  }
+  const associations = workspace.getConfiguration('files').get<Record<string, string>>('associations') ?? {};
+  // VS Code scores a pattern by the document's uri alone (the extension host's match calls
+  // score(selector, document.uri, document.languageId, ...)), so a closed file needs no real document.
+  const closed = { uri, languageId: '' } as unknown as TextDocument;
+  let longest: string | undefined;
+  for (const pattern of Object.keys(associations)) {
+    if ((longest === undefined || pattern.length >= longest.length) && matches(pattern, closed)) {
+      longest = pattern;
+    }
+  }
+  return longest !== undefined && !isPico(associations[longest]);
 }
