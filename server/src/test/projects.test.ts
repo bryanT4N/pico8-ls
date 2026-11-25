@@ -9,6 +9,7 @@ import ResolvedFile, { FileResolver, fileURLToPath, pathToFileURL } from '../par
 import { outlineLines } from '../parser/test/outline-utils';
 import { deepEquals, formatError } from '../parser/test/test-utils';
 import { findProjects, isTrackedPath, makeFileResolver, ParsedDocumentsMap, ProjectDocument, ProjectIndex } from '../projects';
+import { callContextAt } from '../signature-help';
 
 // Creates a mock ProjectDocument that just has the specified includes
 function mockTextDocument(name: string, includes: string[]): ProjectDocument {
@@ -424,7 +425,8 @@ describe('ProjectIndex', () => {
     const files = { 'main.p8': 'function f() end\nprint(' };
     const { index } = failedAnalysis(files);
     eq(index.hover(uriOf('main.p8'), offsetIn(files, 'main.p8', 1, 9)), undefined);
-    eq(index.signatureHelp(uriOf('main.p8'), files['main.p8'].length, files['main.p8'])!.signatures[0].label, builtinInfo('print')!.sig);
+    eq(index.signatureHelp(uriOf('main.p8'), files['main.p8'].length, callContextAt(files['main.p8'], files['main.p8'].length)!)!.signatures[0].label,
+      builtinInfo('print')!.sig);
   });
 
   it('sends each file\'s diagnostics once', () => {
@@ -612,7 +614,7 @@ describe('ProjectIndex', () => {
 
   it('gives signature help for a function from an included file', () => {
     const files = { 'main.p8': '#include lib.lua\ndist(1, ', 'lib.lua': 'function dist(a, b) end' };
-    const help = scanned(files).signatureHelp(uriOf('main.p8'), files['main.p8'].length, files['main.p8'])!;
+    const help = scanned(files).signatureHelp(uriOf('main.p8'), files['main.p8'].length, callContextAt(files['main.p8'], files['main.p8'].length)!)!;
     eq(help.signatures[0].label, 'dist(a, b)');
     eq(help.activeParameter, 1);
   });

@@ -44,9 +44,26 @@ export function callContextAt(text: string, offset: number): CallContext | undef
   tokens.forEach((token, at) => {
     if (token.type === TokenType.Keyword) {
       switch (token.value) {
+      // These only start a statement, which cannot sit inside an open bracket: a ( { or [ still open before one, such as
+      // an unclosed call earlier in the file, was never closed. In a block, such as the body of a function passed to a
+      // call, the block is on top, so the brackets around it stay open.
+      case 'local':
+      case 'if':
+      case 'for':
+      case 'while':
+      case 'repeat':
+      case 'return':
+      case 'goto':
+      case 'break':
+        while (open.length > 0 && [ '(', '{', '[' ].includes(open[open.length - 1].kind)) {
+          open.pop();
+        }
+        if (token.value === 'repeat') {
+          open.push({ kind: token.value });
+        }
+        break;
       case 'then':
       case 'do':
-      case 'repeat':
         open.push({ kind: token.value });
         break;
       case 'elseif':
@@ -158,13 +175,14 @@ function parenAt(tokens: Token[], at: number): Paren {
   return before?.type === TokenType.Keyword && before.value === 'function' ? 'parameters' : { path, colon };
 }
 
-// The signatures of the functions the call at offset may go to, from the first analysis that finds one. A plain name
-// that none finds is looked up among the builtins.
 export function signatureHelpAt(analyses: Analysis[], file: ResolvedFile, text: string, offset: number): SignatureHelp | undefined {
   const call = callContextAt(text, offset);
-  if (!call) {
-    return undefined;
-  }
+  return call ? signatureHelpFor(analyses, file, offset, call) : undefined;
+}
+
+// The signatures of the functions call at offset may go to, from the first analysis that finds one. A plain name that
+// none finds is looked up among the builtins.
+export function signatureHelpFor(analyses: Analysis[], file: ResolvedFile, offset: number, call: CallContext): SignatureHelp | undefined {
   for (const analysis of analyses) {
     const signatures: Signature[] = [];
     // A file included twice has its definitions twice.
@@ -182,6 +200,11 @@ export function signatureHelpAt(analyses: Analysis[], file: ResolvedFile, text: 
       return helpOf(signatures);
     }
   }
+  return builtinSignatureHelp(call);
+}
+
+// Needs no analysis, so it still answers when the project's signature help throws.
+export function builtinSignatureHelp(call: CallContext): SignatureHelp | undefined {
   return call.path.length === 1 ? builtinHelp(call.path[0], call.argument) : undefined;
 }
 

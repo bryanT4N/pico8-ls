@@ -22,7 +22,7 @@ import { computeFoldingRanges } from './folding-ranges';
 import { errorsInFile, maxProblems } from './diagnostics';
 import { completionItems, completionRequestAt, Offered, resolveUserItem, wordAt } from './completion';
 import { builtinMarkdown } from './hover';
-import { signatureHelpAt } from './signature-help';
+import { builtinSignatureHelp, CallContext, callContextAt } from './signature-help';
 
 console.log('PICO-8-LS language server starting.');
 
@@ -394,12 +394,22 @@ connection.onSignatureHelp((params: SignatureHelpParams) => {
     return undefined;
   }
   const offset = document.offsetAt(params.position);
+  let call: CallContext | undefined;
   try {
-    return index.signatureHelp(uri, offset, document.getText());
+    call = callContextAt(document.getText(), offset);
+  } catch (e) {
+    console.error('Failed to find the call', e);
+    return undefined;
+  }
+  if (!call) {
+    return undefined;
+  }
+  try {
+    return index.signatureHelp(uri, offset, call);
   } catch (e) {
     console.error('Failed to give signature help', e);
     // With no analysis, only the builtins.
-    return signatureHelpAt([], ResolvedFile.fromFileURL(uri), document.getText(), offset);
+    return builtinSignatureHelp(call);
   }
 });
 

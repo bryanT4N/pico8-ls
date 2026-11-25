@@ -2,7 +2,7 @@ import { deepStrictEqual, strictEqual } from 'assert';
 import { builtinInfo } from '../parser/builtins';
 import { analyzeCode, indexAt, testFile } from '../parser/test/test-utils';
 import { builtinMarkdown } from '../hover';
-import { callContextAt, signatureHelpAt } from '../signature-help';
+import { builtinSignatureHelp, callContextAt, signatureHelpAt } from '../signature-help';
 
 const lines = (...l: string[]) => l.join('\n');
 // Signature help at line and column, or at the end of the code.
@@ -59,6 +59,18 @@ describe('signatureHelpAt', () => {
     const code = lines('foreach(t, function(e)', '  if e.x then', '    for i = 1, 3 do end', '  elseif e.y then', '    repeat until true', '  end',
       '  if (e.z) e.z = nil', '  while (e.w) e.w -= 1', 'end, ');
     deepStrictEqual(callContextAt(code, code.length), { path: [ 'foreach' ], colon: false, argument: 2 });
+  });
+
+  it('stops at a keyword that starts a statement, unless the keyword is in a closed block', () => {
+    for (const t of [ 'foo(1,\nlocal x = (2', 'foo(1,\nlocal x = 2', 'foo(1,\nreturn (2', 'foo(1,\n  goto skip', 'foo(1,\nwhile (a',
+      'foo(1,\nfor i = 1, (2', 'foo(1,\nif (a', 'foo(1,\nrepeat x = (2', 'foo(1,\nbreak', 'foo(1, {\n  local', 'print((x)\nlocal y = 1\nz = (a' ]) {
+      strictEqual(callContextAt(t, t.length), undefined, t);
+    }
+    for (const t of [ 'foo(function() local y = 1 end, ', 'foo(function() if a then return end end, ' ]) {
+      deepStrictEqual(callContextAt(t, t.length), { path: [ 'foo' ], colon: false, argument: 1 }, t);
+    }
+    const inBody = 'foo(function()\n  for i = 1, 2 do\n    bar(i, ';
+    deepStrictEqual(callContextAt(inBody, inBody.length), { path: [ 'bar' ], colon: false, argument: 1 });
   });
 
   it('shows a user function with its doc and parameter docs', () => {
@@ -196,10 +208,16 @@ describe('signatureHelpAt', () => {
     strictEqual(helpAt(lines(methods, 'obj = {}', 'obj.f = 1', 'obj:f(')), undefined);
   });
 
-  it('gives only builtins with no analysis, as the server does when the project\'s signature help throws', () => {
+  it('gives only builtins with no analysis', () => {
     const spr = lines('function f(a) end', 'spr(1, ');
     deepStrictEqual(signatureHelpAt([], testFile(), spr, spr.length), helpAt(lines('x = 1', 'spr(1, ')));
     const f = lines('function f(a) end', 'f(');
     strictEqual(signatureHelpAt([], testFile(), f, f.length), undefined);
+  });
+
+  it('gives a builtin\'s signature help from the call alone', () => {
+    deepStrictEqual(builtinSignatureHelp({ path: [ 'spr' ], colon: false, argument: 1 }), helpAt(lines('x = 1', 'spr(1, ')));
+    strictEqual(builtinSignatureHelp({ path: [ 'a', 'spr' ], colon: false, argument: 0 }), undefined);
+    strictEqual(builtinSignatureHelp({ path: [ 'no_such_builtin' ], colon: false, argument: 0 }), undefined);
   });
 });

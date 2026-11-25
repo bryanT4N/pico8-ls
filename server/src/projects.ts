@@ -13,7 +13,7 @@ import { Bounds, containsIndex } from './parser/types';
 import { errorsInFile, FileDiagnostics, inThisFile, mergeDiagnostics } from './diagnostics';
 import { hoverMarkdown } from './hover';
 import { rangeOf } from './ranges';
-import { signatureHelpAt } from './signature-help';
+import { CallContext, signatureHelpFor } from './signature-help';
 
 export type ProjectDocument = { textDocument: TextDocument, chunk: Chunk, errors: ParseError[] };
 
@@ -275,9 +275,10 @@ export class ProjectIndex {
     return undefined;
   }
 
-  // From the first project by root URI that finds the function, or else from the builtins.
-  signatureHelp(uri: string, index: number, text: string): SignatureHelp | undefined {
-    return signatureHelpAt(this.analyses(uri), ResolvedFile.fromFileURL(uri), text, index);
+  // From the first project by root URI that finds the function, or else from the builtins. The caller finds the call, so
+  // that it can still give a builtin's help when this throws.
+  signatureHelp(uri: string, index: number, call: CallContext): SignatureHelp | undefined {
+    return signatureHelpFor(this.analyses(uri), ResolvedFile.fromFileURL(uri), index, call);
   }
 
   // One per project containing uri, by root URI.
