@@ -123,7 +123,7 @@ describe('Parser recovery', () => {
     check(
       lines('function _init()', 'end', 'x =', 'function _update()', 'end'),
       [ 'main_test_file 3:3 <expression> expected near \'function\'' ],
-      [ '_init() [Function]', '_update() [Function]' ],
+      [ '_init() [Function]', 'x [Variable]', '_update() [Function]' ],
     );
   });
 
@@ -131,7 +131,7 @@ describe('Parser recovery', () => {
     check(
       lines('function f()', '  x =', '  local y = 1', 'end'),
       [ 'main_test_file 2:5 <expression> expected near \'local\'' ],
-      [ 'f() [Function]', '  y [Variable]' ],
+      [ 'f() [Function]', '  y [Variable]', 'x [Variable]' ],
     );
   });
 
@@ -238,24 +238,24 @@ describe('Parser recovery', () => {
     );
   });
 
-  const UNFINISHED_LINES: [string, string][] = [
-    [ 't = {', '3:5 <expression> expected near \'function\'' ],
-    [ 'foo(', '3:4 <expression> expected near \'function\'' ],
-    [ 'print(x', '3:7 \')\' expected near \'function\'' ],
-    [ 'x.', '3:2 <name> expected near \'function\'' ],
-    [ 'goto', '3:4 <name> expected near \'function\'' ],
-    [ 'if x', '3:4 \'then\' expected near \'function\'' ],
-    [ 'for i=1,10', '3:10 \'do\' expected near \'function\'' ],
-    [ 'function foo', '3:12 \'(\' expected near \'function\'' ],
-    [ 'x = 1 +', '3:7 <expression> expected near \'function\'' ],
-    [ 'local x =', '3:9 <expression> expected near \'function\'' ],
+  const UNFINISHED_LINES: [string, string, string[]][] = [
+    [ 't = {', '3:5 <expression> expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
+    [ 'foo(', '3:4 <expression> expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
+    [ 'print(x', '3:7 \')\' expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
+    [ 'x.', '3:2 <name> expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
+    [ 'goto', '3:4 <name> expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
+    [ 'if x', '3:4 \'then\' expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
+    [ 'for i=1,10', '3:10 \'do\' expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
+    [ 'function foo', '3:12 \'(\' expected near \'function\'', [ '_init() [Function]', '_update() [Function]' ]],
+    [ 'x = 1 +', '3:7 <expression> expected near \'function\'', [ '_init() [Function]', 'x [Variable]', '_update() [Function]' ]],
+    [ 'local x =', '3:9 <expression> expected near \'function\'', [ '_init() [Function]', 'x [Variable]', '_update() [Function]' ]],
   ];
-  for (const [ unfinished, error ] of UNFINISHED_LINES) {
+  for (const [ unfinished, error, outline ] of UNFINISHED_LINES) {
     it(`keeps the function on the line after ${unfinished}`, () => {
       check(
         lines('function _init()', 'end', unfinished, 'function _update()', 'end'),
         [ `main_test_file ${error}` ],
-        [ '_init() [Function]', '_update() [Function]' ],
+        outline,
       );
     });
   }
@@ -331,6 +331,71 @@ describe('Parser recovery', () => {
     );
     const [ returned, handedBack ] = (block.body[0] as FunctionDeclaration).block.body;
     assert.deepStrictEqual([ span(returned.loc), span(handedBack.loc) ], [ '2:2-3:7', '4:2-6:5' ]);
+  });
+
+  describe('a value left to type at the end of a line', () => {
+    it('parses the line below as its own statement', () => {
+      check(lines('x =', 'player.x = 3'), [ 'main_test_file 1:3 <expression> expected near \'player\'' ],
+        [ 'x [Variable]', 'player [Table]', '  x [Field]' ]);
+      check(lines('local x =', 'y = 2'), [ 'main_test_file 1:9 <expression> expected near \'y\'' ], [ 'x [Variable]', 'y [Variable]' ]);
+      check(lines('x, y =', 'z = 1'), [ 'main_test_file 1:6 <expression> expected near \'z\'' ], [ 'x [Variable]', 'y [Variable]', 'z [Variable]' ]);
+      check(lines('function f()', '  n +=', '  m = 1', 'end'), [ 'main_test_file 2:6 <expression> expected near \'m\'' ],
+        [ 'f() [Function]', 'm [Variable]' ]);
+      check(lines('function f()', '  return', '  player.x = 3', 'end'), [ 'main_test_file 2:8 <expression> expected near \'player\'' ],
+        [ 'f() [Function]', 'player [Table]', '  x [Field]' ]);
+    });
+
+    it('stops at the operator at the end of the line the statement failed on', () => {
+      check(lines('x = 1 +', 'player.x = 3'), [ 'main_test_file 1:7 <expression> expected near \'player\'' ],
+        [ 'x [Variable]', 'player [Table]', '  x [Field]' ]);
+      check(lines('x = a +', '  b +', 'player.x = 3'), [ 'main_test_file 2:5 <expression> expected near \'player\'' ],
+        [ 'x [Variable]', 'player [Table]', '  x [Field]' ]);
+    });
+
+    it('keeps the statement when the line below cannot be a value', () => {
+      check(lines('function f()', '  x =', 'end'), [ 'main_test_file 2:5 <expression> expected near \'end\'' ], [ 'f() [Function]', 'x [Variable]' ]);
+      check('x =', [ 'main_test_file 1:3 <expression> expected near \'<eof>\'' ], [ 'x [Variable]' ]);
+      check(lines('x =', 'if a then', 'end'), [ 'main_test_file 1:3 <expression> expected near \'if\'' ], [ 'x [Variable]' ]);
+    });
+
+    // Unchanged from before: these two pass before the change too.
+    it('takes a value on the line below as the value', () => {
+      check(lines('x =', 'foo()', 'bar()'), [], [ 'x [Variable]' ]);
+      check(lines('function f()', '  return', '  foo()', 'end'), [], [ 'f() [Function]' ]);
+      check(lines('local a =', '(b)()'), [], [ 'a [Variable]' ]);
+    });
+
+    it('parses again only when the statement fails on the line where the value starts', () => {
+      check(lines('x = a +', '  b', ')'), [ 'main_test_file 3:0 unexpected symbol \')\' near \'<eof>\'' ], [ 'x [Variable]' ]);
+      check(lines('if a and', 'player.x = 3', 'end'),
+        [ 'main_test_file 2:9 \'then\' expected near \'=\'', 'main_test_file 3:0 unexpected keyword \'end\' near \'<eof>\'' ], []);
+    });
+
+    it('keeps what came before a statement parsed again, once', () => {
+      check(lines('do', '  goto done', '  local a = 1', '  ::done::', '  x =', '  y = 2', 'end'),
+        [ 'main_test_file 2:2 <goto done> jumps into the scope of local \'a\'', 'main_test_file 5:5 <expression> expected near \'y\'' ],
+        [ 'a [Variable]', 'done [Label]', 'x [Variable]', 'y [Variable]' ]);
+      check(lines('f = function()', '  x =', '  y = 2', 'end', 'z =', 'w = 3'),
+        [ 'main_test_file 2:5 <expression> expected near \'y\'', 'main_test_file 5:3 <expression> expected near \'w\'' ],
+        [ 'f() [Function]', 'x [Variable]', 'y [Variable]', 'z [Variable]', 'w [Variable]' ]);
+      check(lines('x =', 'y = `', 'z = 1'), [
+        'main_test_file 1:3 <expression> expected near \'y\'',
+        'main_test_file 2:3 <expression> expected near \'z\'',
+        'main_test_file 2:4 unexpected symbol \'`\'',
+      ], [ 'x [Variable]', 'y [Variable]', 'z [Variable]' ]);
+      const chunk = check(lines('x = -- todo', 'player.x = 3'), [ 'main_test_file 1:3 <expression> expected near \'player\'' ],
+        [ 'x [Variable]', 'player [Table]', '  x [Field]' ]);
+      assert.deepStrictEqual(chunk.comments!.map(c => c.value), [ ' todo' ]);
+    });
+
+    it('leaves a one-line if as it is', () => {
+      check(lines('if (c) x =', 'y = 2'), [ 'main_test_file 1:10 <expression> expected near \'\\n\'' ], [ 'y [Variable]' ]);
+    });
+
+    it('reports the missing value in a cart at its line', () => {
+      check(lines('pico-8 cartridge // http://www.pico-8.com', 'version 42', '__lua__', 'x =', 'player.x = 3', '__gfx__', ''),
+        [ 'main_test_file 4:3 <expression> expected near \'player\'' ], [ 'x [Variable]', 'player [Table]', '  x [Field]' ]);
+    });
   });
 });
 

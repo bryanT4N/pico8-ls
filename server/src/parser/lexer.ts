@@ -883,6 +883,35 @@ export default class Lexer {
 
   // ## Lex functions and helpers.
 
+  save(): LexerState {
+    return {
+      index: this.index, line: this.line, lineStart: this.lineStart,
+      tokenStart: this.tokenStart, tokenStartLine: this.tokenStartLine, tokenStartLineIdx: this.tokenStartLineIdx,
+      token: this.token, lookahead: this.lookahead, previousToken: this.previousToken,
+      reachedEnd: this.reachedEnd, newlineSignificant: this.newlineSignificant,
+      comments: this.comments.length, errors: this.errors.length, commentsBeforeComment: this.commentsBeforeComment.slice(),
+    };
+  }
+
+  // From a saved state, comments and errors only grow, and consumeRestOfLine only filters out what was lexed past the
+  // #include line it reads, so the first ones are still those the state was saved with.
+  restore(state: LexerState) {
+    this.index = state.index;
+    this.line = state.line;
+    this.lineStart = state.lineStart;
+    this.tokenStart = state.tokenStart;
+    this.tokenStartLine = state.tokenStartLine;
+    this.tokenStartLineIdx = state.tokenStartLineIdx;
+    this.token = state.token;
+    this.lookahead = state.lookahead;
+    this.previousToken = state.previousToken;
+    this.reachedEnd = state.reachedEnd;
+    this.newlineSignificant = state.newlineSignificant;
+    this.comments.length = state.comments;
+    this.errors.length = state.errors;
+    this.commentsBeforeComment = state.commentsBeforeComment.slice();
+  }
+
   // Read the next token.
   //
   // This is actually done by setting the current token to the lookahead and
@@ -1057,3 +1086,9 @@ export function isP8BeginningOfCodeSection(value: string): boolean {
 export function isP8EndOfCodeSection(value: string): boolean {
   return [ '__gfx__', '__label__', '__gff__', '__map__', '__sfx__', '__music__' ].includes(value);
 }
+
+export type LexerState = {
+  index: number, line: number, lineStart: number, tokenStart: number, tokenStartLine: number, tokenStartLineIdx: number,
+  token: Token | undefined, lookahead: Token | undefined, previousToken: Token | undefined,
+  reachedEnd: boolean, newlineSignificant: boolean, comments: number, errors: number, commentsBeforeComment: Comment_[],
+};
