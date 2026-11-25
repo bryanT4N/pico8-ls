@@ -83,6 +83,10 @@ class Binder extends ASTVisitor<BinderScope> {
   private readonly valueEntries = new Map<ASTNode, OutlineEntry>();
   // The function entries that callbackOwner put under an entry, with the function or file they are in.
   private readonly nestedCallbacks: Array<{ entry: OutlineEntry, natural: Owner }> = [];
+  // The node of the first definition that assigns each function, where its doc is read, so that its parameters take
+  // their @param from there even when the function starts on a later line, as in t.on_hit = then function(a). The
+  // statement and table constructor hooks define a function before the visitor reaches its parameters.
+  private readonly functionDocNodes = new Map<FunctionDeclaration, ASTNode>();
 
   constructor(private readonly boundaryLines: Map<string, number[]>) {
     super();
@@ -247,7 +251,7 @@ class Binder extends ASTVisitor<BinderScope> {
         if (isSelf && param === firstParam) {
           symbol.table = selfSymbol;
         }
-        this.define(symbol, param, param.loc!, node);
+        this.define(symbol, param, param.loc!, this.functionDocNodes.get(node) ?? node);
         scope.decls.set(param.name, { kind: 'param', symbol });
         this.declare(scope, symbol, parametersEnd);
       }
@@ -661,6 +665,9 @@ class Binder extends ASTVisitor<BinderScope> {
     symbol.definitions.push({ loc, nameLoc: name.loc!, node, value, isFunction, compound });
     if (isFunction) {
       symbol.signature = signatureOf(value);
+      if (!this.functionDocNodes.has(value)) {
+        this.functionDocNodes.set(value, node);
+      }
     }
     this.write(symbol, name, compound);
   }

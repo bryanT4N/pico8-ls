@@ -764,7 +764,14 @@ export default class Lexer {
 
     const lineBefore = this.input.slice(this.tokenStartLineIdx, this.tokenStart);
     const startsLine = /^[ \t\v\f]*$/.test(lineBefore);
-    const node = AST.comment(content, this.input.slice(this.tokenStart, this.index), startsLine, lineBefore);
+    // Stops at the first character that is not a blank rather than reading to the end of the line: a line of many long
+    // comments would take quadratic time.
+    let after = this.index;
+    while (after < this.length && /[ \t\v\f]/.test(this.input.charAt(after))) {
+      ++after;
+    }
+    const endsLine = after === this.length || isLineTerminator(this.input.charCodeAt(after));
+    const node = AST.comment(content, this.input.slice(this.tokenStart, this.index), startsLine, lineBefore, endsLine);
 
     // `Marker`s depend on tokens available in the parser and as comments are
     // intercepted in the lexer all location data is set manually.

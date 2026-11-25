@@ -170,6 +170,8 @@ export type Comment_ = ASTNode & {
   startsLine: boolean,
   // The text of its line before it: empty or blanks when the comment starts its line.
   lineBefore: string,
+  // Only whitespace comes after the comment on the line where it ends.
+  endsLine: boolean,
 };
 
 export type Whitespace = ASTNode & {

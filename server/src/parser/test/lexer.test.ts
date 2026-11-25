@@ -542,5 +542,10 @@ __music__
     it('records the text before a comment on its line', () => {
       assert.deepStrictEqual(lexWithErrors('x = 1 -- c\n  -- d').comments.map(c => c.lineBefore), [ 'x = 1 ', '  ' ]);
     });
+
+    it('records whether only blanks follow a comment on its last line', () => {
+      assert.deepStrictEqual(lexWithErrors('--[[ a ]] x = 1\n--[[ b\n]]\n-- c').comments.map(c => c.endsLine), [ false, true, true ]);
+      assert.deepStrictEqual(lexWithErrors('-- c\r\nx = 1').comments.map(c => c.endsLine), [ true ]);
+    });
   });
 });

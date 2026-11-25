@@ -50,6 +50,8 @@ describe('doc comments', () => {
     strictEqual(text(docAt(lines('x = 1', '---- enemies ----', 'enemy = {}'), 3, 0)), undefined);
     strictEqual(text(docAt(lines('x = 1', '-- waits --- then fires', 'function fire() end'), 3, 9)), 'waits --- then fires');
     strictEqual(text(docAt(lines('x = 1', '-- - then waits...', 'function wait() end'), 3, 9)), '- then waits...');
+    strictEqual(text(docAt(lines('x = 1', '--- loads the level...', 'function load() end'), 3, 9)), 'loads the level...');
+    strictEqual(text(docAt(lines('x = 1', '-- ... then waits ...', 'function wait() end'), 3, 9)), '... then waits ...');
   });
 
   it('reads a long run of separators inside a line quickly', () => {
@@ -103,11 +105,21 @@ describe('doc comments', () => {
     strictEqual(text(docAt(lines('x = 1', 'y = 2 --[[prot]]', 'print(y)'), 3, 6)), undefined);
   });
 
+  it('takes no doc from a long comment that code follows on its line', () => {
+    strictEqual(text(docAt(lines('x = 1', '--[[ old ]] y = 2', 'function f() end', 'f()'), 4, 0)), undefined);
+    strictEqual(text(docAt(lines('x = 1', '--[[ a', 'b ]] y = 2', 'function f() end', 'f()'), 5, 0)), undefined);
+  });
+
   it('gives no doc to a loop variable, and the statement\'s doc to each of its names', () => {
     strictEqual(text(docAt(lines('x = 1', '-- each enemy', 'for e in all(es) do print(e) end'), 3, 4)), undefined);
     const screen = lines('x = 1', '-- the screen size', 'w, h = 128, 128', 'print(w, h)');
     strictEqual(text(docAt(screen, 4, 6)), 'the screen size');
     strictEqual(text(docAt(screen, 4, 9)), 'the screen size');
+  });
+
+  it('takes the comment block above a label, and no end-of-line comment', () => {
+    strictEqual(text(docAt(lines('for i = 1, 3 do', '  goto continue', '  -- next round', '  ::continue::', 'end'), 2, 7)), 'next round');
+    strictEqual(text(docAt(lines('for i = 1, 3 do', '  goto continue', '  ::continue:: -- next round', 'end'), 2, 7)), undefined);
   });
 
   it('takes the doc of the first place Go to Definition goes to that has one', () => {
@@ -146,6 +158,17 @@ describe('doc comments', () => {
   it('documents a parameter with its function\'s @param, and self with its table\'s doc', () => {
     strictEqual(text(docAt(lines('x = 1', '-- moves p', '-- @param p the thing', 'function move(p) return p end'), 4, 14)), 'the thing');
     strictEqual(text(docAt(lines('x = 1', '-- the vector class', 'v = {}', 'function v:len() return self.x end'), 4, 24)), 'the vector class');
+    strictEqual(text(docAt(lines('x = 1', '-- @param p', '-- @param p the thing', 'function move(p) return p end'), 4, 24)), 'the thing');
+    const documented = lines('x = 1', '-- the vector class', 'v = {}', '-- the length', 'function v:len() return self.x end', 'print(v:len())');
+    strictEqual(text(docAt(documented, 6, 8)), 'the length');
+    strictEqual(text(docAt(documented, 5, 24)), 'the vector class');
+  });
+
+  it('documents a parameter with the @param above the statement that defines its function', () => {
+    strictEqual(text(docAt(lines('t = {}', '-- called on a hit', '-- @param a the attacker', 't.on_hit =', '  function(a) return a end'), 5, 21)),
+      'the attacker');
+    strictEqual(text(docAt(lines('x = 1', '-- @param a the attacker', 'local on_hit =', '  function(a) return a end'), 4, 21)), 'the attacker');
+    strictEqual(text(docAt(lines('t = {', '  -- @param a the attacker', '  on_hit =', '    function(a) return a end', '}'), 4, 23)), 'the attacker');
   });
 
   it('reads the comments of included files', () => {

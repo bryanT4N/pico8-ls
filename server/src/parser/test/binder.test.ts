@@ -222,6 +222,12 @@ describe('binder', () => {
     eq(symbolAt(a, 4, 6)!.definitions[0].value!.type, 'StringLiteral');
     deepStrictEqual(a.analysis.comments.map(c => c.raw), [ '-- a', '-- b' ]);
   });
+
+  it('gives a parameter the node its function\'s doc is read from', () => {
+    const b = analyzeCode(lines('t = {}', 't.on_hit =', '  function(q) return q end', 'foreach(es, function(e) return e end)'));
+    eq(symbolAt(b, 3, 21)!.definitions[0].node.type, 'AssignmentStatement');
+    eq(symbolAt(b, 4, 31)!.definitions[0].node.type, 'FunctionDeclaration');
+  });
 });
 
 describe('binder on the test carts', () => {

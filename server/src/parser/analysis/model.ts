@@ -5,7 +5,8 @@ import { ASTNode, Bounds } from '../types';
 
 export type SymbolKind = 'global' | 'local' | 'param' | 'loopvar' | 'member' | 'label' | 'self' | 'value';
 
-// node: the statement, table field or label the definition comes from; a loop variable's for statement; a parameter's
+// node: the statement, table field or label the definition comes from; a loop variable's for statement; a parameter's:
+// the statement or table field that defines its function, where that function's doc is read, or else the
 // FunctionDeclaration. value: what it assigns, as an initializer, a table field's value, or a function statement's
 // FunctionDeclaration. Docs read the comments above node.
 export type Definition = { loc: Bounds, nameLoc: Bounds, node: ASTNode, value?: Expression, isFunction: boolean, compound: boolean };

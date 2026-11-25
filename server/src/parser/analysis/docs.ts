@@ -130,7 +130,8 @@ function indexComments(analysis: Analysis): Map<string, FileComments> {
   return index;
 }
 
-// A -->8 or #region line ends a block and belongs to none.
+// A -->8 or #region line ends a block and belongs to none, and so does a long comment with code after it on its last
+// line, as in --[[ old ]] x = 1: the code sits between it and the line below.
 function fileComments(analysis: Analysis, path: string, comments: Comment_[]): FileComments {
   const blocks: Block[] = [];
   const trailing: Comment_[] = [];
@@ -140,6 +141,8 @@ function fileComments(analysis: Analysis, path: string, comments: Comment_[]): F
     const { start, end } = comment.loc!;
     if (!comment.startsLine) {
       trailing.push(comment);
+      current = undefined;
+    } else if (!comment.endsLine) {
       current = undefined;
     } else if (isTabMarker(comment) || regionMarkerOf(comment) !== undefined) {
       if (isTabMarker(comment)) {
@@ -217,18 +220,19 @@ function isSeparator(line: string): boolean {
   return /^[\s\-=*#~_+.]*$/.test(line) && line.replace(/\s/g, '').length >= 3;
 }
 
-// A heading on one line, such as -- ==== player ====: text between two runs of such characters. The dashes that open
-// the comment belong to the run they touch, as in ---- enemies ----, but not across a space, as in -- - then waits...
+// A heading on one line, such as -- ==== player ====: text between two runs of such characters other than dots, which
+// can end a sentence, as in --- loads the level... The dashes that open the comment belong to the run they touch, as in
+// ---- enemies ----, but not across a space, as in -- - then waits...
 function isBanner(block: Block): boolean {
   const [ comment ] = block.comments;
   if (block.comments.length > 1 || comment.loc!.start.line !== comment.loc!.end.line) {
     return false;
   }
   const line = isLong(comment) ? comment.value : comment.raw.replace(/^--(?=\s)|^\/\//, '');
-  const before = /^[\s\-=*#~_+.]*/.exec(line)![0];
+  const before = /^[\s\-=*#~_+]*/.exec(line)![0];
   // A loop, not a regular expression anchored at the end, which takes quadratic time on a long run inside the text.
   let end = line.length;
-  while (end > before.length && /[\s\-=*#~_+.]/.test(line[end - 1])) {
+  while (end > before.length && /[\s\-=*#~_+]/.test(line[end - 1])) {
     end--;
   }
   return end > before.length && isSeparator(before) && isSeparator(line.slice(end));
