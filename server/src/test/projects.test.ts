@@ -8,7 +8,7 @@ import Parser from '../parser/parser';
 import ResolvedFile, { FileResolver, fileURLToPath, pathToFileURL } from '../parser/file-resolver';
 import { outlineLines } from '../parser/test/outline-utils';
 import { deepEquals, formatError } from '../parser/test/test-utils';
-import { findProjects, isTrackedPath, makeFileResolver, ParsedDocumentsMap, ProjectDocument, ProjectIndex } from '../projects';
+import { findProjects, isTrackedPath, leftWorkspace, makeFileResolver, ParsedDocumentsMap, ProjectDocument, ProjectIndex } from '../projects';
 import { callContextAt } from '../signature-help';
 
 // Creates a mock ProjectDocument that just has the specified includes
@@ -62,6 +62,15 @@ describe('isTrackedPath', () => {
 
   it('tracks any .p8/.lua file when no roots are given', () => {
     eq(isTrackedPath(path.join(path.resolve('/anywhere'), '.x', 'a.lua'), []), true);
+  });
+});
+
+describe('leftWorkspace', () => {
+  it('lists the files under a removed folder and under no remaining one', () => {
+    const ws = path.resolve('/ws');
+    const uri = (p: string) => pathToFileURL(path.join(ws, p));
+    deepStrictEqual(leftWorkspace([ uri('b/x.lua'), uri('b/inner/y.lua'), uri('b2/z.lua'), uri('a/m.p8'), uri('b/.hidden/w.lua') ],
+      [ path.join(ws, 'b') ], [ path.join(ws, 'a'), path.join(ws, 'b', 'inner') ]), [ uri('b/x.lua'), uri('b/.hidden/w.lua') ]);
   });
 });
 
@@ -485,6 +494,43 @@ describe('ProjectIndex', () => {
       }
       return text;
     },
+  });
+
+  it('drops several files at once, and a cart that includes one of them still reads it', () => {
+    const onDisk = new Map([[ 'main.p8', '#include lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ], [ 'other.lua', 'print(nope)' ]]);
+    const parsed: string[] = [];
+    const index = indexOver({}, { disk: diskOf(onDisk), parsed });
+    index.scan([ uriOf('main.p8'), uriOf('lib.lua'), uriOf('other.lua') ]);
+    parsed.length = 0;
+    const resend = index.removeAll([ uriOf('lib.lua'), uriOf('other.lua') ]);
+    deepStrictEqual(parsed, [ 'main.p8' ]);
+    deepStrictEqual(index.uris(), [ uriOf('main.p8') ]);
+    eq(resend.includes(uriOf('lib.lua')) && resend.includes(uriOf('other.lua')), true);
+    deepStrictEqual(index.diagnostics([ uriOf('other.lua') ], 100), [{ uri: uriOf('other.lua'), diagnostics: [] }]);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn({ 'main.p8': onDisk.get('main.p8')! }, 'main.p8', 2, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
+    deepStrictEqual(index.workspaceSymbols('helper').map(s => nameOf(s.location.uri)), [ 'lib.lua' ]);
+  });
+
+  it('parses nothing when a whole cart is removed', () => {
+    const onDisk = new Map([[ 'main.p8', '#include lib.lua' ], [ 'lib.lua', 'function helper() end' ]]);
+    const parsed: string[] = [];
+    const index = indexOver({}, { disk: diskOf(onDisk), parsed });
+    index.scan([ uriOf('main.p8'), uriOf('lib.lua') ]);
+    parsed.length = 0;
+    index.removeAll([ uriOf('main.p8'), uriOf('lib.lua') ]);
+    deepStrictEqual(parsed, []);
+    deepStrictEqual(index.uris(), []);
+  });
+
+  it('parses again a cart that read a file which a later scan finds', () => {
+    const onDisk = new Map([[ 'main.p8', '#include ../ws2/lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ]]);
+    const index = indexOver({}, { disk: diskOf(onDisk) });
+    index.scan([ uriOf('ws1/main.p8') ]);
+    // ws2 is not in the workspace yet, so no file watcher reports this.
+    onDisk.set('lib.lua', '-- moved down\n\nfunction helper() end');
+    index.scan([ uriOf('ws2/lib.lua') ]);
+    deepStrictEqual(index.definitions(uriOf('ws1/main.p8'), offsetIn({ 'main.p8': onDisk.get('main.p8')! }, 'main.p8', 2, 0)).map(loc),
+      [ 'lib.lua 3:9-3:15' ]);
   });
 
   it('parses the includer again when a file it read before the editor had it is opened', () => {

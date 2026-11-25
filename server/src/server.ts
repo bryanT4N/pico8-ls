@@ -3,7 +3,7 @@ import {
   DidChangeConfigurationNotification, DocumentFormattingParams, DocumentSymbolParams,
   ExecuteCommandParams, FileChangeType, FoldingRange, FoldingRangeParams, HoverParams, InitializeParams, InitializeResult, Position, ProposedFeatures,
   ReferenceParams, SignatureHelpParams, TextDocumentPositionParams,
-  TextDocuments, TextDocumentSyncKind, TextEdit, WorkspaceFolder,
+  TextDocuments, TextDocumentSyncKind, TextEdit, WorkspaceFolder, WorkspaceSymbolParams,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import Parser from './parser/parser';
@@ -13,7 +13,7 @@ import { builtinInfo } from './parser/builtins';
 import ResolvedFile, { pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
 import Formatter, { FormatterOptions } from './parser/formatter';
-import { isTrackedPath, makeFileResolver, ProjectDocument, ProjectIndex } from './projects';
+import { isTrackedPath, leftWorkspace, makeFileResolver, ProjectDocument, ProjectIndex } from './projects';
 import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -56,6 +56,7 @@ connection.onInitialize((params: InitializeParams) => {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       documentSymbolProvider: true,
+      workspaceSymbolProvider: true,
       definitionProvider: true,
       referencesProvider: true,
       completionProvider: { triggerCharacters: [ '.', ':' ], resolveProvider: true },
@@ -90,16 +91,31 @@ connection.onInitialized(() => {
   }
 
   if (hasWorkspaceFolderCapability) {
-    // Register for workspace change folders event -- just logging it out for now
     connection.workspace.onDidChangeWorkspaceFolders(event => {
-      connection.console.log('Workspace folder change event received: ' + JSON.stringify(event));
+      const removed = event.removed.map(folder => url.fileURLToPath(folder.uri));
+      const added = event.added.map(folder => url.fileURLToPath(folder.uri));
+      workspaceRoots = [ ...workspaceRoots.filter(root => !removed.includes(root)), ...added ];
+      // Open files stay, as the editor still shows them.
+      const left = leftWorkspace(index.uris(), removed, workspaceRoots).filter(uri => !documents.get(uri));
+      for (const uri of left) {
+        // So that a cart that includes it reads it from disk from now on.
+        diskText.delete(uri);
+      }
+      // A removed file gets empty diagnostics, which clears its warnings from the Problems panel.
+      publish(index.removeAll(left));
+      Promise.all(event.added.map(scanWorkspaceFolder)).catch(e => {
+        console.log('Error scanning workspace folders', e);
+      });
     });
   }
 
-  void fetchGlobalSettings().then(rescanEverything);
+  // The scan does not wait for the settings, which a client can leave unanswered; once they come, the diagnostics are
+  // sent again with their limit.
+  scanWorkspace();
+  void fetchGlobalSettings().then(() => publish(index.uris()));
 });
 
-function rescanEverything() {
+function scanWorkspace() {
   connection.workspace.getWorkspaceFolders().then((workspaceFolders: WorkspaceFolder[] | null) => {
     if (!workspaceFolders) {
       return;
@@ -206,8 +222,8 @@ interface DocumentSettings {
   maxNumberOfProblems: number;
 }
 
-// Diagnostics are sent synchronously after each parse, so the settings they
-// need are fetched before a scan rather than for each file.
+// Diagnostics are sent synchronously after each parse, so they take the limit last fetched rather than asking for the
+// settings each time.
 let globalSettings: DocumentSettings = { maxNumberOfProblems: maxProblems(undefined) };
 
 async function fetchGlobalSettings() {
@@ -249,7 +265,8 @@ connection.onDidChangeConfiguration(change => {
     globalSettings = { maxNumberOfProblems: maxProblems(change.settings?.['pico-8-ls']?.maxNumberOfProblems) };
   }
 
-  void fetchGlobalSettings().then(rescanEverything);
+  // The diagnostics come from the index, so the files need not be read again.
+  void fetchGlobalSettings().then(() => publish(index.uris()));
 });
 
 connection.onDocumentSymbol((params: DocumentSymbolParams) => {
@@ -262,6 +279,15 @@ connection.onDocumentSymbol((params: DocumentSymbolParams) => {
     return buildDocumentSymbols(document.textDocument, document.chunk.comments ?? [], index.outline(uri));
   } catch (e) {
     console.error('Failed to build the outline', e);
+    return [];
+  }
+});
+
+connection.onWorkspaceSymbol((params: WorkspaceSymbolParams) => {
+  try {
+    return index.workspaceSymbols(params.query);
+  } catch (e) {
+    console.error('Failed to give workspace symbols', e);
     return [];
   }
 });

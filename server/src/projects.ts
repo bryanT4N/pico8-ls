@@ -27,12 +27,24 @@ export function isTrackedPath(filePath: string, roots: string[]): boolean {
   }
   const normalizedFile = path.normalize(filePath);
   const matchingRoot = roots.map(r => path.normalize(r))
-    .find(r => normalizedFile.startsWith(r + path.sep) || normalizedFile === r);
+    .find(r => isUnder(normalizedFile, r) || normalizedFile === r);
   if (matchingRoot === undefined) {
     return true;
   }
   const relative = normalizedFile.slice(matchingRoot.length + path.sep.length);
   return relative.split(path.sep).slice(0, -1).every(part => !part.startsWith('.'));
+}
+
+// The files under one of the removed folders and under none of the remaining ones; paths, not URIs, for the folders.
+export function leftWorkspace(uris: string[], removed: string[], remaining: string[]): string[] {
+  return uris.filter(uri => {
+    const filePath = url.fileURLToPath(uri);
+    return removed.some(folder => isUnder(filePath, folder)) && !remaining.some(folder => isUnder(filePath, folder));
+  });
+}
+
+function isUnder(filePath: string, folder: string): boolean {
+  return path.normalize(filePath).startsWith(path.normalize(folder) + path.sep);
 }
 
 export type ParsedDocumentsMap = Map<string, ProjectDocument>;
@@ -185,6 +197,15 @@ export class ProjectIndex {
   scan(uris: string[]): string[] {
     const { dropped } = this.reparse(uris);
     this.buildProjects();
+    // An includer can have read one of these files before its folder was in the workspace, when no file watcher reported
+    // its changes: the other roots that contain one are parsed again, so that they take its current text.
+    const scanned = new Set(uris);
+    const roots = this.projects.filter(project => !scanned.has(project.root) && project.files.some(uri => scanned.has(uri)))
+      .map(project => project.root);
+    if (roots.length > 0) {
+      dropped.push(...this.reparse(roots).dropped);
+      this.buildProjects();
+    }
     this.analyseChanged();
     return [ ...this.documents.keys(), ...dropped ];
   }
@@ -233,13 +254,27 @@ export class ProjectIndex {
   }
 
   remove(uri: string): string[] {
-    const roots = this.projectsOf(uri).map(project => project.root).filter(root => root !== uri);
-    const before = this.documents.get(uri);
-    this.documents.delete(uri);
-    const { dropped } = this.reparse([ ...roots, ...stoppedIncluding(before, undefined, this.documents) ]);
+    return this.removeAll([ uri ]);
+  }
+
+  // All the files leave before any is parsed again. One at a time, a root would be parsed again for each of its files
+  // that goes, and a file that goes later for an includer that went first.
+  removeAll(uris: string[]): string[] {
+    const gone = new Set(uris);
+    const roots = unique(uris.flatMap(uri => this.projectsOf(uri).map(project => project.root))).filter(root => !gone.has(root));
+    const before = uris.map(uri => this.documents.get(uri));
+    for (const uri of uris) {
+      this.documents.delete(uri);
+    }
+    const stopped = before.flatMap(document => stoppedIncluding(document, undefined, this.documents));
+    const { dropped } = this.reparse([ ...roots, ...stopped ]);
     this.buildProjects();
     this.analyseChanged();
-    return unique([ ...this.documents.keys(), uri, ...dropped ]);
+    return unique([ ...this.documents.keys(), ...uris, ...dropped ]);
+  }
+
+  uris(): string[] {
+    return [ ...this.documents.keys() ];
   }
 
   outline(uri: string): CodeSymbol[] {
