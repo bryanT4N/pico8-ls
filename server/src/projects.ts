@@ -29,8 +29,40 @@ export function isTrackedPath(filePath: string, roots: string[]): boolean {
   const normalizedFile = path.normalize(filePath);
   const holding = roots.map(r => path.normalize(r))
     .filter(r => isUnder(normalizedFile, r) || normalizedFile === r);
-  return holding.length === 0 || holding.some(root =>
-    path.relative(root, normalizedFile).split(path.sep).slice(0, -1).every(part => !part.startsWith('.')));
+  return holding.length === 0 || holding.some(root => reaches(root, normalizedFile));
+}
+
+// Whether the scan of the workspace folders lists the file: a .p8 or .lua file under one of them, with no folder whose
+// name starts with a dot between it and one of the folders that hold it.
+export function isScanned(filePath: string, roots: string[]): boolean {
+  return roots.some(root => isUnder(filePath, root)) && isTrackedPath(filePath, roots);
+}
+
+// Design 5.4 (a): a cart in the file's folder or a folder above it, up to the outermost workspace folder that scans the
+// file. A file in a dot-folder of every workspace folder that holds it is near none; a file under no workspace folder
+// looks in its own folder alone. hasCart gets folders as path.dirname gives them.
+export function nearCart(filePath: string, roots: string[], hasCart: (folder: string) => boolean): boolean {
+  const holding = roots.filter(root => isUnder(filePath, root));
+  const tracking = holding.filter(root => reaches(root, filePath));
+  if (holding.length > 0 && tracking.length === 0) {
+    return false;
+  }
+  const top = tracking.length === 0
+    ? path.dirname(filePath)
+    : tracking.reduce((outer, root) => path.normalize(root).length < path.normalize(outer).length ? root : outer);
+  for (let folder = path.dirname(filePath); ; folder = path.dirname(folder)) {
+    if (hasCart(folder)) {
+      return true;
+    }
+    if (path.relative(top, folder) === '' || path.dirname(folder) === folder) {
+      return false;
+    }
+  }
+}
+
+// The scan of a workspace folder does not go into folders whose names start with a dot; filePath is under root.
+function reaches(root: string, filePath: string): boolean {
+  return path.relative(root, filePath).split(path.sep).slice(0, -1).every(part => !part.startsWith('.'));
 }
 
 // The files under one of the removed folders and under none of the remaining ones; paths, not URIs, for the folders.
@@ -187,19 +219,23 @@ type IndexedProject = { root: string, files: string[], analysis: Analysis, warni
 // One analysis per project, of its root's syntax tree, into which the parser has pasted every #include. Each file takes
 // its outline, lookups and warnings from the projects that contain it. Every change is analysed before the call
 // returns, so a request that comes after it sees the new text.
+//
+// The index holds the members, which the server names, and the files they #include, directly or through other files,
+// wherever those are, as PICO-8 reads them. A file that is neither leaves the index, and its diagnostics are cleared.
 export class ProjectIndex {
   // Each file's own parse, by URI.
   private readonly documents: ParsedDocumentsMap = new Map();
   // Sorted by root URI.
   private projects: IndexedProject[] = [];
+  private joined = 0;
 
-  constructor(private readonly parseFile: ParseFile) {}
+  constructor(private readonly parseFile: ParseFile, private readonly isMember: (uri: string) => boolean = () => true) {}
 
   document(uri: string): ProjectDocument | undefined {
     return this.documents.get(uri);
   }
 
-  // Returns every known URI, and those it dropped, so that their old diagnostics are cleared.
+  // Returns every known URI, and those it dropped or that left, so that their old diagnostics are cleared.
   scan(uris: string[]): string[] {
     const { dropped } = this.reparse(uris);
     this.buildProjects();
@@ -212,12 +248,13 @@ export class ProjectIndex {
       dropped.push(...this.reparse(roots).dropped);
       this.buildProjects();
     }
+    const left = this.settle();
     this.analyseChanged();
-    return [ ...this.documents.keys(), ...dropped ];
+    return unique([ ...this.documents.keys(), ...dropped, ...left ]);
   }
 
   // Returns the URIs whose diagnostics to send again. After the projects are rebuilt, that is every known one, so that a
-  // file that left a project loses that project's warnings, and every dropped one.
+  // file that left a project loses that project's warnings, and every dropped one and every one that left the index.
   update(uri: string): string[] {
     const isNew = !this.documents.has(uri);
     const before = this.documents.get(uri);
@@ -225,7 +262,7 @@ export class ProjectIndex {
     if (!document) {
       return this.remove(uri);
     }
-    this.documents.set(uri, document);
+    this.store(uri, document);
     const stopped = this.reparse(stoppedIncluding(before, document, this.documents));
     if (isNew) {
       // A new file can be one that an #include could not find, and no project links them, since the parser leaves such an
@@ -241,8 +278,9 @@ export class ProjectIndex {
         dropped.push(...this.reparse(roots).dropped);
         this.buildProjects();
       }
+      const left = this.settle();
       this.analyseChanged();
-      return [ ...this.documents.keys(), ...stopped.dropped, ...dropped ];
+      return unique([ ...this.documents.keys(), ...stopped.dropped, ...dropped, ...left ]);
     }
     let rebuilt = !sameSet(includedUris(before), includedUris(document)) || this.projectsOf(uri).length === 0;
     if (rebuilt) {
@@ -254,9 +292,16 @@ export class ProjectIndex {
       this.buildProjects();
       rebuilt = true;
     }
+    // An edit to a member that still includes what it included before, as most keystrokes are, moves no file in or out.
+    let left: string[] = [];
+    if (rebuilt || !this.isMember(uri)) {
+      const joinedBefore = this.joined;
+      left = this.settle();
+      rebuilt ||= left.length > 0 || this.joined !== joinedBefore;
+    }
     this.analyseChanged();
-    const dropped = [ ...stopped.dropped, ...roots.dropped ];
-    return rebuilt ? [ ...this.documents.keys(), ...dropped ] : unique([ uri, ...containing.flatMap(project => project.files) ]);
+    const dropped = [ ...stopped.dropped, ...roots.dropped, ...left ];
+    return rebuilt ? unique([ ...this.documents.keys(), ...dropped ]) : unique([ uri, ...containing.flatMap(project => project.files) ]);
   }
 
   remove(uri: string): string[] {
@@ -275,8 +320,35 @@ export class ProjectIndex {
     const stopped = before.flatMap(document => stoppedIncluding(document, undefined, this.documents));
     const { dropped } = this.reparse([ ...roots, ...stopped ]);
     this.buildProjects();
+    const left = this.settle();
     this.analyseChanged();
-    return unique([ ...this.documents.keys(), ...uris, ...dropped ]);
+    return unique([ ...this.documents.keys(), ...uris, ...dropped, ...left ]);
+  }
+
+  // The files that left, after what the server counts as a member changed. When some did, every file's diagnostics are
+  // to be sent again: a file that one of them included can now be the root of its own project.
+  prune(): string[] {
+    const left = this.settle();
+    this.analyseChanged();
+    return left;
+  }
+
+  // How many times a file has joined the index. A file that joins can be one that the client should now open as PICO-8
+  // Lua, so the server compares the count before and after a change.
+  joins(): number {
+    return this.joined;
+  }
+
+  // Whether a file of the index #includes uri.
+  isIncluded(uri: string): boolean {
+    return [ ...this.documents ].some(([ other, document ]) =>
+      other !== uri && (document.chunk.includes ?? []).some(include => include.resolvedFile.fileURL === uri));
+  }
+
+  // Whether a file of the index has an #include of uri that it could not find, so that the file joins when it appears
+  // although it is not a member.
+  isAwaited(uri: string): boolean {
+    return [ ...this.documents.values() ].some(document => (document.chunk.unresolvedIncludes ?? []).some(file => file.fileURL === uri));
   }
 
   uris(): string[] {
@@ -410,7 +482,7 @@ export class ProjectIndex {
       const before = this.documents.get(uri);
       const document = this.parseFile(uri);
       if (document) {
-        this.documents.set(uri, document);
+        this.store(uri, document);
         changed ||= !sameSet(includedUris(before), includedUris(document));
       } else {
         this.documents.delete(uri);
@@ -420,6 +492,51 @@ export class ProjectIndex {
       queue.push(...stoppedIncluding(before, document, this.documents));
     }
     return { dropped, changed };
+  }
+
+  // Adds the files that the index's files #include and it does not have yet, then lets go of the files that no member
+  // reaches through #includes, and builds the projects again when a file joined or left. Returns the files that left.
+  // A file that leaves can have been the only includer of a member, which is then the root of its own project.
+  private settle(): string[] {
+    const joinedBefore = this.joined;
+    const tried = new Set<string>();
+    for (;;) {
+      const missing = unique([ ...this.documents.values() ].flatMap(document => [ ...includedUris(document) ]))
+        .filter(uri => !this.documents.has(uri) && !tried.has(uri));
+      if (missing.length === 0) {
+        break;
+      }
+      for (const uri of missing) {
+        tried.add(uri);
+        const document = this.parseFile(uri);
+        if (document) {
+          this.store(uri, document);
+        }
+      }
+    }
+    const reached = new Set<string>();
+    const stack = [ ...this.documents.keys() ].filter(uri => this.isMember(uri));
+    for (let uri = stack.pop(); uri !== undefined; uri = stack.pop()) {
+      if (!reached.has(uri)) {
+        reached.add(uri);
+        stack.push(...[ ...includedUris(this.documents.get(uri)) ].filter(included => this.documents.has(included)));
+      }
+    }
+    const left = [ ...this.documents.keys() ].filter(uri => !reached.has(uri));
+    for (const uri of left) {
+      this.documents.delete(uri);
+    }
+    if (left.length > 0 || this.joined !== joinedBefore) {
+      this.buildProjects();
+    }
+    return left;
+  }
+
+  private store(uri: string, document: ProjectDocument): void {
+    if (!this.documents.has(uri)) {
+      this.joined++;
+    }
+    this.documents.set(uri, document);
   }
 
   // A project's analysis comes from its root's parse alone, so it holds until the root is parsed again.
@@ -465,8 +582,8 @@ function includedUris(document: ProjectDocument | undefined): Set<string> {
 }
 
 // The files the index has that the earlier parse included and the new one does not, the file itself left out; after is
-// undefined when the file is gone. Parsing one the index never had, like a file in a dot-folder, would add it as a
-// project of its own, with false warnings.
+// undefined when the file is gone. They are parsed again, as they can be gone too; one that nothing includes any more
+// and that is not a member leaves the index when it settles.
 function stoppedIncluding(before: ProjectDocument | undefined, after: ProjectDocument | undefined, documents: ParsedDocumentsMap): string[] {
   const now = includedUris(after);
   return [ ...includedUris(before) ].filter(uri => !now.has(uri) && uri !== after?.textDocument.uri && documents.has(uri));
