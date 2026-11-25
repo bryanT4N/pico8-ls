@@ -81,6 +81,10 @@ describe('buildDocumentSymbols', () => {
     assert.deepStrictEqual(regions[0].children!.map(s => [ s.name, s.kind ]), [[ 'player', SymbolKind.Function ]]);
   });
 
+  it('groups nothing under a #region written in a long comment', () => {
+    assert.deepStrictEqual(documentSymbolsOf('test.lua', lines('--[[ #region ]]', 'x = 1', '--[[ #endregion ]]', 'y = 2')).map(s => s.name), [ 'x', 'y' ]);
+  });
+
   const REGIONS_INTO_THE_NEXT_TAB: [string, string, string][] = [
     [ 'an unclosed region', 'typing', P8 + lines('function a() end', '-->8', '-- #region typing', 'function b() end', '-->8', 'function c() end', '__gfx__') ],
     [ 'a region closed in the next tab', 'r', P8 + lines('function a() end', '-->8', '-- #region r', 'function b() end', '-->8', 'function c() end', '-- #endregion', '__gfx__') ],

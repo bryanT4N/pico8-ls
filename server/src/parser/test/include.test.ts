@@ -248,4 +248,18 @@ describe('#include', function () {
     assert.strictEqual(chunk.includes![0].resolvedFile.path, path.normalize('lib.lua'));
     assert.strictEqual(analyze(chunk).includeScopes.has(path.normalize('lib.lua')), true);
   });
+
+  it('says the rest of the line is the file name when an #include with a comment after it finds no file', () => {
+    const files = { 'lib.lua': 'function helper() end' };
+    assert.deepStrictEqual(parseWith('#include lib.lua -- helpers\nhelper()', files).errors.map(formatError), [
+      'main_test_file 1:0 Can\'t #include lib.lua -- helpers from main_test_file: File does not exist (the rest of the line is the file name: put a comment on the line above)',
+    ]);
+    assert.deepStrictEqual(parseWith('#include lib.lua // helpers', files).errors.map(formatError), [
+      'main_test_file 1:0 Can\'t #include lib.lua // helpers from main_test_file: File does not exist (the rest of the line is the file name: put a comment on the line above)',
+    ]);
+    assert.deepStrictEqual(parseWith('#include missing.lua', files).errors.map(formatError), [
+      'main_test_file 1:0 Can\'t #include missing.lua from main_test_file: File does not exist',
+    ]);
+    assert.deepStrictEqual(parseWith('#include lib.lua', files).errors, []);
+  });
 });

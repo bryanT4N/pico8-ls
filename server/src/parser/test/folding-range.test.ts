@@ -248,6 +248,11 @@ end
     ]);
   });
 
+  it('takes no #region or #endregion in a long comment', () => {
+    deepEquals(foldingRegionsOf('test.lua', lines('--[[ #region ]]', 'x = 1', '--[[ #endregion ]]', 'y = 2')), []);
+    deepEquals(foldingRegionsOf('test.lua', lines('--[==[', '#region b', ']==]', 'x = 1', '-- #endregion')), []);
+  });
+
   it('should create folding regions when #region has a label and #endregion does not', () => {
     const code = `
 -- #region MyLabeledRegion

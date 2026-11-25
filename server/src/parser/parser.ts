@@ -409,7 +409,12 @@ export default class Parser {
     }
 
     if (!this.includeFileResolver.doesFileExist(resolvedInclude.path)) {
-      return this.unresolvedInclude(statement, resolvedInclude, 'File does not exist');
+      // PICO-8's handling of a comment on an #include line is not documented and the tools that copy it disagree,
+      // so when the filename looks like it has a comment in it, say why the lookup may have failed.
+      const reason = /--|\/\//.test(statement.filename)
+        ? 'File does not exist (the rest of the line is the file name: put a comment on the line above)'
+        : 'File does not exist';
+      return this.unresolvedInclude(statement, resolvedInclude, reason);
     }
 
     let fileContents: string;

@@ -1,7 +1,7 @@
 import { Comment_ } from '../expressions';
 import ResolvedFile, { FileResolver } from '../file-resolver';
 import Parser from '../parser';
-import { isTabMarker, regionMarkerOf } from '../region-markers';
+import { isLongComment, isTabMarker, regionMarkerOf } from '../region-markers';
 import { ASTNode } from '../types';
 import { Analysis, Definition, LuaSymbol } from './model';
 import { placeOf, targetsOf } from './queries';
@@ -56,7 +56,7 @@ export function definitionDoc(analysis: Analysis, definition: Definition): Doc |
   }
   const { start, end } = node.loc!;
   const comment = commentsIn(analysis, start.filename.path)?.trailing.find(trailing => trailing.loc!.start.line === end.line
-    && trailing.loc!.start.index >= end.index && !isLong(trailing) && /^[\s,;]*$/.test(trailing.lineBefore.slice(end.column)));
+    && trailing.loc!.start.index >= end.index && !isLongComment(trailing) && /^[\s,;]*$/.test(trailing.lineBefore.slice(end.column)));
   const text = comment && linesOf(comment)[0].trim();
   return text && !isSeparator(text) && !isCode(text) ? parseDoc(text) : undefined;
 }
@@ -203,16 +203,12 @@ function blockText(block: Block): string | undefined {
 // The lines of a comment, without the extra dashes that open a doc comment: --[[-- and ---.
 function linesOf(comment: Comment_): string[] {
   const lines = comment.value.split(/\r\n|\r|\n/);
-  if (isLong(comment)) {
+  if (isLongComment(comment)) {
     lines[0] = lines[0].replace(/^-+/, '');
   } else if (comment.raw.startsWith('---') && !isSeparator(lines[0])) {
     lines[0] = lines[0].slice(1);
   }
   return lines;
-}
-
-function isLong(comment: Comment_): boolean {
-  return /^--\[=*\[/.test(comment.raw);
 }
 
 // A row of dashes, = signs and the like, as around a section heading.
@@ -228,7 +224,7 @@ function isBanner(block: Block): boolean {
   if (block.comments.length > 1 || comment.loc!.start.line !== comment.loc!.end.line) {
     return false;
   }
-  const line = isLong(comment) ? comment.value : comment.raw.replace(/^--(?=\s)|^\/\//, '');
+  const line = isLongComment(comment) ? comment.value : comment.raw.replace(/^--(?=\s)|^\/\//, '');
   const before = /^[\s\-=*#~_+]*/.exec(line)![0];
   // A loop, not a regular expression anchored at the end, which takes quadratic time on a long run inside the text.
   let end = line.length;
