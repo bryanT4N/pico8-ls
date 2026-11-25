@@ -5,9 +5,9 @@ import {
   RepeatStatement, ReturnStatement, Statement, WhileStatement,
 } from './statements';
 import {
-  BinaryExpression, BooleanLiteral, CallExpression, Comment_, Expression, GeneralTableField,
-  Identifier, IndexExpression, isGeneralTableField, LogicalExpression, MemberExpression, NilLiteral, NumericLiteral,
-  StringCallExpression, StringLiteral, TableCallExpression, TableConstructorExpression, TableKey,
+  BinaryExpression, BooleanLiteral, CallExpression, ChainLink, Comment_, Expression, firstOperand, GeneralTableField,
+  Identifier, isChainLink, isGeneralTableField, LogicalExpression, NilLiteral, NumericLiteral,
+  StringLiteral, TableConstructorExpression, TableKey,
   TableKeyString, TableValue, UnaryExpression, VarargLiteral, Whitespace,
 } from './expressions';
 import { uinteger } from 'vscode-languageserver-types';
@@ -278,12 +278,21 @@ export default class Formatter {
       return;
 
     case 'BinaryExpression':
-    case 'LogicalExpression':
-      // check both left and right
-      const expr = node as BinaryExpression;
-      this.maybeRecurseToInsertWhitespace(expr.left);
-      this.maybeRecurseToInsertWhitespace(expr.right);
+    case 'LogicalExpression': {
+      // A long chain nests on its left sides, so a loop goes down them; the right sides then follow from the innermost
+      // out, in the order the recursion took.
+      const rights: Expression[] = [];
+      let left: Expression = node as BinaryExpression | LogicalExpression;
+      while ((left.type === 'BinaryExpression' || left.type === 'LogicalExpression') && !left.included) {
+        rights.push(left.right);
+        left = left.left;
+      }
+      this.maybeRecurseToInsertWhitespace(left);
+      for (let i = rights.length - 1; i >= 0; i--) {
+        this.maybeRecurseToInsertWhitespace(rights[i]);
+      }
       return;
+    }
     }
   }
 
@@ -397,16 +406,22 @@ export default class Formatter {
       return;
 
     case 'BinaryExpression':
-    case 'LogicalExpression':
-      const expr = node as BinaryExpression;
+    case 'LogicalExpression': {
+      // A long chain nests on its left sides, so a loop enters the ones around the comment.
+      let expr = node as BinaryExpression | LogicalExpression;
+      while ((expr.left.type === 'BinaryExpression' || expr.left.type === 'LogicalExpression')
+          && boundsCompare(comment.loc!, expr.left.loc!) === BoundsCompareResult.CONTAINS) {
+        expr = expr.left;
+      }
 
       // try both left and right sub-expressions
       if (this.maybeInsertCommentOnNode(comment, expr.left) ||
             this.maybeInsertCommentOnNode(comment, expr.right)) {
         return;
       }
-      // fall through to put comment on node itself
-      break;
+      this.putCommentOnNode(expr, comment);
+      return;
+    }
     }
 
     // If we got this far, just put it on the node itself
@@ -574,24 +589,20 @@ export default class Formatter {
   }
 
   visitExpression(node: Expression, childContext: ChildContext = {}): string {
+    if (isChainLink(node)) {
+      return this.visitChain(node, childContext);
+    }
     const prevIndent = this.currentIndent;
     let ret = this.commentsBeforeNode(node);
 
     switch (node.type) {
     // TODO: Which other expression should receive childContext as well?
     case 'FunctionDeclaration': ret += this.visitFunctionDeclaration(node); break;
-    case 'BinaryExpression': ret += this.visitBinaryOrLogicalExpression(node, childContext); break;
     case 'BooleanLiteral': ret += this.visitBooleanLiteral(node); break;
-    case 'CallExpression': ret += this.visitCallExpression(node); break;
-    case 'IndexExpression': ret += this.visitIndexExpression(node); break;
     case 'Identifier': ret += this.visitIdentifier(node); break;
-    case 'LogicalExpression': ret += this.visitBinaryOrLogicalExpression(node, childContext); break;
-    case 'MemberExpression': ret += this.visitMemberExpression(node); break;
     case 'NilLiteral': ret += this.visitNilLiteral(node); break;
     case 'NumericLiteral': ret += this.visitNumericLiteral(node); break;
-    case 'StringCallExpression': ret += this.visitStringCallExpression(node); break;
     case 'StringLiteral': ret += this.visitStringLiteral(node); break;
-    case 'TableCallExpression': ret += this.visitTableCallExpression(node); break;
     case 'TableConstructorExpression': ret += this.visitTableConstructorExpression(node); break;
     case 'UnaryExpression': ret += this.visitUnaryExpression(node); break;
     case 'VarargLiteral': ret += this.visitVarargLiteral(node); break;
@@ -898,62 +909,129 @@ export default class Formatter {
 
   // ****************************** Expressions *****************************
 
-  visitBinaryOrLogicalExpression(node: BinaryExpression | LogicalExpression, childContext: ChildContext = {}): string {
-    return this.wrapWithParenthesesIfNeeded(
-      {
-        isRightSideOfAnExpression: childContext.isRightSideOfAnExpression,
-        parentOperator: childContext.parentOperator,
-        currentOperator: node.operator,
-        extraIndent: true,
-        parens: node.parens,
-      },
-      () => {
-        let ret = '';
-        ret += this.visitExpression(node.left, { parentOperator: node.operator });
-
-        const multiline = node.left.loc!.end.line !== node.right.loc!.start.line;
-        if (multiline) {
-          this.increaseDepth(2);
-          ret += this.newline();
-
-          // Check for a comment on the right node so it goes before the newline
-          if (node.right.comments) {
-            ret += this.commentsBeforeNode(node.right, true);
-            node.right.comments = undefined;
-          }
-
-          this.decreaseDepth(2);
-        } else {
-          ret += ' ';
+  // A long chain nests on its first operands, so recursing down them would go as deep as the chain is long. The loop
+  // goes down that side and back up, keeping the order of the output and the indentation the recursion had.
+  private visitChain(top: ChainLink, childContext: ChildContext): string {
+    const frames: { link: ChainLink, prevIndent: number, prefix: string, wrapped: boolean }[] = [];
+    let node: Expression = top;
+    let context = childContext;
+    while (isChainLink(node)) {
+      const prevIndent = this.currentIndent;
+      const prefix = this.commentsBeforeNode(node);
+      let wrapped = false;
+      if (node.type === 'BinaryExpression' || node.type === 'LogicalExpression') {
+        wrapped = this.needsParentheses({ ...context, currentOperator: node.operator, parens: node.parens });
+        if (wrapped) {
+          this.increaseDepth();
         }
+      }
+      frames.push({ link: node, prevIndent, prefix, wrapped });
 
-        ret += `${node.operator} `;
-        ret += this.visitExpression(node.right, { parentOperator: node.operator, isRightSideOfAnExpression: true });
-        return ret;
-      });
-  }
-
-  visitCallExpression(node: CallExpression): string {
-    // Check if the original function call is on more than one line
-    const multiline = node.arguments.length > 1 && node.arguments.some(a => a.loc!.end.line !== node.base.loc?.start.line);
-
-    let base = this.visitExpression(node.base, { parentOperator: Operators.fakeMaxPrecedenceOperator });
-
-    const questionShorthand: boolean = node.base.type === 'Identifier' && node.base.name === '?';
-
-    if (node.base.type === 'FunctionDeclaration') {
-      // wrap in parentheses, e.g.
-      //     (function(a) return a+1 end)(5)
-      base = `(${base})`;
+      switch (node.type) {
+      case 'BinaryExpression': case 'LogicalExpression':
+        context = { parentOperator: node.operator };
+        break;
+      case 'MemberExpression': case 'IndexExpression': case 'CallExpression':
+        context = { parentOperator: Operators.fakeMaxPrecedenceOperator };
+        break;
+      case 'StringCallExpression': case 'TableCallExpression':
+        context = {};
+        break;
+      }
+      node = firstOperand(node);
     }
 
-    const args = this.visitCommaDelimited(
-      node.arguments,
-      this.visitExpression.bind(this),
-      { multiline, noParens: questionShorthand },
-    );
+    let text = this.visitExpression(node, context);
+    for (let i = frames.length - 1; i >= 0; i--) {
+      const { link, prevIndent, prefix, wrapped } = frames[i];
+      const inner = this.chainTail(link, text);
+      if (wrapped) {
+        this.decreaseDepth();
+      }
+      text = prefix + (wrapped ? '(' + inner + ')' : inner);
+      this.currentIndent = prevIndent;
+    }
+    return text;
+  }
 
-    return base + args;
+  private chainTail(link: ChainLink, first: string): string {
+    switch (link.type) {
+    case 'BinaryExpression':
+    case 'LogicalExpression': {
+      let ret = first;
+      const multiline = link.left.loc!.end.line !== link.right.loc!.start.line;
+      if (multiline) {
+        this.increaseDepth(2);
+        ret += this.newline();
+
+        // Check for a comment on the right node so it goes before the newline
+        if (link.right.comments) {
+          ret += this.commentsBeforeNode(link.right, true);
+          link.right.comments = undefined;
+        }
+
+        this.decreaseDepth(2);
+      } else {
+        ret += ' ';
+      }
+
+      ret += `${link.operator} `;
+      ret += this.visitExpression(link.right, { parentOperator: link.operator, isRightSideOfAnExpression: true });
+      return ret;
+    }
+
+    case 'CallExpression': {
+      // Check if the original function call is on more than one line
+      const multiline = link.arguments.length > 1 && link.arguments.some(a => a.loc!.end.line !== link.base.loc?.start.line);
+
+      const questionShorthand: boolean = link.base.type === 'Identifier' && link.base.name === '?';
+
+      let base = first;
+      if (link.base.type === 'FunctionDeclaration') {
+        // wrap in parentheses, e.g.
+        //     (function(a) return a+1 end)(5)
+        base = `(${base})`;
+      }
+
+      const args = this.visitCommaDelimited(
+        link.arguments,
+        this.visitExpression.bind(this),
+        { multiline, noParens: questionShorthand },
+      );
+
+      return base + args;
+    }
+
+    case 'IndexExpression': {
+      let ret = first;
+
+      // If TableConstructorExpression is base, must be wrapped in parens.
+      // For example:
+      //
+      //   local result = ({
+      //     [123] = "xyz"
+      //   })[123]
+      //
+      // ^ This results in a syntax error if the parentheses are removed.
+      if (link.base.type === 'TableConstructorExpression') {
+        ret = '(' + ret + ')';
+      }
+
+      ret += '[';
+      ret += this.visitExpression(link.index);
+      ret += ']';
+      return ret;
+    }
+
+    case 'MemberExpression':
+      return first + link.indexer + this.visitIdentifier(link.identifier);
+
+    case 'StringCallExpression':
+      return first + ' ' + this.visitStringLiteral(link.argument);
+
+    case 'TableCallExpression':
+      return first + ' ' + this.visitTableConstructorExpression(link.arguments);
+    }
   }
 
   visitFunctionDeclaration(node: FunctionDeclaration): string {
@@ -986,43 +1064,6 @@ export default class Formatter {
 
   visitIdentifier(node: Identifier): string {
     return node.name;
-  }
-
-  visitIndexExpression(node: IndexExpression): string {
-    let ret = this.visitExpression(node.base, { parentOperator: Operators.fakeMaxPrecedenceOperator });
-
-    // If TableConstructorExpression is base, must be wrapped in parens.
-    // For example:
-    //
-    //   local result = ({
-    //     [123] = "xyz"
-    //   })[123]
-    //
-    // ^ This results in a syntax error if the parentheses are removed.
-    if (node.base.type === 'TableConstructorExpression') {
-      ret = '(' + ret + ')';
-    }
-
-    ret += '[';
-    ret += this.visitExpression(node.index);
-    ret += ']';
-    return ret;
-  }
-
-  visitMemberExpression(node: MemberExpression): string {
-    let ret = '';
-    ret += this.visitExpression(node.base, { parentOperator: Operators.fakeMaxPrecedenceOperator });
-    ret += node.indexer;
-    ret += this.visitIdentifier(node.identifier);
-    return ret;
-  }
-
-  visitStringCallExpression(node: StringCallExpression): string {
-    return this.visitExpression(node.base) + ' ' + this.visitStringLiteral(node.argument);
-  }
-
-  visitTableCallExpression(node: TableCallExpression): string {
-    return this.visitExpression(node.base) + ' ' + this.visitTableConstructorExpression(node.arguments);
   }
 
   visitTableConstructorExpression(node: TableConstructorExpression): string {
@@ -1071,21 +1112,18 @@ export default class Formatter {
     return '';
   }
 
-  private wrapWithParenthesesIfNeeded(
+  private needsParentheses(
     params: {
       parentOperator?: string;
       currentOperator?: string,
       isRightSideOfAnExpression?: boolean,
-      extraIndent?: boolean,
       parens?: boolean,
     },
-    expressionToWrap: () => string,
-  ): string {
+  ): boolean {
     const {
       parentOperator,
       currentOperator,
       isRightSideOfAnExpression,
-      extraIndent,
       parens,
     } = params;
 
@@ -1111,14 +1149,7 @@ export default class Formatter {
       shouldWrap = true;
     }
 
-    if (shouldWrap && extraIndent) {
-      this.increaseDepth();
-    }
-    const expression = expressionToWrap();
-    if (shouldWrap && extraIndent) {
-      this.decreaseDepth();
-    }
-    return shouldWrap ? `(${expression})` : expression;
+    return shouldWrap;
   }
 
   // Visit a potentially multiline, comma delimited list of function call args or table

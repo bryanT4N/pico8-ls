@@ -42,6 +42,19 @@ describe('Formatter', () => {
     eq(formatter.formatChunk(chunk, input, true), undefined);
   });
 
+  it('formats chains of 30,000 terms', () => {
+    const n = 30000;
+    eq(formatLua('x = 1' + '+1'.repeat(n - 1)), 'x = 1' + ' + 1'.repeat(n - 1));
+    eq(formatLua('x = 1\n' + '+1\n'.repeat(n - 1)), 'x = 1' + '\n    + 1'.repeat(n - 1));
+    eq(formatLua('x = a' + ' and a'.repeat(n - 1)), 'x = a' + ' and a'.repeat(n - 1));
+    eq(formatLua('x = a' + '.b'.repeat(n - 1)), 'x = a' + '.b'.repeat(n - 1));
+    eq(formatLua('f' + '()'.repeat(n - 1)), 'f' + '()'.repeat(n - 1));
+  });
+
+  it('keeps a comment inside a chain on its line', () => {
+    eq(formatLua('x = 1 -- one\n  + 2\n  + 3'), 'x = 1\n    -- one\n    + 2\n    + 3');
+  });
+
   describe('Formats entire files', () => {
     // TODO: write proper tests for these
     it('formats low.p8', () => {
