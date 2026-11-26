@@ -87,9 +87,8 @@ export default class Parser {
   // Keep track of all errors that occurred while parsing.
   errors: errors.ParseError[] = [];
 
-  // The errors of gotos and labels, reported only when the parse has no other error. Lua stops at the first error, and
-  // finds that a goto has no label, or jumps into the scope of a local, only at the end of its function or at the
-  // label, while ours stands at the goto. A statement with an error is also dropped together with its labels.
+  // The errors of gotos, labels and breaks, apart from the others, which stoppedBefore checks: each is kept only when
+  // Lua finds it before any other error, and does not count as one itself.
   private gotoErrors: errors.ParseError[] = [];
 
   includes: Include[] = [];
@@ -237,21 +236,19 @@ export default class Parser {
   parseChunk(): Chunk {
     this.lexerNext();
     this.markLocation();
-    const flowContext = new FlowContext(this.gotoErrors);
+    const flowContext = new FlowContext(this.gotoErrors, found => this.stoppedBefore(found));
     flowContext.allowVararg = true;
     flowContext.pushScope();
     const body = this.parseBlock(flowContext, isEndOfFile);
-    flowContext.popScope();
+    flowContext.endFunction(this.token);
 
     if (this.token.type !== TokenType.EOF) {
       this.errors.push(this.getUnexpectedTokenErr(this.token));
     }
 
     this.addLexerErrors(this.lexer);
-    if (this.errors.length === 0) {
-      for (const error of this.gotoErrors) {
-        this.errors.push(error);
-      }
+    for (const error of this.gotoErrors) {
+      this.errors.push(error);
     }
     this.sortErrors();
 
@@ -269,6 +266,19 @@ export default class Parser {
     for (const error of lexer.errors) {
       this.errors.push(error);
     }
+  }
+
+  // Whether Lua stops at another error before it is done reading found: one in errors, or one that a lexer still
+  // reading has found before there. The lexer of the file being read has read up to found, and each lexer under it
+  // up to the #include of the next one.
+  private stoppedBefore(found: Token): boolean {
+    if (this.errors.length > 0) {
+      return true;
+    }
+    return this.lexerStack.some(({ lexer }, i) => {
+      const readTo = i + 1 < this.lexerStack.length ? this.lexerStack[i + 1].includeStatement!.loc!.start.index : found.bounds.end.index;
+      return lexer.errors.some(error => error.bounds.start.index < readTo);
+    });
   }
 
   sortErrors() {
@@ -341,7 +351,8 @@ export default class Parser {
           // A statement that throws part-way through leaves its location
           // markers, nesting levels and flow scopes behind: the nodes around it
           // would get the wrong start, later statements would count as nested
-          // in it, and later breaks would count as inside it.
+          // in it, and the flow scopes of every such statement would pile up
+          // for each later break and goto to go through.
           this.locations.length = locationDepth;
           this.levels = levels;
           while (flowContext.scopes.length > flowDepth) {
@@ -373,6 +384,11 @@ export default class Parser {
           throw e;
         }
       }
+    }
+
+    // A label right before `until` is not at the end of its block for Lua, which checks the gotos to it there.
+    if (this.token.type === TokenType.Keyword && this.token.value === 'until') {
+      flowContext.raiseDeferredErrors(this.token);
     }
 
     return this.finishNode(AST.block(block), true);
@@ -485,7 +501,7 @@ export default class Parser {
       return null;
     }
 
-    flowContext.raiseDeferredErrors();
+    flowContext.raiseDeferredErrors(this.token);
 
     if (this.token.type === TokenType.Keyword) {
       switch (this.token.value) {
@@ -499,9 +515,7 @@ export default class Parser {
       case 'for':      this.lexerNext(); return this.parseForStatement(flowContext);
       case 'repeat':   this.lexerNext(); return this.parseRepeatStatement(flowContext);
       case 'break':
-        if (!flowContext.isInLoop()) {
-          this.errors.push(errors.createErrForToken(this.token, errMessages.noLoopToBreak, 'break'));
-        }
+        flowContext.addBreak(this.token);
         this.lexerNext();
         return this.parseBreakStatement();
       case 'do':       this.lexerNext(); return this.parseDoStatement(flowContext);
@@ -540,7 +554,7 @@ export default class Parser {
 
     this.lexer.expect('::');
 
-    flowContext.addLabel(nameToken.value as string, nameToken);
+    flowContext.addLabel(nameToken.value as string, nameToken, this.previousToken);
     return this.finishNode(AST.labelStatement(label));
   }
 
@@ -618,7 +632,6 @@ export default class Parser {
     const closed = this.expectBlockEnd('until', opener, 'repeat');
     let condition: Expression;
     if (closed) {
-      flowContext.raiseDeferredErrors();
       condition = this.parseExpectedExpression(flowContext);
     } else {
       condition = AST.literal(TokenType.NilLiteral, null, 'nil');
@@ -1035,7 +1048,7 @@ export default class Parser {
 
   parseFunctionDeclaration(name: Identifier | MemberExpression | null, isLocal: boolean): FunctionDeclaration {
     const opener = this.locations[this.locations.length - 1].loc;
-    const flowContext = new FlowContext(this.gotoErrors);
+    const flowContext = new FlowContext(this.gotoErrors, found => this.stoppedBefore(found));
     flowContext.pushScope();
 
     const parameters = [];
@@ -1080,8 +1093,8 @@ export default class Parser {
     }
 
     const body = this.parseBlock(flowContext);
-    flowContext.popScope();
     const closed = this.expectBlockEnd('end', opener, 'function');
+    flowContext.endFunction(this.token);
 
     isLocal = isLocal || false;
     return this.finishNode(AST.functionStatement(name, parameters, isLocal, body), !closed);

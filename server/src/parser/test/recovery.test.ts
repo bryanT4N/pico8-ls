@@ -98,14 +98,6 @@ describe('Parser recovery', () => {
     );
   });
 
-  it('reports a break after a broken repeat as outside a loop', () => {
-    check(
-      lines('repeat', 'until )', 'break'),
-      [ 'main_test_file 2:6 <expression> expected near \')\'', 'main_test_file 3:0 no loop to break near \'break\'' ],
-      [],
-    );
-  });
-
   it('keeps goto continue and break in a loop error-free after a broken statement', () => {
     check(
       lines('for i=1,3 do', '  repeat', '  until )', '  if i==2 then goto continue end', '  if i==3 then break end', '  ::continue::', 'end'),
@@ -114,11 +106,37 @@ describe('Parser recovery', () => {
     );
   });
 
-  it('reports no goto or label error while the code has another error', () => {
-    check(lines('goto nowhere', 'x = = 1'), [ 'main_test_file 2:4 <expression> expected near \'=\'' ], []);
-    check(lines('repeat', '  goto nowhere', 'until'), [ 'main_test_file 3:0 <expression> expected near \'<eof>\'' ], []);
-    check(lines('goto l', 'local q', 'x = = 1', '::l::', 'print(q)'), [ 'main_test_file 3:4 <expression> expected near \'=\'' ], [ 'q [Variable]', 'l [Label]' ]);
-    check(lines('::a::', '::a::', 'x = = 1'), [ 'main_test_file 3:4 <expression> expected near \'=\'' ], [ 'a [Label]', 'a [Label]' ]);
+  it('leaves out a goto, label or break error that Lua finds only after another error, where it stops', () => {
+    assert.deepStrictEqual(errorsOf(lines('goto nowhere', 'x = = 1')), [ 'main_test_file 2:4 <expression> expected near \'=\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('repeat', '  goto nowhere', 'until')), [ 'main_test_file 3:0 <expression> expected near \'<eof>\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('goto l', 'local q', 'x = = 1', '::l::', 'print(q)')), [ 'main_test_file 3:4 <expression> expected near \'=\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('repeat', 'until )', 'break')), [ 'main_test_file 2:6 <expression> expected near \')\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f()', '  goto nowhere')),
+      [ 'main_test_file 2:7 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('goto nowhere', 'x = "abc')), [ 'main_test_file 2:4 unfinished string near \'"abc\'' ]);
+  });
+
+  it('keeps a goto, label or break error that Lua finds before any other error, in order of place', () => {
+    assert.deepStrictEqual(errorsOf(lines('::a::', '::a::', 'x = = 1')), [
+      'main_test_file 2:2 label \'a\' already defined on line 1',
+      'main_test_file 3:4 <expression> expected near \'=\'',
+    ]);
+    assert.deepStrictEqual(errorsOf(lines('goto l', 'local q', '::l::', 'print(q)', 'x = = 1')), [
+      'main_test_file 1:0 <goto l> jumps into the scope of local \'q\'',
+      'main_test_file 5:4 <expression> expected near \'=\'',
+    ]);
+    assert.deepStrictEqual(errorsOf(lines('do goto l', 'local q', '::l::', 'until x')), [
+      'main_test_file 1:3 <goto l> jumps into the scope of local \'q\'',
+      'main_test_file 4:0 \'end\' expected (to close \'do\' at line 1) near \'until\'',
+    ]);
+    assert.deepStrictEqual(errorsOf(lines('function f()', '  goto nowhere', 'end', 'x = = 1')), [
+      'main_test_file 2:2 no visible label \'nowhere\' for <goto>',
+      'main_test_file 4:4 <expression> expected near \'=\'',
+    ]);
+    assert.deepStrictEqual(errorsOf(lines('goto nowhere', 'break')), [
+      'main_test_file 1:0 no visible label \'nowhere\' for <goto>',
+      'main_test_file 2:0 no loop to break near \'break\'',
+    ]);
   });
 
   it('reports elseif without then', () => {
