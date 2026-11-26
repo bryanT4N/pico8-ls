@@ -869,7 +869,9 @@ export default class Parser {
     }
   }
 
-  //     assignment ::= letlist '=' explist
+  //     assignment ::= letlist '=' explist | prefixexp compoundop explist
+  //     compoundop ::= '+=' | '-=' | '*=' | '/=' | '\=' | '%=' | '^=' | '..=' | '|=' | '&=' | '^^='
+  //          | '<<=' | '>>=' | '>>>=' | '<<>=' | '>><='
   //     let ::= Name | prefixexp '[' exp ']' | prefixexp '.' Name
   //     letlist ::= let {',' let}
   //     explist ::= exp {',' exp}

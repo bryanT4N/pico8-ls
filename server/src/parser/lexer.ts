@@ -544,7 +544,7 @@ export default class Lexer {
     if ('.' !== this.input.charAt(this.index)) {
       // A minimum of one hex digit is required.
       if (!isHexDigit(this.input.charCodeAt(this.index))) {
-        return this.malformedHexLiteral();
+        return this.malformedNumber();
       }
 
       while (isHexDigit(this.input.charCodeAt(this.index))) {
@@ -572,7 +572,7 @@ export default class Lexer {
         return this.malformedWithDots(isHexDigit);
       }
       if (needAtLeastOneFractionalDigit) {
-        return this.malformedHexLiteral();
+        return this.malformedNumber();
       }
 
       const fracStr = this.input.slice(fractionStart, this.index);
@@ -589,7 +589,7 @@ export default class Lexer {
     };
   }
 
-  malformedHexLiteral() {
+  malformedNumber() {
     this.addError(errMessages.malformedNumber, this.input.slice(this.tokenStart, this.index));
     return { value: 0, hasFractionPart: false };
   }
@@ -599,7 +599,7 @@ export default class Lexer {
     while ('.' === this.input.charAt(this.index) || isDigit(this.input.charCodeAt(this.index))) {
       ++this.index;
     }
-    return this.malformedHexLiteral();
+    return this.malformedNumber();
   }
 
   // Decimal numbers are exactly the same in Lua and in JavaScript, because of
@@ -620,9 +620,9 @@ export default class Lexer {
       while (isDecDigit(this.input.charCodeAt(this.index))) {
         ++this.index;
       }
-    }
-    if (foundFraction && '.' === this.input.charAt(this.index)) {
-      return this.malformedWithDots(isDecDigit);
+      if ('.' === this.input.charAt(this.index)) {
+        return this.malformedWithDots(isDecDigit);
+      }
     }
 
     return {
@@ -654,7 +654,7 @@ export default class Lexer {
 
     // A minimum of one binary digit is required, before or after the dot.
     if (this.index - digitStart === (foundFraction ? 1 : 0)) {
-      return this.malformedHexLiteral();
+      return this.malformedNumber();
     }
 
     return {

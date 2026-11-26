@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { Identifier } from '../expressions';
 import { AssignmentStatement, DoStatement, FunctionDeclaration } from '../statements';
 import { Bounds } from '../types';
-import { formatError, parse, parseInChild, TestFilesResolver } from './test-utils';
+import { analyzeCode, deepEqualsAST, formatError, parse, parseInChild, symbolAt, TestFilesResolver } from './test-utils';
 import { outlineLines } from './outline-utils';
 
 const lines = (...l: string[]) => l.join('\n');
@@ -339,7 +339,22 @@ describe('Parser recovery of parameter lists left open', function () {
 
 describe('values as PICO-8 reads them', () => {
   it('reads ~ between two values as exclusive or, binding as ^^ does', () => {
-    assert.deepStrictEqual(errorsOf(lines('x=6~3', 'y=6 ~ 3', 'z=1~~2', 'w^^=y~z', 'v=1|2~3 u=6&3~1 t=1~1<<2 s=1~1==0')), []);
+    const num = (value: number) => ({ type: 'NumericLiteral', value });
+    const name = (n: string) => ({ type: 'Identifier', name: n });
+    const op = (operator: string, left: Record<string, unknown>, right: Record<string, unknown>) => ({ type: 'BinaryExpression', operator, left, right });
+    deepEqualsAST(lines('x=6~3', 'y=6 ~ 3', 'z=1~~2', 'w^^=y~z', 'v=1|2~3 u=6&3~1 t=1~1<<2 s=1~1==0', 'r=1~2&2 q=1~2^^3 p=1^^2~3'), [
+      { type: 'AssignmentStatement', init: [ op('~', num(6), num(3)) ] },
+      { type: 'AssignmentStatement', init: [ op('~', num(6), num(3)) ] },
+      { type: 'AssignmentStatement', init: [ op('~', num(1), { type: 'UnaryExpression', operator: '~', argument: num(2) }) ] },
+      { type: 'AssignmentStatement', operator: '^^=', init: [ op('~', name('y'), name('z')) ] },
+      { type: 'AssignmentStatement', init: [ op('|', num(1), op('~', num(2), num(3))) ] },
+      { type: 'AssignmentStatement', init: [ op('~', op('&', num(6), num(3)), num(1)) ] },
+      { type: 'AssignmentStatement', init: [ op('~', num(1), op('<<', num(1), num(2))) ] },
+      { type: 'AssignmentStatement', init: [ op('==', op('~', num(1), num(1)), num(0)) ] },
+      { type: 'AssignmentStatement', init: [ op('~', num(1), op('&', num(2), num(2))) ] },
+      { type: 'AssignmentStatement', init: [ op('^^', op('~', num(1), num(2)), num(3)) ] },
+      { type: 'AssignmentStatement', init: [ op('~', op('^^', num(1), num(2)), num(3)) ] },
+    ]);
   });
 
   it('reports numbers and escapes that PICO-8 does not read', () => {
@@ -381,5 +396,8 @@ describe('values as PICO-8 reads them', () => {
 
   it('assigns to nothing when a compound assignment\'s target is in brackets, as PICO-8 does', () => {
     check(lines('t={}', '(t.y)+=1', '(1)+=1', '({})+=1'), [], [ 't [Table]' ]);
+    const a = symbolAt(analyzeCode(lines('local a=1', '(a)+=1')), 2, 1)!;
+    assert.deepStrictEqual(a.definitions.map(d => d.nameLoc.start.line), [ 1 ]);
+    assert.deepStrictEqual(a.references.map(r => [ r.loc.start.line, r.read, r.write ]), [[ 1, false, true ], [ 2, true, false ]]);
   });
 });
