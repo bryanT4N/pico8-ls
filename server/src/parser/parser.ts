@@ -767,9 +767,9 @@ export default class Parser {
   // A block without its `end` (or `until`) has taken in all the code after it. It's kept, the error goes at its
   // first token, at the inner block that most likely took its closer (underIndentedCloses), or where its closer
   // is missing (see below), and the statements from the first one no more indented than its opener's line are
-  // handed back to the enclosing block. A block whose header stopped early gets no error, nor does one around such
-  // a block that took a closer (see below). Returns null when the closer is there, and otherwise where the block's
-  // node should now end.
+  // handed back to the enclosing block. A block whose header stopped early gets no error, and nor does any block
+  // around one that took a closer, as that closer may be theirs (see below). Returns null when the closer is there,
+  // and otherwise where the block's node should now end.
   private expectBlockEnd(closer: 'end' | 'until', opener: Bounds, word: string, body: Block, headerEnd: CodeLocation,
     headerStopped = false): CodeLocation | null {
     const file = opener.start.filename;
@@ -792,7 +792,8 @@ export default class Parser {
 
     const inside = this.underIndentedCloses.filter(close => close.closer === closer
       && close.opener.start.filename.equals(file) && close.opener.start.index > opener.start.index);
-    this.underIndentedCloses = this.underIndentedCloses.filter(close => !inside.includes(close));
+    // A block whose header stopped early stays listed: each block further out may have lost its closer the same way.
+    this.underIndentedCloses = this.underIndentedCloses.filter(close => !inside.includes(close) || close.headerStopped);
     const cut = cutAt();
     const blamed = inside.sort((a, b) => a.closedAt - b.closedAt)[0] ?? { opener, word, missingAt: missingAt(cut) };
     // A block whose header stopped early has the error there, the one to fix first; its closer, or the closer of a

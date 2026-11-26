@@ -449,6 +449,12 @@ describe('Parser recovery', () => {
         [ 'main_test_file 2:8 \')\' expected (to close \'(\' at line 2) near \'x\'' ], [ '_update() [Function]' ]);
       check(lines('do', 'while a +', 'x = 1', 'end'), [ 'main_test_file 2:9 <expression> expected near \'x\'' ], [ 'x [Variable]' ]);
       check(lines('for j = 1, 4 do', 'if (j ==', 'if (l > 63) c(8)', 'rect(j)', 'end'), [ 'main_test_file 2:8 <expression> expected near \'if\'' ], []);
+      check(lines('function f()', 'if c then', 'while a +', 'y = 1', 'end'), [ 'main_test_file 3:9 <expression> expected near \'y\'' ],
+        [ 'f() [Function]', 'y [Variable]' ]);
+      check(lines('function f()', '  do', '    while a +', '      x = 1', '    end'), [ 'main_test_file 3:13 <expression> expected near \'x\'' ],
+        [ 'f() [Function]', 'x [Variable]' ]);
+      check(lines('function f()', '  while a do', '    x = 1', '  end'),
+        [ 'main_test_file 1:0 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ], [ 'f() [Function]', 'x [Variable]' ]);
       check(lines('if a then', '  b = 1'), [ 'main_test_file 1:0 \'end\' expected (to close \'if\' at line 1) near \'<eof>\'' ], [ 'b [Variable]' ]);
     });
 
