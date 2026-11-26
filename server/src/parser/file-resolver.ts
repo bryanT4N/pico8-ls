@@ -68,15 +68,19 @@ function percentEncode(text: string, keep: RegExp): string {
 }
 
 // On a disk that ignores case, #include Lib.lua finds lib.lua, and the file must get the URI the editor and the scan
-// give lib.lua. Only the names the #include itself adds take the disk's spelling: the includer's folder comes from VS
-// Code's URI, which the disk can spell its own way, as through a junction, a subst drive or a short name. When the disk
-// spells an added name otherwise than in case, as through a link, the #include is taken as written.
+// give lib.lua. A name they gave is taken whole. Otherwise only the names the #include itself adds take the disk's
+// spelling: the includer's folder comes from VS Code's URI, which the disk can spell its own way, as through a junction,
+// a subst drive or a short name. When the disk spells an added name otherwise than in case, as through a link, the
+// #include is taken as written.
 export function resolveIncludeFile(currFile: ResolvedFile, includeFilename: string, resolver?: FileResolver): ResolvedFile {
   const currFileDir = path.dirname(currFile.path);
   const resolvedPath = path.normalize(path.join(currFileDir, includeFilename));
   const real = resolver?.onDiskName?.(resolvedPath);
   if (real === undefined) {
     return ResolvedFile.fromPath(resolvedPath);
+  }
+  if (resolver?.isNamed?.(real)) {
+    return ResolvedFile.fromPath(real);
   }
   const written = resolvedPath.split(path.sep);
   const dir = path.normalize(currFileDir).split(path.sep);
@@ -99,6 +103,8 @@ export interface FileResolver {
   loadFileContents: (filepath: string) => string;
   // The path of an existing file, as the editor or the scan named it, else as the disk spells it; undefined if unknown.
   onDiskName?: (filepath: string) => string | undefined;
+  // Whether the editor or the scan gave a file this path, which an #include then takes whole.
+  isNamed?: (filepath: string) => boolean;
 }
 
 export class RealFileResolver implements FileResolver {

@@ -7,7 +7,7 @@ import { Location, SymbolInformation, SymbolKind } from 'vscode-languageserver/n
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { builtinInfo } from '../parser/builtins';
 import Parser from '../parser/parser';
-import ResolvedFile, { FileResolver, fileURLToPath, pathToFileURL, RealFileResolver } from '../parser/file-resolver';
+import ResolvedFile, { FileResolver, fileURLToPath, pathToFileURL, RealFileResolver, resolveIncludeFile } from '../parser/file-resolver';
 import { NO_OUTLINE_OPTIONS } from '../parser/outline/model';
 import { outlineLines } from '../parser/test/outline-utils';
 import { ALL_OUTLINE_OPTIONS, deepEquals, formatError } from '../parser/test/test-utils';
@@ -388,6 +388,16 @@ describe('ProjectIndex', () => {
     deepStrictEqual([ 'open.lua', 'scanned.lua', 'other.lua' ].map(name => resolver.onDiskName!(path.join(ROOT, name))),
       [ path.join(ROOT, 'open.lua'), path.join(ROOT, 'scanned.lua'), path.join(ROOT, 'other.lua').toUpperCase() ]);
     deepStrictEqual(asked, [ 'other.lua' ]);
+  });
+
+  it('takes whole the name the scan gave a file an #include finds in another case, and keeps the includer\'s folder for a name only the disk gives', () => {
+    const disk: FileResolver = { ...NO_DISK, onDiskName: p => p.toUpperCase() };
+    const scanned = [ '/proj/b/lib.lua', '/proj/é/lib.lua' ].map(p => path.resolve(p));
+    const resolver = makeFileResolver(() => undefined, new Map(scanned.map(p => [ ResolvedFile.fromPath(p).fileURL, '' ])), disk);
+    // Two workspace folders spell the folder above them otherwise in case.
+    const from = ResolvedFile.fromPath(path.resolve('/Proj/ws1/main.p8'));
+    deepStrictEqual([ '../b/lib.lua', '../É/lib.lua', '../b/util.lua' ].map(name => resolveIncludeFile(from, name, resolver).path),
+      [ ...scanned, path.resolve('/Proj/B/UTIL.LUA') ]);
   });
 
   it('knows an included file by the URI the editor gives it when its name has parentheses', () => {

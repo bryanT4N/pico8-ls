@@ -256,6 +256,7 @@ function findProjectsRecursive(current: string, visited: Map<string, ProjectDocu
 // before reading an #include, and so does the server before reading a file, so a read takes the cached text as it is.
 export function makeFileResolver(editorText: (uri: string) => string | undefined, cache: Map<string, string>,
   disk: FileResolver = new RealFileResolver()): FileResolver {
+  const named = (uri: string) => editorText(uri) !== undefined || cache.has(uri);
   return {
     doesFileExist: filepath => {
       const uri = ResolvedFile.fromPath(filepath).fileURL;
@@ -267,7 +268,7 @@ export function makeFileResolver(editorText: (uri: string) => string | undefined
     },
     isFile: filepath => {
       const uri = ResolvedFile.fromPath(filepath).fileURL;
-      return editorText(uri) !== undefined || cache.has(uri) || disk.isFile(filepath);
+      return named(uri) || disk.isFile(filepath);
     },
     loadFileContents: filepath => {
       const uri = ResolvedFile.fromPath(filepath).fileURL;
@@ -277,16 +278,21 @@ export function makeFileResolver(editorText: (uri: string) => string | undefined
     // its URI does, which can differ in case from the disk, so a file the scan read is also looked for in another case.
     onDiskName: filepath => {
       const uri = ResolvedFile.fromPath(filepath).fileURL;
-      if (editorText(uri) !== undefined || cache.has(uri)) {
+      if (named(uri)) {
         return filepath;
       }
       const real = disk.onDiskName?.(filepath);
       if (real === undefined) {
         return undefined;
       }
+      // URIs in lower case compare much faster than paths, but a letter outside ASCII is escaped, which hides its case.
       const lower = filepath.toLowerCase();
-      return [ ...cache.keys() ].map(other => url.fileURLToPath(other)).find(other => other.toLowerCase() === lower && disk.onDiskName?.(other) === real) ?? real;
+      const lowerUri = uri.toLowerCase();
+      const ascii = [ ...filepath ].every(char => char.charCodeAt(0) < 128);
+      return [ ...cache.keys() ].filter(other => ascii ? other.toLowerCase() === lowerUri : url.fileURLToPath(other).toLowerCase() === lower)
+        .map(other => url.fileURLToPath(other)).find(other => disk.onDiskName?.(other) === real) ?? real;
     },
+    isNamed: filepath => named(ResolvedFile.fromPath(filepath).fileURL),
   };
 }
 
