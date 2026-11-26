@@ -273,11 +273,19 @@ export function makeFileResolver(editorText: (uri: string) => string | undefined
       const uri = ResolvedFile.fromPath(filepath).fileURL;
       return editorText(uri) ?? cache.get(uri) ?? disk.loadFileContents(filepath);
     },
-    // A name the editor or the scan gave is already the disk's spelling, so only an #include they do not know asks the
-    // disk, which costs a system call.
+    // The name the editor or the scan gave a file is the one its #includes take. The scan spells a workspace folder as
+    // its URI does, which can differ in case from the disk, so a file the scan read is also looked for in another case.
     onDiskName: filepath => {
       const uri = ResolvedFile.fromPath(filepath).fileURL;
-      return editorText(uri) !== undefined || cache.has(uri) ? filepath : disk.onDiskName?.(filepath);
+      if (editorText(uri) !== undefined || cache.has(uri)) {
+        return filepath;
+      }
+      const real = disk.onDiskName?.(filepath);
+      if (real === undefined) {
+        return undefined;
+      }
+      const lower = filepath.toLowerCase();
+      return [ ...cache.keys() ].map(other => url.fileURLToPath(other)).find(other => other.toLowerCase() === lower && disk.onDiskName?.(other) === real) ?? real;
     },
   };
 }
@@ -315,9 +323,10 @@ export class ProjectIndex {
     // its changes, or before a folder was renamed to the name its #include writes: the other roots that contain one,
     // and the files that wait for one, are parsed again.
     const scanned = new Set(uris);
+    const names = new Set(uris.map(caseless));
     const again = unique([
-      ...this.projects.filter(project => project.files.some(uri => scanned.has(uri))).map(project => project.root),
-      ...[ ...this.documents ].filter(([ , document ]) => (document.chunk.unresolvedIncludes ?? []).some(file => scanned.has(file.fileURL)))
+      ...this.projectsHolding(uris).map(project => project.root),
+      ...[ ...this.documents ].filter(([ , document ]) => (document.chunk.unresolvedIncludes ?? []).some(file => names.has(caseless(file.fileURL))))
         .map(([ uri ]) => uri),
     ]).filter(uri => !scanned.has(uri));
     if (again.length > 0) {
@@ -349,7 +358,7 @@ export class ProjectIndex {
       this.buildProjects();
       // An includer can have read the file before the editor had it, from a folder the scan and the file watcher leave
       // out: the roots that contain it are parsed again, so that they take its current text.
-      const roots = this.projectsOf(uri).map(project => project.root).filter(root => root !== uri && !waiting.includes(root));
+      const roots = this.projectsHolding([ uri ]).map(project => project.root).filter(root => root !== uri && !waiting.includes(root));
       if (roots.length > 0) {
         dropped.push(...this.reparse(roots).dropped);
         this.buildProjects();
@@ -508,6 +517,13 @@ export class ProjectIndex {
 
   private projectsOf(uri: string): IndexedProject[] {
     return this.projects.filter(project => project.files.includes(uri));
+  }
+
+  // Also under another spelling in case, which an #include takes from the disk before the scan or the editor gives the
+  // file its name: parsed again, the includer takes that name.
+  private projectsHolding(uris: string[]): IndexedProject[] {
+    const names = new Set(uris.map(caseless));
+    return this.projects.filter(project => project.files.some(uri => names.has(caseless(uri))));
   }
 
   // Each file once: an indexed file from the first project that contains it, as its outline comes; a file that only an
@@ -678,6 +694,11 @@ function sameSet(a: Set<string>, b: Set<string>): boolean {
 
 function unique(uris: string[]): string[] {
   return [ ...new Set(uris) ];
+}
+
+// On a disk that tells case apart, this only makes a file be parsed again for nothing.
+function caseless(uri: string): string {
+  return url.fileURLToPath(uri).toLowerCase();
 }
 
 function keyOf(warning: Warning): string {

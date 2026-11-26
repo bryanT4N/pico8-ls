@@ -69,8 +69,8 @@ function percentEncode(text: string, keep: RegExp): string {
 
 // On a disk that ignores case, #include Lib.lua finds lib.lua, and the file must get the URI the editor and the scan
 // give lib.lua. Only the names the #include itself adds take the disk's spelling: the includer's folder comes from VS
-// Code's URI, and the disk's path for it can differ in more than case (the drive letter's case, a short name spelled
-// out). A disk path that is not the same path in another case, as through a link, leaves the #include as written.
+// Code's URI, which the disk can spell its own way, as through a junction, a subst drive or a short name. When the disk
+// spells an added name otherwise than in case, as through a link, the #include is taken as written.
 export function resolveIncludeFile(currFile: ResolvedFile, includeFilename: string, resolver?: FileResolver): ResolvedFile {
   const currFileDir = path.dirname(currFile.path);
   const resolvedPath = path.normalize(path.join(currFileDir, includeFilename));
@@ -79,23 +79,25 @@ export function resolveIncludeFile(currFile: ResolvedFile, includeFilename: stri
     return ResolvedFile.fromPath(resolvedPath);
   }
   const written = resolvedPath.split(path.sep);
-  const onDisk = real.split(path.sep);
-  if (written.length !== onDisk.length || written.some((part, i) => part.toLowerCase() !== onDisk[i].toLowerCase())) {
-    return ResolvedFile.fromPath(resolvedPath);
-  }
   const dir = path.normalize(currFileDir).split(path.sep);
   let keep = 0;
   while (keep < dir.length && keep < written.length && written[keep] === dir[keep]) {
     keep++;
   }
-  return ResolvedFile.fromPath([ ...written.slice(0, keep), ...onDisk.slice(keep) ].join(path.sep));
+  const added = written.slice(keep);
+  const onDisk = real.split(path.sep);
+  const spelled = onDisk.slice(onDisk.length - added.length);
+  if (spelled.length !== added.length || added.some((part, i) => part.toLowerCase() !== spelled[i].toLowerCase())) {
+    return ResolvedFile.fromPath(resolvedPath);
+  }
+  return ResolvedFile.fromPath([ ...written.slice(0, keep), ...spelled ].join(path.sep));
 }
 
 export interface FileResolver {
   doesFileExist: (filepath: string) => boolean;
   isFile: (filepath: string) => boolean;
   loadFileContents: (filepath: string) => string;
-  // The path as the disk spells it, for a file that exists; undefined when that is not known.
+  // The path of an existing file, as the editor or the scan named it, else as the disk spells it; undefined if unknown.
   onDiskName?: (filepath: string) => string | undefined;
 }
 

@@ -224,18 +224,38 @@ describe('#include', function () {
     }
   });
 
+  const disk = (onDiskName: (p: string) => string | undefined): FileResolver =>
+    ({ doesFileExist: () => true, isFile: () => true, loadFileContents: () => '', onDiskName });
+
   it('spells the names an #include adds as the disk does, and keeps the includer\'s folder as it is', () => {
-    const disk = (onDiskName: (p: string) => string | undefined): FileResolver =>
-      ({ doesFileExist: () => true, isFile: () => true, loadFileContents: () => '', onDiskName });
     const from = ResolvedFile.fromPath(path.resolve('/carts/game/main.p8'));
     const game = path.resolve('/carts/game');
     assert.strictEqual(resolveIncludeFile(from, 'lib/Util.lua', disk(p => p.toUpperCase())).path, path.join(game, 'LIB', 'UTIL.LUA'));
     assert.strictEqual(resolveIncludeFile(from, '../shared/Lib.lua', disk(p => p.replace('Lib.lua', 'lib.lua'))).path,
       path.join(path.resolve('/carts'), 'shared', 'lib.lua'));
-    // Through a link or a short name the disk's path is not the same path in another case: the #include is taken as written.
-    assert.strictEqual(resolveIncludeFile(from, 'Lib.lua', disk(() => path.resolve('/elsewhere/lib.lua'))).path, path.join(game, 'Lib.lua'));
     assert.strictEqual(resolveIncludeFile(from, 'Lib.lua', disk(() => undefined)).path, path.join(game, 'Lib.lua'));
     assert.strictEqual(resolveIncludeFile(from, 'Lib.lua').path, path.join(game, 'Lib.lua'));
+  });
+
+  it('spells the names an #include adds as the disk does when the includer\'s folder is a junction, a subst drive or a short name', () => {
+    const junction = path.resolve('/carts/link');
+    assert.strictEqual(resolveIncludeFile(ResolvedFile.fromPath(path.join(junction, 'main.p8')), 'Lib.lua',
+      disk(() => path.resolve('/elsewhere/game/lib.lua'))).path, path.join(junction, 'lib.lua'));
+    const drive = path.resolve('/game');
+    assert.strictEqual(resolveIncludeFile(ResolvedFile.fromPath(path.join(drive, 'main.p8')), 'Lib.lua',
+      disk(() => path.resolve('/carts/real game/lib.lua'))).path, path.join(drive, 'lib.lua'));
+    const short = path.resolve('/Users/SOMEON~1/game');
+    assert.strictEqual(resolveIncludeFile(ResolvedFile.fromPath(path.join(short, 'main.p8')), '../Shared/Lib.lua',
+      disk(() => path.resolve('/Users/Some One/shared/lib.lua'))).path, path.join(path.dirname(short), 'shared', 'lib.lua'));
+  });
+
+  it('takes an #include as written when the disk spells a name it adds otherwise than in case', () => {
+    const from = ResolvedFile.fromPath(path.resolve('/carts/game/main.p8'));
+    const game = path.resolve('/carts/game');
+    assert.strictEqual(resolveIncludeFile(from, 'lib/Util.lua', disk(p => p.replace(`${path.sep}lib${path.sep}`, `${path.sep}shared${path.sep}`))).path,
+      path.join(game, 'lib', 'Util.lua'));
+    assert.strictEqual(resolveIncludeFile(from, 'Lib.lua', disk(() => path.join(game, 'other.lua'))).path, path.join(game, 'Lib.lua'));
+    assert.strictEqual(resolveIncludeFile(from, 'lib/Util.lua', disk(() => 'util.lua')).path, path.join(game, 'lib', 'Util.lua'));
   });
 
   it('resolves an #include and binds its file under the name the disk gives', () => {

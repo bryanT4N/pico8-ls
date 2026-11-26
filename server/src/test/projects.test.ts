@@ -378,6 +378,18 @@ describe('ProjectIndex', () => {
     deepStrictEqual(asked, [ uriOf('lib.lua') ]);
   });
 
+  it('takes the name the editor or the scan gave a file without asking the disk', () => {
+    const asked: string[] = [];
+    const disk: FileResolver = { ...NO_DISK, onDiskName: p => {
+      asked.push(path.basename(p));
+      return p.toUpperCase();
+    } };
+    const resolver = makeFileResolver(uri => uri === uriOf('open.lua') ? 'x = 1' : undefined, new Map([[ uriOf('scanned.lua'), 'y = 2' ]]), disk);
+    deepStrictEqual([ 'open.lua', 'scanned.lua', 'other.lua' ].map(name => resolver.onDiskName!(path.join(ROOT, name))),
+      [ path.join(ROOT, 'open.lua'), path.join(ROOT, 'scanned.lua'), path.join(ROOT, 'other.lua').toUpperCase() ]);
+    deepStrictEqual(asked, [ 'other.lua' ]);
+  });
+
   it('knows an included file by the URI the editor gives it when its name has parentheses', () => {
     const files: Record<string, string> = {
       'main.p8': 'player = {}\n#include lib(2).lua\nprint(answer())',
@@ -814,6 +826,60 @@ describe('ProjectIndex', () => {
     index.scan([ uriOf('game2/lib.lua') ]);
     deepStrictEqual(index.document(uriOf('main.p8'))!.errors.map(formatError), []);
     deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(Object.fromEntries(onDisk), 'main.p8', 2, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
+  });
+
+  // Workspace folder b holds lib.lua, and the disk spells the folder B; ws1/main.p8 includes it as written.
+  const spelledUnlikeTheDisk = (written = '../b/lib.lua') => {
+    const files: Record<string, string> = {};
+    const cache = new Map<string, string>();
+    const onDisk = new Map([[ 'main.p8', `x = 1\n#include ${written}\nhelper()` ], [ 'lib.lua', 'function helper() return x end' ]]);
+    const disk: FileResolver = { ...diskOf(onDisk), onDiskName: p => p.replace(`${path.sep}b${path.sep}`, `${path.sep}B${path.sep}`) };
+    const index = indexOver(files, { disk, cache, isMember: uri => !uri.includes('/B/') });
+    index.scan([ uriOf('ws1/main.p8') ]);
+    eq(index.document(uriOf('ws1/main.p8'))!.chunk.includes![0].resolvedFile.fileURL, uriOf('B/lib.lua'));
+    return { files, cache, onDisk, index };
+  };
+
+  it('links an #include into a folder spelled unlike the disk once the scan of that folder gives the name', () => {
+    const { cache, onDisk, index } = spelledUnlikeTheDisk();
+    // The scan reads the file before it parses it.
+    cache.set(uriOf('b/lib.lua'), onDisk.get('lib.lua')!);
+    index.scan([ uriOf('b/lib.lua') ]);
+    eq(index.document(uriOf('ws1/main.p8'))!.chunk.includes![0].resolvedFile.fileURL, uriOf('b/lib.lua'));
+    deepStrictEqual([ sorted(index.uris()), index.warnings(uriOf('b/lib.lua')) ], [[ 'b/lib.lua', 'ws1/main.p8' ], []]);
+  });
+
+  it('links an #include that spells a folder as the disk does to the file the scan of that folder names otherwise', () => {
+    const { cache, onDisk, index } = spelledUnlikeTheDisk('../B/lib.lua');
+    cache.set(uriOf('b/lib.lua'), onDisk.get('lib.lua')!);
+    index.scan([ uriOf('b/lib.lua') ]);
+    eq(index.document(uriOf('ws1/main.p8'))!.chunk.includes![0].resolvedFile.fileURL, uriOf('b/lib.lua'));
+    deepStrictEqual([ sorted(index.uris()), index.warnings(uriOf('b/lib.lua')) ], [[ 'b/lib.lua', 'ws1/main.p8' ], []]);
+  });
+
+  it('links an #include into a folder spelled unlike the disk once the editor opens the file under that name', () => {
+    const { files, onDisk, index } = spelledUnlikeTheDisk();
+    files['lib.lua'] = onDisk.get('lib.lua')!;
+    index.update(uriOf('b/lib.lua'));
+    eq(index.document(uriOf('ws1/main.p8'))!.chunk.includes![0].resolvedFile.fileURL, uriOf('b/lib.lua'));
+    deepStrictEqual([ sorted(index.uris()), index.warnings(uriOf('b/lib.lua')) ], [[ 'b/lib.lua', 'ws1/main.p8' ], []]);
+  });
+
+  it('resolves an #include of a file that a later scan finds in a folder spelled otherwise in case', () => {
+    const cache = new Map<string, string>();
+    const onDisk = new Map([[ 'main.p8', 'x = 1\n#include ../b/lib.lua\nhelper()' ]]);
+    const disk: FileResolver = {
+      ...diskOf(onDisk), onDiskName: p => onDisk.has(path.basename(p)) ? p.replace(`${path.sep}b${path.sep}`, `${path.sep}B${path.sep}`) : undefined,
+    };
+    const index = indexOver({}, { disk, cache });
+    index.scan([ uriOf('ws1/main.p8') ]);
+    deepStrictEqual(index.document(uriOf('ws1/main.p8'))!.errors.map(formatError), [ 'main.p8 2:0 Can\'t #include ../b/lib.lua from main.p8: File does not exist' ]);
+    onDisk.set('lib.lua', 'function helper() return x end');
+    cache.set(uriOf('B/lib.lua'), onDisk.get('lib.lua')!);
+    index.scan([ uriOf('B/lib.lua') ]);
+    deepStrictEqual(index.document(uriOf('ws1/main.p8'))!.errors.map(formatError), []);
+    eq(index.document(uriOf('ws1/main.p8'))!.chunk.includes![0].resolvedFile.fileURL, uriOf('B/lib.lua'));
+    deepStrictEqual([ sorted(index.uris()), index.warnings(uriOf('B/lib.lua')) ], [[ 'B/lib.lua', 'ws1/main.p8' ], []]);
   });
 
   it('parses the includer again when a file it read before the editor had it is opened', () => {
