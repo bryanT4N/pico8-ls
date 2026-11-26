@@ -70,6 +70,16 @@ describe('symbolItems', () => {
     deepStrictEqual(itemsIn(code, undefined, { ...NO_OUTLINE_OPTIONS, showBlocks: true }), none);
   });
 
+  it('lists the loop variables of a file #included in a function as its outline does', () => {
+    const files = { 'lib.lua': lines('for i = 1, 2 do', '  for k, v in pairs(t) do local y = v end', 'end') };
+    const { analysis } = analyzeCode(lines('function f()', '  if a then', '    #include lib.lua', '  end', 'end'), files);
+    const lib = testFile('lib.lua');
+    const options = { ...NO_OUTLINE_OPTIONS, showLoopVariables: true };
+    deepStrictEqual((symbolItems(analysis, options).get(lib.fileURL) ?? []).map(shown), [ 'i [f] 1:4', 'k [f] 2:6', 'v [f] 2:9', 'y [f] 2:32' ]);
+    deepStrictEqual(outlineFor(analysis, lib, options, files['lib.lua']).map(s => `${s.name} ${s.selectionLoc.start.line}:${s.selectionLoc.start.column}`),
+      [ 'i 1:4', 'k 2:6', 'v 2:9', 'y 2:32' ]);
+  });
+
   it('keeps the items until the analysis is replaced', () => {
     const a = analyzeCode('x = 1').analysis;
     strictEqual(symbolItems(a), symbolItems(a));

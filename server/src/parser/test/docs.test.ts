@@ -64,6 +64,14 @@ describe('doc comments', () => {
       { 'lib.lua': 'x = 1' })), 'adds two numbers');
   });
 
+  it('takes the first comment block as a doc when a statement that names nothing comes before it', () => {
+    strictEqual(text(docAt(lines('do end', '-- adds', 'function add() end'), 3, 9)), 'adds');
+    strictEqual(text(docAt(lines('do', '  -- adds', '  function add() end', 'end'), 3, 11)), 'adds');
+    const lib = lines('do end', '-- adds', 'function add() end');
+    strictEqual(text(docAt(lines('#include lib.lua', 'add()'), 2, 0, { 'lib.lua': lib })), 'adds');
+    strictEqual(text(docAt(lines('function f()', '  #include lib.lua', 'end', 'add()'), 4, 0, { 'lib.lua': lib })), 'adds');
+  });
+
   it('does not take commented-out code', () => {
     strictEqual(text(docAt(lines('x = 1', '-- DEBUG:', '--printh(x)', 'speed = 2'), 4, 0)), undefined);
     strictEqual(text(docAt(lines('x = 1', '-- speed = 3', 'speed = 2'), 3, 0)), undefined);

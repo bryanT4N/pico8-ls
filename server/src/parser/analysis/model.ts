@@ -62,6 +62,8 @@ export type Analysis = {
   // Key: ResolvedFile.path. Where each #include in the file ends, with the order the analysis had come to after the
   // included content.
   includeCheckpoints: Map<string, Array<{ index: number, order: number }>>,
+  // Key: ResolvedFile.path. Where the file's first statement starts.
+  codeStarts: Map<string, number>,
   // chunk.comments, then chunk.includedComments: a file included twice comes twice.
   comments: Comment_[],
   // Every block of the chunk, in the order the analysis met them.

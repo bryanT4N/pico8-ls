@@ -52,15 +52,22 @@ function project(entries: OutlineEntry[], file: ResolvedFile, levels?: Levels): 
 // undefined, as it is for the blocks there.
 class Levels {
   private readonly blocksByOwner = new Map<OutlineEntry | undefined, OutlineBlock[]>();
+  private readonly ownerOf = new Map<OutlineBlock, OutlineEntry | undefined>();
   // The block that a symbol made from an entry, or a loop variable, is in.
   private readonly blockOf = new Map<CodeSymbol, OutlineBlock>();
 
   constructor(private readonly file: ResolvedFile, blocks: OutlineBlock[], private readonly options: OutlineOptions, private readonly text: string) {
     for (const block of blocks) {
       if (block.loc.start.filename.equals(file)) {
-        const owned = this.blocksByOwner.get(block.owner) ?? [];
+        // A block in the body of a function of another file goes up with the entries lifted from there.
+        let owner = block.owner;
+        while (owner && !owner.loc.start.filename.equals(file)) {
+          owner = 'loc' in owner.parent ? owner.parent as OutlineEntry : undefined;
+        }
+        this.ownerOf.set(block, owner);
+        const owned = this.blocksByOwner.get(owner) ?? [];
         owned.push(block);
-        this.blocksByOwner.set(block.owner, owned);
+        this.blocksByOwner.set(owner, owned);
       }
     }
   }
@@ -112,8 +119,7 @@ class Levels {
     };
     for (const symbol of all) {
       const block = this.blockOf.get(symbol);
-      // An entry lifted from the body of a function of another file is in that function's blocks, which are not listed.
-      (block && block.owner === owner ? nodeOf(block).children : top).push(symbol);
+      (block && this.ownerOf.get(block) === owner ? nodeOf(block).children : top).push(symbol);
     }
     for (const node of nodes.values()) {
       node.children = inOrder(node.children);

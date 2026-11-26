@@ -67,6 +67,19 @@ describe('outline options', () => {
     [ 'if debug [Block]', '  score [Variable]', '  dbg() [Function]', '_init() [Function]', '  if a [Block]', '    g2() [Function]', 'x [Variable]' ]);
   });
 
+  it('puts a callback in a loop header or an if condition inside the block', () => {
+    deepStrictEqual(outlineWith(lines('function f()', '  for x in all(filter(t, function(e) return e.alive end)) do', '    local y = x', '  end',
+      '  if any(t, function(e) return e.hp > 0 end) then', '  elseif any(t, function(e) return e.dead end) then', '  end',
+      '  while any(t, function(e) return e end) do end', '  for i = 1, count(t, function(e) return e end) do end', 'end',
+      'for k, v in pairs({ go = function(self) local q = 1 end }) do end'), { showBlocks: true }),
+    [ 'f() [Function]', '  for x in all(filter(t, function(e) retu\u2026 [Block]', '    <anonymous function>(e) [Function]', '    y [Variable]',
+      '  if any(t, function(e) return e.hp > 0 e\u2026 [Block]', '    <anonymous function>(e) [Function]',
+      '  elseif any(t, function(e) return e.dead\u2026 [Block]', '    <anonymous function>(e) [Function]',
+      '  while any(t, function(e) return e end) [Block]', '    <anonymous function>(e) [Function]',
+      '  for i = 1, count(t, function(e) return \u2026 [Block]', '    <anonymous function>(e) [Function]',
+      'for k, v in pairs({ go = function(self)\u2026 [Block]', '  go(self) [Method]', '    q [Variable]' ]);
+  });
+
   it('leaves a field set in a block under its table', () => {
     deepStrictEqual(outlineWith('function f() for i=1,2 do f.x = 1 end end', { showBlocks: true }), [ 'f() [Function]', '  x [Field]' ]);
   });
@@ -82,6 +95,16 @@ describe('outline options', () => {
     const files = { 'dbg.lua': 'local x = 1\nfor j = 1, 2 do local y = j end' };
     deepStrictEqual(outlineWith(code, ALL_OUTLINE_OPTIONS, { files }), [ 'for i = 1, 2 [Block]', '  i [Variable]', '  q [Variable]' ]);
     deepStrictEqual(outlineWith(code, ALL_OUTLINE_OPTIONS, { files, name: 'dbg.lua' }), [ 'x [Variable]', 'for j = 1, 2 [Block]', '  j [Variable]', '  y [Variable]' ]);
+  });
+
+  it('lists the loop variables and blocks of a file #included in a function at the top of its outline', () => {
+    const code = lines('function f()', '  if a then', '    #include lib.lua', '  end', 'end');
+    const files = { 'lib.lua': lines('for i = 1, 2 do', '  for k, v in pairs(t) do local y = v end', 'end', 'local z = 1') };
+    deepStrictEqual(outlineWith(code, { showLoopVariables: true }, { files, name: 'lib.lua' }),
+      [ 'i [Variable]', 'k [Variable]', 'v [Variable]', 'y [Variable]', 'z [Variable]' ]);
+    deepStrictEqual(outlineWith(code, ALL_OUTLINE_OPTIONS, { files, name: 'lib.lua' }),
+      [ 'for i = 1, 2 [Block]', '  i [Variable]', '  for k, v in pairs(t) [Block]', '    k [Variable]', '    v [Variable]', '    y [Variable]', 'z [Variable]' ]);
+    deepStrictEqual(outlineWith(code, ALL_OUTLINE_OPTIONS), [ 'f() [Function]' ]);
   });
 
   it('reads the options from the settings, each true only when it is true', () => {

@@ -159,16 +159,10 @@ function fileComments(analysis: Analysis, path: string, comments: Comment_[]): F
   }
   // The title of the file: its first comment, with no code or #include before it. In a .p8, comments start at __lua__.
   const first = blocks[0];
-  if (first && first.comments[0] === comments[0] && first.comments[0].loc!.start.index < codeStart(analysis, path)) {
+  if (first && first.comments[0] === comments[0] && first.comments[0].loc!.start.index < (analysis.codeStarts.get(path) ?? Infinity)) {
     first.title = true;
   }
   return { blocks: new Map(blocks.map(block => [ block.endLine, block ])), trailing };
-}
-
-// Near enough: the first reference or #include. A statement with no name in it, like do end, is rare at the top of a file.
-function codeStart(analysis: Analysis, path: string): number {
-  const reference = analysis.referencesByFile.get(path)?.[0]?.loc.start.index ?? Infinity;
-  return (analysis.includeCheckpoints.get(path) ?? []).reduce((start, checkpoint) => Math.min(start, checkpoint.index), reference);
 }
 
 // The doc in the block that ends on the line above node.

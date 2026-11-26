@@ -60,6 +60,9 @@ class BinderScope {
   // A goto may jump to a label further down, so a function, or the file, resolves its gotos when it ends.
   readonly gotos: PendingGoto[] = [];
   outlineBlock?: OutlineBlock;
+  // The block whose condition or iterators are being visited in this scope: the visitor enters a block's scope only
+  // after its header.
+  header?: OutlineBlock;
   // analysisScope: the scope the analysis keeps, which a table constructor shares with the scope around it.
   constructor(public owner: Owner, public kind: 'file' | 'function' | 'block', readonly analysisScope: Scope, public block?: Block) {}
 }
@@ -72,6 +75,7 @@ class Binder extends ASTVisitor<BinderScope> {
   readonly includeScopes = new Map<string, Scope>();
   readonly includeStarts = new Map<string, number>();
   readonly includeCheckpoints = new Map<string, Array<{ index: number, order: number }>>();
+  readonly codeStarts = new Map<string, number>();
   readonly blocks: OutlineBlock[] = [];
   private order = 0;
   // The chain of #includes whose content the analysis is in, outermost first.
@@ -111,6 +115,7 @@ class Binder extends ASTVisitor<BinderScope> {
     this.closeIncludes();
     this.resolveGotos(this.scopeStack[0]);
     groupMethodRuns(chunk.block.body, this.statementInfo, this.boundaryLines);
+    this.noteCodeStarts(chunk.block.body);
     this.liftUnreachableCallbacks();
   }
 
@@ -120,6 +125,18 @@ class Binder extends ASTVisitor<BinderScope> {
     }
     if (scope.block) {
       groupMethodRuns(scope.block.body, this.statementInfo, this.boundaryLines);
+      this.noteCodeStarts(scope.block.body);
+    }
+  }
+
+  // An #include splices the statements of its file into the body it is in.
+  private noteCodeStarts(statements: Statement[]): void {
+    for (const { loc } of statements) {
+      const { filename, index } = loc!.start;
+      const start = this.codeStarts.get(filename.path);
+      if (start === undefined || index < start) {
+        this.codeStarts.set(filename.path, index);
+      }
     }
   }
 
@@ -135,6 +152,7 @@ class Binder extends ASTVisitor<BinderScope> {
     if (outlineBlock) {
       scope.outlineBlock = outlineBlock;
       this.blocks.push(outlineBlock);
+      this.topScope().header = outlineBlock;
     }
     return scope;
   }
@@ -178,8 +196,14 @@ class Binder extends ASTVisitor<BinderScope> {
   // Stops at the function or file being analysed: a block around a function holds the function, not what its body
   // defines. A table constructor's scope has no block and is passed through.
   private innermostBlock(): OutlineBlock | undefined {
-    for (let i = this.scopeStack.length - 1; i >= 0 && this.scopeStack[i].kind === 'block'; i--) {
-      const { outlineBlock } = this.scopeStack[i];
+    for (let i = this.scopeStack.length - 1; i >= 0; i--) {
+      const { header, kind, outlineBlock } = this.scopeStack[i];
+      if (header) {
+        return header;
+      }
+      if (kind !== 'block') {
+        return undefined;
+      }
       if (outlineBlock) {
         return outlineBlock;
       }
@@ -199,6 +223,9 @@ class Binder extends ASTVisitor<BinderScope> {
   // loop or clause, whose range contains it too, so visibleAt's descent, which takes the first child that contains
   // the cursor, finds the function.
   override onEnterScope(scope: BinderScope): void {
+    if (scope.outlineBlock) {
+      this.topScope(1).header = undefined;
+    }
     const parent = this.topScope(1).analysisScope;
     if (scope.analysisScope !== parent) {
       scope.analysisScope.parent = parent;
@@ -1026,7 +1053,7 @@ export function emptyAnalysis(): Analysis {
   return {
     outline: [], globals: new Map(), referencesByFile: new Map(), membersByKey: new Map(),
     scope: { kind: 'file', children: [], declarations: [] }, includeScopes: new Map(), includeStarts: new Map(),
-    includeCheckpoints: new Map(), comments: [], blocks: [],
+    includeCheckpoints: new Map(), codeStarts: new Map(), comments: [], blocks: [],
   };
 }
 
@@ -1051,7 +1078,7 @@ export function analyze(chunk: Chunk): Analysis {
   return {
     outline: binder.root.children, globals: binder.globals, referencesByFile, membersByKey,
     scope: binder.fileScope, includeScopes: binder.includeScopes, includeStarts: binder.includeStarts,
-    includeCheckpoints: binder.includeCheckpoints, comments, blocks: binder.blocks,
+    includeCheckpoints: binder.includeCheckpoints, codeStarts: binder.codeStarts, comments, blocks: binder.blocks,
   };
 }
 
