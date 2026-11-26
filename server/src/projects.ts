@@ -677,12 +677,15 @@ export class ProjectIndex {
     }
   }
 
-  // Never keeps an earlier result: one that failed gives way to an empty analysis.
+  // Never keeps an earlier result: one that failed gives way to an empty analysis. A statement with an error is not in
+  // the analysis, nor are the names it defines, so while the root's parse has an error no file of the project is told
+  // that a name is undefined.
   private analyse(project: IndexedProject): void {
     project.analysed = this.documents.get(project.root);
     try {
-      project.analysis = analyze(this.documents.get(project.root)!.chunk);
-      project.warnings = warningsOf(project.analysis);
+      const { chunk } = this.documents.get(project.root)!;
+      project.analysis = analyze(chunk);
+      project.warnings = chunk.errors.length > 0 ? [] : warningsOf(project.analysis);
       project.failed = false;
     } catch (e) {
       console.error(`Failed to analyse the project of ${project.root}`, e);

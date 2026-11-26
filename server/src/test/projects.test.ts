@@ -456,7 +456,7 @@ describe('ProjectIndex', () => {
     eq(new Set(resend).size, resend.length);
     eq(index.document(uriOf('main.p8'))!.errors.map(formatError).includes('main.p8 1:0 Can\'t #include lib.lua from main.p8: File does not exist'), true);
     deepStrictEqual(index.definitions(uriOf('main.p8'), helper), []);
-    deepStrictEqual(index.warnings(uriOf('main.p8')).map(formatError), [ 'main.p8 2:0 undefined variable: helper' ]);
+    deepStrictEqual(index.warnings(uriOf('main.p8')), []);
   });
 
   it('does not take an #include from the cached text of a file that is gone from disk', () => {
@@ -642,6 +642,35 @@ describe('ProjectIndex', () => {
     eq(index.signatureHelp(uriOf('main.p8'), files['main.p8'].length, callContextAt(files['main.p8'], files['main.p8'].length)!)!.signatures[0].label,
       builtinInfo('print')!.sig);
   });
+
+  const LOST_DEFINITIONS: [string, Record<string, string>, string, string[], string][] = [
+    [
+      'a deleted } leaves out the table that defines it',
+      { 'main.p8': '#include lib.lua\nenemies = { 1, 2\nfunction _draw()\n  print(#enemies, nope)\nend', 'lib.lua': 'function count() return #enemies end' },
+      '#include lib.lua\nenemies = { 1, 2 }\nfunction _draw()\n  print(#enemies, nope)\nend',
+      [ 'main.p8 3:0 \'}\' expected near \'function\'', 'main.p8 5:0 unexpected keyword \'end\' near \'<eof>\'' ],
+      'main.p8 4:18 undefined variable: nope',
+    ],
+    [
+      'a line cut after = takes in the line below that defines it',
+      { 'main.p8': '#include lib.lua\nspeed =\nlives = 3\nprint(speed, lives, nope)', 'lib.lua': 'function hud() print(lives) end' },
+      '#include lib.lua\nspeed = 1\nlives = 3\nprint(speed, lives, nope)',
+      [ 'main.p8 3:6 unexpected symbol \'=\' near \'3\'' ],
+      'main.p8 4:20 undefined variable: nope',
+    ],
+  ];
+  for (const [ how, cart, fixed, errors, warning ] of LOST_DEFINITIONS) {
+    it(`gives no undefined-variable warning in any file of a cart while it has an error: ${how}`, () => {
+      const files = { ...cart };
+      const index = scanned(files);
+      deepStrictEqual(index.diagnostics([ uriOf('main.p8'), uriOf('lib.lua') ], 100).map(({ diagnostics }) => diagnostics.length), [ errors.length, 0 ]);
+      deepStrictEqual(index.document(uriOf('main.p8'))!.errors.map(formatError), errors);
+      deepStrictEqual([ index.warnings(uriOf('main.p8')), index.warnings(uriOf('lib.lua')) ], [[], []]);
+      files['main.p8'] = fixed;
+      index.update(uriOf('main.p8'));
+      deepStrictEqual([ index.warnings(uriOf('main.p8')).map(formatError), index.warnings(uriOf('lib.lua')) ], [[ warning ], []]);
+    });
+  }
 
   it('sends each file\'s diagnostics once', () => {
     const index = scanned(localAfterInclude());
