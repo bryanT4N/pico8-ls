@@ -5,11 +5,12 @@ import { HandleDiagnosticsSignature, LanguageClient, State } from 'vscode-langua
 // would be undone when the extension starts again.
 const KEY = 'pico-8-ls.keptLanguage';
 
-// A change of files.associations resets the language of the open files, the active one too, so a reset looks like
-// Change Language Mode. VS Code tells of the change of configuration right after the resets, with no timer between
-// them but not always in the same task of the extension host, and VS Code 1.63 may reset a file just after telling. A
-// file that leaves a PICO-8 language within this many milliseconds of a change of files.associations was reset by it;
-// the margin is for an extension host kept busy by other work.
+// A change of files.associations resets the language of the open files whose language the user did not choose, the
+// active one too, so a reset looks like Change Language Mode. VS Code tells of the change of configuration right after
+// the resets, with no timer between them but not always in the same task of the extension host, and VS Code 1.63 may
+// reset a file just after telling. A file that leaves a PICO-8 language within this many milliseconds of a change of
+// files.associations, for the language the change gives it, was reset by it; the margin is for an extension host kept
+// busy by other work.
 const RESET_WINDOW = 1000;
 
 // PICO-8, the language of .p8 files, is as much PICO-8 as PICO-8 Lua.
@@ -109,10 +110,15 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
     lastClosed = { document, languageId: document.languageId };
   }));
 
+  // A reset gives a file the language of its key in files.associations, or, with none, the language of its extension,
+  // which is known here only for .lua.
+  const hasResetLanguage = (document: TextDocument) => document.languageId
+    === (associatedLanguage(document.uri) ?? (document.uri.fsPath.toLowerCase().endsWith('.lua') ? 'lua' : undefined));
+
   let associationsChangedAt = -Infinity;
   // Kept from the start, so that the file is not switched back and its warnings stay hidden, and forgotten if a change
-  // of files.associations follows within the window.
-  let choice: { uri: string, at: number } | undefined;
+  // of files.associations that gives the file its new language follows within the window.
+  let choice: { document: TextDocument, at: number } | undefined;
 
   context.subscriptions.push(workspace.onDidOpenTextDocument(document => {
     const oldLanguage = lastClosed?.document === document ? lastClosed.languageId : undefined;
@@ -124,10 +130,10 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
         filter.refresh(client);
       }
     } else if (oldLanguage !== undefined && isPico(oldLanguage) && document.uri.scheme === 'file' && window.activeTextEditor?.document === document
-      && Date.now() - associationsChangedAt > RESET_WINDOW) {
+      && (Date.now() - associationsChangedAt > RESET_WINDOW || !hasResetLanguage(document))) {
       // Change Language Mode acts on the active editor only; the other files were reset and go on to be checked.
       kept.add(uri);
-      choice = { uri, at: Date.now() };
+      choice = { document, at: Date.now() };
       saveKept();
       // The middleware hides the warnings the server sends from now on; those it sent before are hidden now.
       filter.refresh(client);
@@ -141,7 +147,8 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
     // as a change of language.
     if (event.affectsConfiguration('files.associations')) {
       associationsChangedAt = Date.now();
-      if (choice !== undefined && associationsChangedAt - choice.at <= RESET_WINDOW && kept.delete(choice.uri)) {
+      if (choice !== undefined && associationsChangedAt - choice.at <= RESET_WINDOW && hasResetLanguage(choice.document)
+        && kept.delete(choice.document.uri.toString())) {
         saveKept();
       }
       choice = undefined;
@@ -177,14 +184,10 @@ function matches(pattern: string, uri: Uri): boolean {
   return languages.match({ pattern: key.includes('/') ? key : '**/' + key }, document) > 0;
 }
 
-// An open document has the language its editor shows. A closed one has the language that files.associations gives
-// it as VS Code picks it: the longest key that matches, and of two as long the later one. VS Code registers every key
-// as a pattern, never as a file name, so its rule that an exact file name comes first does not apply to them.
-function givenOtherLanguage(uri: Uri): boolean {
-  const open = workspace.textDocuments.find(document => document.uri.toString() === uri.toString());
-  if (open) {
-    return !isPico(open.languageId) && associated(open);
-  }
+// The language that files.associations gives a file as VS Code picks it: the longest key that matches, and of two as
+// long the later one. VS Code registers every key as a pattern, never as a file name, so its rule that an exact file
+// name comes first does not apply to them.
+function associatedLanguage(uri: Uri): string | undefined {
   const associations = workspace.getConfiguration('files').get<Record<string, string>>('associations') ?? {};
   let longest: string | undefined;
   for (const pattern of Object.keys(associations)) {
@@ -192,5 +195,15 @@ function givenOtherLanguage(uri: Uri): boolean {
       longest = pattern;
     }
   }
-  return longest !== undefined && !isPico(associations[longest]);
+  return longest === undefined ? undefined : associations[longest];
+}
+
+// An open document has the language its editor shows. A closed one has the language that files.associations gives it.
+function givenOtherLanguage(uri: Uri): boolean {
+  const open = workspace.textDocuments.find(document => document.uri.toString() === uri.toString());
+  if (open) {
+    return !isPico(open.languageId) && associated(open);
+  }
+  const language = associatedLanguage(uri);
+  return language !== undefined && !isPico(language);
 }
