@@ -582,12 +582,64 @@ export default class Parser {
       && this.isFirstOnLine(token.bounds.start);
   }
 
+  // A head that fails is reported, and the statement kept, when its then or do is further on the line where it failed or
+  // the line below starts the block: dropped, its else or end would close the block around it, whose missing end,
+  // reported at that block's first line, would come before the mistake.
+  private parseHead<T>(keyword: Token, followers: string[], parse: () => T, failed: () => T): T {
+    const locationDepth = this.locations.length;
+    const levels = this.levels;
+    try {
+      return parse();
+    } catch (e) {
+      if (!errors.isParseError(e)) {
+        throw e;
+      }
+      this.locations.length = locationDepth;
+      this.levels = levels;
+      if (!this.skipToFollower(e, keyword, followers)) {
+        throw e;
+      }
+      return failed();
+    }
+  }
+
   // Stands for a value found missing, where the token before it ends.
   private missingValue(): Literal {
     const at = this.previousToken.bounds.end;
     const value = AST.literal(TokenType.NilLiteral, null, 'nil');
     value.loc = { start: at, end: at };
     return value;
+  }
+
+  // Whether the then or do the head needs is further on this line, or the block starts on this line, below the head and
+  // more indented than it. The error is reported, and the token left after the then or do. A line below as indented as
+  // the head is most likely code that a head being typed above it has reached.
+  private skipToFollower(error: errors.ParseError, keyword: Token, followers: string[]): boolean {
+    const at = this.token;
+    const previous = this.previousToken;
+    if (at.type === TokenType.EOF || !previous || !at.bounds.start.filename.equals(previous.bounds.end.filename)) {
+      return false;
+    }
+    if (at.bounds.start.line > previous.bounds.end.line) {
+      if (!at.bounds.start.filename.equals(keyword.bounds.start.filename) || !this.isFirstOnLine(at.bounds.start)
+          || this.indentOf(at.bounds.start) <= this.indentOf(keyword.bounds.start)) {
+        return false;
+      }
+      this.report(this.atEndOfPreviousLine(error), at);
+      return true;
+    }
+    const state = this.lexer.save();
+    while (this.token.type !== TokenType.EOF && this.token.bounds.start.line === at.bounds.start.line
+        && this.token.bounds.start.filename.equals(at.bounds.start.filename)) {
+      if (this.token.type === TokenType.Keyword && followers.includes(this.token.value as string)) {
+        this.report(error, at);
+        this.lexerNext();
+        return true;
+      }
+      this.lexerNext();
+    }
+    this.lexer.restore(state);
+    return false;
   }
 
   private parseAgainIfNeeded<T>(flowContext: FlowContext, parse: () => T): T {
@@ -788,10 +840,11 @@ export default class Parser {
   // first token, at the inner block that most likely took its closer (underIndentedCloses), or where its closer
   // is missing (see below), and the statements from the first one no more indented than its opener's line are
   // handed back to the enclosing block. A block whose header stopped early gets no error, and nor does any block
-  // around one that took a closer, as that closer may be theirs (see below). Returns null when the closer is there,
-  // and otherwise where the block's node should now end.
+  // around one that took a closer, as that closer may be theirs, or one with an error in it that an else or an elseif
+  // ends (see below). Returns null when the closer is there, and otherwise where the block's node should now end.
+  // errorsBefore: how many errors there were where the block's statement starts.
   private expectBlockEnd(closer: 'end' | 'until', opener: Bounds, word: string, body: Block, headerEnd: CodeLocation,
-    headerStopped = false): CodeLocation | null {
+    errorsBefore: number, headerStopped = false): CodeLocation | null {
     const file = opener.start.filename;
     const openerIndent = this.indentOf(opener.start);
     const statements = body.body;
@@ -799,7 +852,13 @@ export default class Parser {
       && statement.loc.start.filename.equals(file)
       && this.isFirstOnLine(statement.loc.start)
       && this.indentOf(statement.loc.start) <= openerIndent);
-    const missingAt = (cut: number) => cut > 0 && isBlockStatement(statements[cut]) ? this.firstTokenAt(statements[cut].loc!.start) : null;
+    // Only a body indented under its opener tells by indentation where its closer goes: code written flat, as tweetcarts
+    // are, says nothing of it.
+    const indented = (cut: number) => statements.slice(0, cut).some(statement => statement.loc
+      && statement.loc.start.filename.equals(file) && this.isFirstOnLine(statement.loc.start)
+      && this.indentOf(statement.loc.start) > openerIndent);
+    const missingAt = (cut: number) => cut > 0 && isBlockStatement(statements[cut]) && indented(cut)
+      ? this.firstTokenAt(statements[cut].loc!.start) : null;
 
     if (this.token.type === TokenType.Keyword && this.token.value === closer) {
       const closedAt = this.token.bounds.start;
@@ -824,13 +883,24 @@ export default class Parser {
       // comes after the block, so the closer is missing just before it. When the two are as indented as each other, that
       // is also the line being typed, or the one after it, whichever of the two openers is new. When an error is already
       // there, such as the inner block's own, this one stays at the opener: one error for each place.
-      const candidate = blamed.missingAt;
-      const missing = candidate && !this.errors.some(error => error.bounds.start.index === candidate.start.index
-        && error.bounds.start.filename.equals(candidate.start.filename)) ? candidate : null;
+      let missing = blamed.missingAt;
+      for (let i = errorsBefore; missing && i < this.errors.length; i++) {
+        const start = this.errors[i].bounds.start;
+        if (start.index === missing.start.index && start.filename.equals(missing.start.filename)) {
+          missing = null;
+        }
+      }
       const at = missing ?? blamed.opener;
       const near = missing ? this.lexer.input.slice(missing.start.index, missing.end.index)
         : this.token.type === TokenType.EOF ? '<eof>' : this.token.value;
-      this.errors.push(errors.createErr(at, errMessages.expectedToClose, closer, blamed.word, blamed.opener.start.line, near));
+      // Only an if takes an else or an elseif, and an if has taken its own: with an error in the block, one here is most
+      // likely left over from an if in the block that was dropped for an error in its head. That error is the one to fix,
+      // and this one, at the opener, would come before it.
+      const strayElse = this.token.type === TokenType.Keyword && (this.token.value === 'else' || this.token.value === 'elseif')
+        && this.errors.length > errorsBefore;
+      if (!strayElse) {
+        this.errors.push(errors.createErr(at, errMessages.expectedToClose, closer, blamed.word, blamed.opener.start.line, near));
+      }
       this.reportedNear = this.token;
     }
 
@@ -1016,11 +1086,12 @@ export default class Parser {
 
   parseDoStatement(flowContext: FlowContext): DoStatement {
     const opener = this.locations[this.locations.length - 1].loc;
+    const errorsBefore = this.errors.length;
     const headerEnd = this.previousToken.bounds.end;
     flowContext.pushScope();
     const body = this.parseBlock(flowContext);
     flowContext.popScope();
-    const truncatedEnd = this.expectBlockEnd('end', opener, 'do', body, headerEnd);
+    const truncatedEnd = this.expectBlockEnd('end', opener, 'do', body, headerEnd, errorsBefore);
     return endAt(this.finishNode(AST.doStatement(body)), truncatedEnd);
   }
 
@@ -1028,19 +1099,23 @@ export default class Parser {
 
   parseWhileStatement(flowContext: FlowContext): WhileStatement {
     const opener = this.locations[this.locations.length - 1].loc;
+    const errorsBefore = this.errors.length;
     const keyword = this.previousToken;
     let body: Block | undefined;
     let truncatedEnd: CodeLocation | null = null;
 
     const canBeOneLiner = this.lexer.token?.value === '(';
-    const { expression: condition, stopped } = this.parseHeaderExpression(flowContext, keyword);
+    const { expression: condition, stopped, followed } = this.parseHead(keyword, [ 'do' ],
+      () => ({ ...this.parseHeaderExpression(flowContext, keyword), followed: false }),
+      () => ({ expression: this.missingValue() as Expression, stopped: false, followed: true }));
 
-    if (this.lexer.consume('do') || stopped) {
+    if (followed || this.lexer.consume('do') || stopped
+        || (!canBeOneLiner && this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'do', this.token.value), keyword, [ 'do' ]))) {
       // regular while statement with `do` ... `end`
       // (we already consumed the `do`)
       const headerEnd = this.previousToken.bounds.end;
       body = this.parseWhileStatementBody(flowContext);
-      truncatedEnd = this.expectBlockEnd('end', opener, 'while', body, headerEnd, stopped);
+      truncatedEnd = this.expectBlockEnd('end', opener, 'while', body, headerEnd, errorsBefore, stopped);
     } else if (canBeOneLiner) {
       // Handle special one-line while statement
       // (the body is every statement until the end of the line)
@@ -1066,10 +1141,11 @@ export default class Parser {
 
   parseRepeatStatement(flowContext: FlowContext): RepeatStatement {
     const opener = this.locations[this.locations.length - 1].loc;
+    const errorsBefore = this.errors.length;
     const headerEnd = this.previousToken.bounds.end;
     flowContext.pushScope(true);
     const body = this.parseBlock(flowContext);
-    const truncatedEnd = this.expectBlockEnd('until', opener, 'repeat', body, headerEnd);
+    const truncatedEnd = this.expectBlockEnd('until', opener, 'repeat', body, headerEnd, errorsBefore);
     let condition: Expression;
     if (truncatedEnd === null) {
       flowContext.raiseDeferredErrors();
@@ -1108,6 +1184,7 @@ export default class Parser {
 
   parseIfStatement(flowContext: FlowContext): IfStatement {
     const opener = this.locations[this.locations.length - 1].loc;
+    const errorsBefore = this.errors.length;
     const keyword = this.previousToken;
     const clauses: GeneralIfClause[] = [];
     let condition: Expression;
@@ -1120,10 +1197,11 @@ export default class Parser {
 
     const canBeOneLiner = this.lexer.token?.value === '(';
 
-    const header = this.parseHeaderExpression(flowContext, keyword);
+    const header = this.parseHead(keyword, [ 'then', 'do' ], () => ({ ...this.parseHeaderExpression(flowContext, keyword), followed: false }),
+      () => ({ expression: this.missingValue() as Expression, stopped: false, followed: true }));
     condition = header.expression;
 
-    if (!header.stopped && !this.lexer.consume('then') && !this.lexer.consume('do')) {
+    if (!header.followed && !header.stopped && !this.lexer.consume('then') && !this.lexer.consume('do')) {
       if (canBeOneLiner) {
 
         // Tell formatter not to use outer parens on the condition expression, since they'll
@@ -1164,7 +1242,7 @@ export default class Parser {
             // Otherwise it ends at the end of the line.
             const elseBlock = this.parseBlock(flowContext, multilineElse ? isBlockFollow : isEndOfLine);
             if (multilineElse) {
-              truncatedEnd = this.expectBlockEnd('end', opener, 'if', elseBlock, headerEnd);
+              truncatedEnd = this.expectBlockEnd('end', opener, 'if', elseBlock, headerEnd, errorsBefore);
             } else if (elseBlock.body.length === 0) {
               errors.raiseUnexpectedToken('statement', this.token);
             }
@@ -1174,7 +1252,7 @@ export default class Parser {
         });
 
         return endAt(this.finishNode(AST.ifStatement(clauses, true)), truncatedEnd);
-      } else {
+      } else if (!this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'then', this.token.value), keyword, [ 'then', 'do' ])) {
         errors.raiseErrForToken(this.token, errMessages.expected, 'then', this.token.value);
       }
     }
@@ -1189,11 +1267,13 @@ export default class Parser {
 
     while (this.lexer.consume('elseif')) {
       this.pushLocation(marker);
-      const elseifHeader = this.parseHeaderExpression(flowContext, this.previousToken);
+      const elseifKeyword = this.previousToken;
+      const elseifHeader = this.parseHead(elseifKeyword, [ 'then', 'do' ], () => ({ ...this.parseHeaderExpression(flowContext, elseifKeyword), followed: false }),
+        () => ({ expression: this.missingValue() as Expression, stopped: false, followed: true }));
       condition = elseifHeader.expression;
 
       headerStopped = headerStopped || elseifHeader.stopped;
-      if (!elseifHeader.stopped && !this.lexer.consume('then') && !this.lexer.consume('do')) {
+      if (!elseifHeader.followed && !elseifHeader.stopped && !this.lexer.consume('then') && !this.lexer.consume('do')) {
         this.errors.push(this.atEndOfPreviousLine(errors.createErrForToken(this.token, errMessages.expected, 'then', this.token.value)));
       }
 
@@ -1216,7 +1296,7 @@ export default class Parser {
       clauses.push(this.finishNode(AST.elseClause(body), true));
     }
 
-    const truncatedEnd = this.expectBlockEnd('end', opener, 'if', body, headerEnd, headerStopped);
+    const truncatedEnd = this.expectBlockEnd('end', opener, 'if', body, headerEnd, errorsBefore, headerStopped);
     endAt(clauses[clauses.length - 1], truncatedEnd);
     return endAt(this.finishNode(AST.ifStatement(clauses, false)), truncatedEnd);
   }
@@ -1230,6 +1310,7 @@ export default class Parser {
 
   parseForStatement(flowContext: FlowContext): ForGenericStatement | ForNumericStatement {
     const opener = this.locations[this.locations.length - 1].loc;
+    const errorsBefore = this.errors.length;
     const keyword = this.previousToken;
     let variable = this.parseIdentifier();
     let body;
@@ -1237,58 +1318,69 @@ export default class Parser {
     // If the first expression is followed by a `=` punctuator, this is a
     // Numeric For Statement.
     if (this.lexer.consume('=')) {
-      let header = this.parseHeaderExpression(flowContext, keyword);
-      const start = header.expression;
+      let start: Expression = this.missingValue();
       let end: Expression = this.missingValue();
       let step: Expression | null = null;
-      if (!header.stopped) {
-        this.lexer.expect(',');
-        header = this.parseHeaderExpression(flowContext, keyword);
-        end = header.expression;
-        // Optional step expression
-        if (!header.stopped && this.lexer.consume(',')) {
+      let stopped = false;
+      this.parseHead(keyword, [ 'do' ], () => {
+        let header = this.parseHeaderExpression(flowContext, keyword);
+        start = header.expression;
+        if (!header.stopped) {
+          this.lexer.expect(',');
           header = this.parseHeaderExpression(flowContext, keyword);
-          step = header.expression;
+          end = header.expression;
+          // Optional step expression
+          if (!header.stopped && this.lexer.consume(',')) {
+            header = this.parseHeaderExpression(flowContext, keyword);
+            step = header.expression;
+          }
         }
-      }
-
-      if (!header.stopped) {
-        this.lexer.expect('do');
-      }
+        stopped = header.stopped;
+        if (!stopped && !this.lexer.consume('do')
+            && !this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'do', this.token.value), keyword, [ 'do' ])) {
+          errors.raiseErrForToken(this.token, errMessages.expected, 'do', this.token.value);
+        }
+      }, () => undefined);
       const headerEnd = this.previousToken.bounds.end;
       flowContext.pushScope(true);
       body = this.parseBlock(flowContext);
       flowContext.popScope();
-      const truncatedEnd = this.expectBlockEnd('end', opener, 'for', body, headerEnd, header.stopped);
+      const truncatedEnd = this.expectBlockEnd('end', opener, 'for', body, headerEnd, errorsBefore, stopped);
 
       return endAt(this.finishNode(AST.forNumericStatement(variable, start, end, step, body)), truncatedEnd);
     // If not, it's a Generic For Statement
     } else {
       // The namelist can contain one or more identifiers.
       const variables = [ variable ];
-      while (this.lexer.consume(',')) {
-        variable = this.parseIdentifier();
-        variables.push(variable);
-      }
-      this.lexer.expect('in');
       const iterators: Expression[] = [];
-
-      // One or more expressions in the explist.
       let stopped = false;
-      do {
-        const header = this.parseHeaderExpression(flowContext, keyword);
-        iterators.push(header.expression);
-        stopped = header.stopped;
-      } while (!stopped && this.lexer.consume(','));
+      this.parseHead(keyword, [ 'do' ], () => {
+        while (this.lexer.consume(',')) {
+          variable = this.parseIdentifier();
+          variables.push(variable);
+        }
+        this.lexer.expect('in');
 
-      if (!stopped) {
-        this.lexer.expect('do');
+        // One or more expressions in the explist.
+        do {
+          const header = this.parseHeaderExpression(flowContext, keyword);
+          iterators.push(header.expression);
+          stopped = header.stopped;
+        } while (!stopped && this.lexer.consume(','));
+
+        if (!stopped && !this.lexer.consume('do')
+            && !this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'do', this.token.value), keyword, [ 'do' ])) {
+          errors.raiseErrForToken(this.token, errMessages.expected, 'do', this.token.value);
+        }
+      }, () => undefined);
+      if (iterators.length === 0) {
+        iterators.push(this.missingValue());
       }
       const headerEnd = this.previousToken.bounds.end;
       flowContext.pushScope(true);
       body = this.parseBlock(flowContext);
       flowContext.popScope();
-      const truncatedEnd = this.expectBlockEnd('end', opener, 'for', body, headerEnd, stopped);
+      const truncatedEnd = this.expectBlockEnd('end', opener, 'for', body, headerEnd, errorsBefore, stopped);
 
       return endAt(this.finishNode(AST.forGenericStatement(variables, iterators, body)), truncatedEnd);
     }
@@ -1526,6 +1618,7 @@ export default class Parser {
 
   parseFunctionDeclaration(name: Identifier | MemberExpression | null, isLocal: boolean): FunctionDeclaration {
     const opener = this.locations[this.locations.length - 1].loc;
+    const errorsBefore = this.errors.length;
     const flowContext = new FlowContext(this.errors);
     flowContext.pushScope();
 
@@ -1580,7 +1673,7 @@ export default class Parser {
       this.headerKeyword = outerKeyword;
     }
     flowContext.popScope();
-    const truncatedEnd = this.expectBlockEnd('end', opener, 'function', body, headerEnd);
+    const truncatedEnd = this.expectBlockEnd('end', opener, 'function', body, headerEnd, errorsBefore);
 
     isLocal = isLocal || false;
     return endAt(this.finishNode(AST.functionStatement(name, parameters, isLocal, body)), truncatedEnd);

@@ -245,6 +245,34 @@ describe('Parser recovery', () => {
     );
   });
 
+  it('keeps an if, an elseif, a while or a for whose head has a mistake before its then or do, so that its else and end close it', () => {
+    assert.deepStrictEqual(errorsOf(lines('function f()', '  if a b then', '    x = 1', '  else', '    y = 2', '  end', 'end')),
+      [ 'main_test_file 2:7 \'then\' expected near \'b\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f()', '  if f(a b) then', '    y = 2', '  else', '    z = 3', '  end', 'end')),
+      [ 'main_test_file 2:9 \')\' expected near \'b\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f()', '  if a then', '    x = 1', '  elseif f(a b) then', '    y = 2', '  else', '    z = 3', '  end', 'end')),
+      [ 'main_test_file 4:13 \')\' expected near \'b\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f()', '  while a b do', '    x = 1', '  end', 'end')), [ 'main_test_file 2:10 \'do\' expected near \'b\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f()', '  for i = 1 2 do', '    x = 1', '  end', 'end')), [ 'main_test_file 2:12 \',\' expected near \'2\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f()', '  for k in pairs(t) x do', '    y = 1', '  end', 'end')), [ 'main_test_file 2:20 \'do\' expected near \'x\'' ]);
+  });
+
+  it('keeps an if whose head is left open or misses its then when the block below is indented under it', () => {
+    assert.deepStrictEqual(errorsOf(lines('function f()', '  if (a', '    x = 1', '  else', '    y = 2', '  end', 'end')), [ 'main_test_file 2:7 \')\' expected near \'x\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f()', '  if a', '    x = 1', '  else', '    y = 2', '  end', 'end')), [ 'main_test_file 2:6 \'then\' expected near \'x\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('if x', 'function f() end')), [ 'main_test_file 1:4 \'then\' expected near \'function\'' ]);
+  });
+
+  it('reports no missing closer for a block that an else left over from a dropped if ends, once an error is in the block', () => {
+    assert.strictEqual(errorsOf(lines('function f()', '  if (a', '  x = 1', '  else', '  y = 2', '  end', 'end'))[0], 'main_test_file 2:7 \')\' expected near \'x\'');
+    assert.strictEqual(errorsOf(lines('function f()', '  x = 1', 'else', 'end'))[0], 'main_test_file 1:0 \'end\' expected (to close \'function\' at line 1) near \'else\'');
+  });
+
+  it('reports a block missing its closer at its opener in code written flat', () => {
+    assert.deepStrictEqual(errorsOf(lines('function f() a()', 'if (c) b()', 'x = 1')),
+      [ 'main_test_file 1:0 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ]);
+  });
+
   it('reports break outside a loop at the break', () => {
     check(
       lines('function f()', '  break', 'end'),
