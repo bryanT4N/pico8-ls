@@ -481,8 +481,23 @@ export class ProjectIndex {
   }
 
   diagnostics(uris: string[], maxPerFile: number): FileDiagnostics[] {
-    return unique(uris).flatMap(uri => mergeDiagnostics([ uri ],
-      new Map([[ uri, errorsInFile(uri, this.documents.get(uri)?.errors ?? []) ]]), this.warnings(uri), maxPerFile));
+    return unique(uris).flatMap(uri => mergeDiagnostics([ uri ], new Map([[ uri, this.errors(uri) ]]), this.warnings(uri), maxPerFile));
+  }
+
+  // The file's own errors, and those that only the parse of a cart containing it finds in it, such as a label the cart
+  // defines too, or a `...` in a file the cart includes inside a function: each once, in order of place.
+  private errors(uri: string): ParseError[] {
+    const errors = errorsInFile(uri, this.documents.get(uri)?.errors ?? []);
+    const seen = new Set(errors.map(keyOf));
+    for (const project of this.projectsOf(uri)) {
+      for (const error of errorsInFile(uri, this.documents.get(project.root)?.errors ?? [])) {
+        if (!seen.has(keyOf(error))) {
+          seen.add(keyOf(error));
+          errors.push(error);
+        }
+      }
+    }
+    return errors.sort((a, b) => a.bounds.start.index - b.bounds.start.index);
   }
 
   workspaceSymbols(query: string, options: OutlineOptions = NO_OUTLINE_OPTIONS): SymbolInformation[] {
@@ -734,8 +749,8 @@ function caseless(uri: string): string {
   return url.fileURLToPath(uri).toLowerCase();
 }
 
-function keyOf(warning: Warning): string {
-  return `${warning.bounds.start.index}:${warning.bounds.end.index}:${warning.message}`;
+function keyOf(problem: ParseError | Warning): string {
+  return `${problem.bounds.start.index}:${problem.bounds.end.index}:${problem.message}`;
 }
 
 function byPlace(a: Bounds, b: Bounds): number {

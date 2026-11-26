@@ -672,6 +672,29 @@ describe('ProjectIndex', () => {
     });
   }
 
+  it('shows each error of a cart\'s parse in the file it is in, once, also one that the file\'s own parse does not find', () => {
+    const index = scanned({
+      'labels.p8': '::a::\n#include lib.lua',
+      'lib.lua': '::a::\nprint(1)',
+      'one.p8': 'function f()\n#include va.lua\nend',
+      'two.p8': 'function g()\n#include va.lua\nend',
+      'va.lua': 'x = ...',
+      'typo.p8': '#include bad.lua',
+      'bad.lua': 'x = = 1',
+    });
+    const shown = (name: string) => index.diagnostics([ uriOf(name) ], 100)[0].diagnostics
+      .map(d => `${d.range.start.line + 1}:${d.range.start.character} ${d.message}`);
+    deepStrictEqual([ 'labels.p8', 'lib.lua', 'one.p8', 'two.p8', 'va.lua', 'typo.p8', 'bad.lua' ].map(shown), [
+      [],
+      [ '1:2 label \'a\' already defined on line 1' ],
+      [],
+      [],
+      [ '1:4 cannot use \'...\' outside a Vararg function near \'...\'' ],
+      [],
+      [ '1:4 <expression> expected near \'=\'' ],
+    ]);
+  });
+
   it('sends each file\'s diagnostics once', () => {
     const index = scanned(localAfterInclude());
     const sent = index.diagnostics([ uriOf('lib.lua'), uriOf('main.p8') ], 100);
