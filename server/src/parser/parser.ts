@@ -147,7 +147,8 @@ export default class Parser {
   private continuations: Token[] | null = null;
   // Where the value is missing in the statement or header being parsed again.
   private stopAt: Token | null = null;
-  // The token that already has the error of a missing value, bracket or block closer.
+  // The token where a missing value, bracket or block closer was found. Its error is reported there, unless the errors
+  // before it are the ones to fix.
   private reportedNear: Token | null = null;
   private stops = new Map<string, Token>();
   private lastStop: Token | null = null;
@@ -410,7 +411,8 @@ export default class Parser {
 
           // Caught a parse error. Add it to errors and synchronize. A statement
           // that fails at the token where a bracket in it was closed, or a value
-          // or block closer in it found missing, has its error there already. An
+          // or block closer in it found missing, is not reported again: that
+          // error is there already, or the errors before it stand for it. An
           // error near its first token belongs to the statement before it.
           if (!(this.token !== startToken && this.token === this.reportedNear
               && codeLocationsEqual(e.bounds.start, this.token.bounds.start))) {
@@ -793,17 +795,23 @@ export default class Parser {
       && this.indentOf(token.bounds.start) <= this.indentOf(opener.bounds.start);
   }
 
-  private expectCloser(closer: '}' | ')' | ']', opener: Token) {
-    if (this.closesUnfinished(opener)) {
-      this.report(this.token.type === TokenType.EOF
-        ? errors.createErrForToken(this.token, errMessages.expected, closer, '<eof>')
-        : errors.createErrForToken(opener, errMessages.expectedToClose, closer, opener.value, opener.bounds.start.line, this.token.value), this.token);
-      return;
+  // errorsBefore: how many errors there were where the bracket opened. A bracket that indentation closes after errors in
+  // it gets no error of its own: at its opener, that one would come before them, and they are the ones to fix, most
+  // likely what left it open.
+  private expectCloser(closer: '}' | ')' | ']', opener: Token, errorsBefore: number) {
+    const token = this.token;
+    if (!this.closesUnfinished(opener)) {
+      this.lexer.expect(closer);
+    } else if (token.type === TokenType.EOF) {
+      this.report(errors.createErrForToken(token, errMessages.expected, closer, '<eof>'), token);
+    } else if (this.errors.length > errorsBefore && !this.isStop(token) && !this.endsHeader(token)) {
+      this.reportedNear = token;
+    } else {
+      this.report(errors.createErrForToken(opener, errMessages.expectedToClose, closer, opener.value, opener.bounds.start.line, token.value), token);
     }
-    this.lexer.expect(closer);
   }
 
-  // One error for each place: none when near already has a missing value's, bracket's or block closer's error, or when
+  // One error for each place: none when a missing value, bracket or block closer was already found at near, or when
   // the last error starts where this one does. That last error is near's too, as when a file included twice gives the
   // same error again, so near is marked either way.
   private report(error: errors.ParseError, near?: Token) {
@@ -1718,6 +1726,7 @@ export default class Parser {
 
   parseTableConstructor(flowContext: FlowContext): TableConstructorExpression {
     const opener = this.previousToken;
+    const errorsBefore = this.errors.length;
     const fields = [];
     let key, value;
 
@@ -1764,7 +1773,7 @@ export default class Parser {
       }
       break;
     }
-    this.expectCloser('}', opener);
+    this.expectCloser('}', opener, errorsBefore);
     return this.finishNode(AST.tableConstructorExpression(fields));
   }
 
@@ -1969,15 +1978,16 @@ export default class Parser {
         const opener = this.token;
         this.pushLocation(marker);
         this.lexerNext();
+        const errorsBefore = this.errors.length;
         // An index needs a key, so one closed before it is left out and the value is what it was indexing.
         if (this.closesUnfinished(opener)) {
-          this.expectCloser(']', opener);
+          this.expectCloser(']', opener, errorsBefore);
           this.popLocation();
           return base;
         }
         this.noteLineStart();
         expression = this.parseExpectedExpression(flowContext);
-        this.expectCloser(']', opener);
+        this.expectCloser(']', opener, errorsBefore);
         return this.finishNode(AST.indexExpression(base, expression));
       }
       case '.': {
@@ -2028,10 +2038,11 @@ export default class Parser {
       // Parentheses surrounding a new expression.
       const opener = this.token;
       this.lexerNext();
+      const errorsBefore = this.errors.length;
       base = this.parseExpectedExpression(flowContext);
       const after: Token = this.token;
       if (after.type === TokenType.EOF || this.isStop(after) || this.endsHeader(after)) {
-        this.expectCloser(')', opener);
+        this.expectCloser(')', opener, errorsBefore);
       } else {
         this.lexer.expect(')');
       }
@@ -2064,6 +2075,7 @@ export default class Parser {
       case '(':
         const opener = this.token;
         this.lexerNext();
+        const errorsBefore = this.errors.length;
 
         // List of expressions
         const expressions = [];
@@ -2081,7 +2093,7 @@ export default class Parser {
           expressions.push(expression);
         }
 
-        this.expectCloser(')', opener);
+        this.expectCloser(')', opener, errorsBefore);
         return this.finishNode(AST.callExpression(base, expressions));
 
       case '{':
