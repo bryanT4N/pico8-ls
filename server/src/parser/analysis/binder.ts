@@ -80,7 +80,6 @@ class Binder extends ASTVisitor<BinderScope> {
   private order = 0;
   // The chain of #includes whose content the analysis is in, outermost first.
   private readonly openIncludes: OpenInclude[] = [];
-  private topLevel: Statement[] = [];
   // The first entry each global name got in each file: by name, then by ResolvedFile.path.
   private readonly globalEntries = new Map<string, Map<string, OutlineEntry>>();
   // For each expression value, where to attach it in the outline. The statement hooks fill this in before the
@@ -110,7 +109,6 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   override visit(chunk: Chunk): void {
-    this.topLevel = chunk.block.body;
     super.visit(chunk);
     this.closeIncludes();
     this.resolveGotos(this.scopeStack[0]);
@@ -145,7 +143,7 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   createDefaultScope(scopeNode: VisitableASTNode | null): BinderScope {
-    const loc = scopeNode ? this.rangeOf(scopeNode) : undefined;
+    const loc = scopeNode?.loc;
     const scope = new BinderScope(this.topScope().owner, 'block', { kind: 'block', loc, children: [], declarations: [] },
       isStatementWithBody(scopeNode) ? scopeNode.block : undefined);
     const outlineBlock = scopeNode ? this.outlineBlockOf(scopeNode) : undefined;
@@ -233,29 +231,6 @@ class Binder extends ASTVisitor<BinderScope> {
     }
   }
 
-  // The range of a scope, for completion. The loc of a block whose closer is missing stops at its last statement,
-  // before the line being typed, so its range runs on to just before the next statement of the block around it;
-  // with none, to the end of the scope around it, or of the file. Only the index of such an end is compared.
-  private rangeOf(node: VisitableASTNode): Bounds | undefined {
-    const { loc } = node;
-    if (!loc || !node.unclosed) {
-      return loc;
-    }
-    const file = loc.start.filename.path;
-    const body = [ ...this.scopeStack ].reverse().find(scope => scope.block)?.block?.body ?? this.topLevel;
-    const statement = [ node, ...this.nodeStack.map(entry => entry.node).reverse() ]
-      .find(candidate => body.includes(candidate as Statement)) as Statement | undefined;
-    const next = statement && body[body.indexOf(statement) + 1];
-    if (next?.loc && next.loc.start.filename.path === file) {
-      return { start: loc.start, end: { ...next.loc.start, index: next.loc.start.index - 1 } };
-    }
-    const around = this.topScope().analysisScope.loc;
-    if (around && around.start.filename.path === file) {
-      return { start: loc.start, end: around.end };
-    }
-    return { start: loc.start, end: { ...loc.end, index: Number.MAX_SAFE_INTEGER } };
-  }
-
   override visitIncludeStatement(node: IncludeStatement): void {
     const file = node.loc!.start.filename;
     this.closeIncludes(file.path);
@@ -319,7 +294,7 @@ class Binder extends ASTVisitor<BinderScope> {
     }
     const owner: Owner = entry ?? this.topScope().owner;
 
-    const scope = new BinderScope(owner, 'function', { kind: 'function', loc: this.rangeOf(node), children: [], declarations: [] }, node.block);
+    const scope = new BinderScope(owner, 'function', { kind: 'function', loc: node.loc, children: [], declarations: [] }, node.block);
 
     const firstParam = node.parameters[0];
     const firstParamIsSelf = firstParam?.type === 'Identifier' && firstParam.name === 'self';

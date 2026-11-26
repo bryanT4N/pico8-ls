@@ -1,6 +1,5 @@
 import * as assert from 'assert';
 import { formatError, parse } from './test-utils';
-import { outlineLines } from './outline-utils';
 
 const errorsOf = (code: string) => parse(code).errors.map(formatError);
 const nested = (open: string, inner: string, close: string, n: number) => open.repeat(n) + inner + close.repeat(n);
@@ -22,7 +21,10 @@ describe('nesting limit', () => {
     assert.deepStrictEqual(errorsOf(nested('if a then\n', 'x = 1\n', 'end\n', 198)), []);
     assert.deepStrictEqual(errorsOf(nested('if a then\n', 'x = 1\n', 'end\n', 199)), [ 'main_test_file 200:4 too many nested levels (limit is 200) near \'1\'' ]);
     assert.deepStrictEqual(errorsOf(nested('function f()\n', '', 'end\n', 200)), []);
-    assert.deepStrictEqual(errorsOf(nested('function f()\n', '', 'end\n', 201)), [ 'main_test_file 201:0 too many nested levels (limit is 200) near \'function\'' ]);
+    assert.deepStrictEqual(errorsOf(nested('function f()\n', '', 'end\n', 201)), [
+      'main_test_file 201:0 too many nested levels (limit is 200) near \'function\'',
+      'main_test_file 402:0 unexpected keyword \'end\' near \'<eof>\'',
+    ]);
   });
 
   // Lua 5.2 looks for `)`, `}` or the end of the block before it parses an
@@ -38,60 +40,11 @@ describe('nesting limit', () => {
     assert.deepStrictEqual(errorsOf(nested('if a then\n', 'f(1)\n', 'end\n', 199)), [ 'main_test_file 200:2 too many nested levels (limit is 200) near \'1\'' ]);
   });
 
-  it('reports code nested too deep once for its statement, and goes on parsing it', () => {
-    const table = parse('x = ' + nested('{', '1, 2, 3', '}', 199));
-    assert.deepStrictEqual([ table.errors.map(formatError), outlineLines(table.symbols) ],
-      [[ 'main_test_file 1:203 too many nested levels (limit is 200) near \'1\'' ], [ 'x [Array]' ]]);
-    const code = 'function _init()\n  s = ' + Array.from({ length: 300 }, () => '"ab"').join('..\n    ') + '\n  print(s)\nend\nfunction _draw()\nend';
-    const chain = parse(code);
-    assert.deepStrictEqual([ chain.errors.map(formatError), outlineLines(chain.symbols) ],
-      [[ 'main_test_file 200:4 too many nested levels (limit is 200) near \'ab\'' ], [ '_init() [Function]', 's [Variable]', '_draw() [Function]' ]]);
-  });
-
-  it('stops at 500 levels, where it reports, and goes on after what is nested deeper', () => {
-    const chunk = parse('x = ' + nested('(', '1', ')', 5000) + '\ny = 1');
-    assert.deepStrictEqual([ chunk.errors.map(formatError), outlineLines(chunk.symbols) ], [[
-      'main_test_file 1:203 too many nested levels (limit is 200) near \'(\'',
-      'main_test_file 1:503 too many nested levels (limit is 200) near \'(\'',
-    ], [ 'x [Variable]', 'y [Variable]' ]]);
-    const lines = parse('x = ' + '(\n'.repeat(600) + '1' + ')\n'.repeat(600) + 'y = 1');
-    assert.deepStrictEqual([ lines.errors.map(formatError), outlineLines(lines.symbols) ], [[
-      'main_test_file 200:0 too many nested levels (limit is 200) near \'(\'',
-      'main_test_file 500:0 too many nested levels (limit is 200) near \'(\'',
-    ], [ 'x [Variable]', 'y [Variable]' ]]);
-    const ifs = parse(nested('if a then\n', 'x = 1\n', 'end\n', 1500) + 'y = 1');
-    assert.deepStrictEqual([ ifs.errors.map(formatError), outlineLines(ifs.symbols) ], [[
-      'main_test_file 200:3 too many nested levels (limit is 200) near \'a\'',
-      'main_test_file 500:3 too many nested levels (limit is 200) near \'a\'',
-    ], [ 'y [Variable]' ]]);
-    const functions = parse(nested('function f()\n', '', 'end\n', 600) + 'y = 1');
-    assert.deepStrictEqual([ functions.errors.map(formatError), functions.symbols.map(s => s.name) ], [[
-      'main_test_file 201:0 too many nested levels (limit is 200) near \'function\'',
-      'main_test_file 501:0 too many nested levels (limit is 200) near \'function\'',
-    ], [ 'f', 'y' ]]);
-  });
-
   it('counts a level for each target of an assignment after the first', () => {
     const targets = (n: number) => Array.from({ length: n }, (_, i) => 'a' + i).join(', ') + ' = 1';
     assert.deepStrictEqual(errorsOf(targets(200)), []);
     assert.deepStrictEqual(errorsOf(targets(201)), [ 'main_test_file 1:1095 too many nested levels (limit is 200) near \'=\'' ]);
     assert.deepStrictEqual(errorsOf('function f()\n' + targets(199) + '\nend'), []);
     assert.deepStrictEqual(errorsOf('function f()\n' + targets(200) + '\nend'), [ 'main_test_file 2:1089 too many nested levels (limit is 200) near \'=\'' ]);
-  });
-
-  it('past 500 levels, skips a bracket that closes nothing', () => {
-    const stray = parse(nested('if a then\n', ')\n', 'end\n', 500) + 'y = 1');
-    assert.deepStrictEqual([ stray.errors.map(formatError), outlineLines(stray.symbols) ], [[
-      'main_test_file 200:3 too many nested levels (limit is 200) near \'a\'',
-      'main_test_file 500:3 too many nested levels (limit is 200) near \'a\'',
-    ], [ 'y [Variable]' ]]);
-  });
-
-  it('past 500 levels, skips a unary operator together with its operand', () => {
-    const unary = parse('x = ' + nested('(', 'not a', ')', 499) + '\ny = 1');
-    assert.deepStrictEqual([ unary.errors.map(formatError), outlineLines(unary.symbols) ], [[
-      'main_test_file 1:203 too many nested levels (limit is 200) near \'(\'',
-      'main_test_file 1:503 too many nested levels (limit is 200) near \'not\'',
-    ], [ 'x [Variable]', 'y [Variable]' ]]);
   });
 });

@@ -196,8 +196,6 @@ describe('completionItems', () => {
 
   it('offers the locals of a closed function in an if whose end is not written yet', () => {
     deepStrictEqual(names(itemsAt(lines('function f(a)', '  local b = 1', '  if a then', '    ', 'end'), 4, 4)), [ 'a', 'b', 'f' ]);
-    const inRepeat = lines('function f(a)', '  repeat', '    if a then', '      local c = 1', '      ', '  until a', 'end');
-    deepStrictEqual(names(itemsAt(inRepeat, 5, 6)), [ 'a', 'c', 'f' ]);
   });
 
   it('does not offer the parameters of a closed function after its end', () => {

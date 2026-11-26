@@ -157,8 +157,6 @@ export function parseInChild(code: string, files?: Record<string, string>, timeo
   return parseManyInChild([{ code, files }], timeoutMs)[0];
 }
 
-// Statements that each fail on the line where their value starts, each in the function value of the one around it:
-// parsing each of them again would double the work at every level.
 export function nestedInFunctionValues(depth: number, innermost: string, atEachLevel = ''): string {
   let code = innermost;
   for (let i = 0; i < depth; i++) {

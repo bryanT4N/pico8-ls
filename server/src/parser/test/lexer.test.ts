@@ -328,24 +328,6 @@ __music__
     assertNoMoreTokens(tokens);
   });
 
-  it('reads the same tokens, comments and errors again after restoring a saved state', () => {
-    const lexer = new Lexer('a = 1 -- one\nb = `\nc', new ResolvedFile('main_test_file', 'main_test_file'));
-    lexer.next();
-    const state = lexer.save();
-    const read = () => {
-      const values = [];
-      do {
-        lexer.next();
-        values.push(lexer.token!.value);
-      } while (lexer.token!.type !== TokenType.EOF);
-      return [ values, lexer.comments.map(c => c.value), lexer.errors.map(e => e.message) ];
-    };
-    const first = read();
-    lexer.restore(state);
-    assert.deepStrictEqual(read(), first);
-    assert.deepStrictEqual(first, [[ '=', 1, 'b', '=', 'c', '<eof>' ], [ ' one' ], [ 'unexpected symbol \'`\'' ]]);
-  });
-
   describe('error handling', () => {
     it('returns an error for an unterminated string literal', () => {
       const { tokens, errors } = lexWithErrors('"asdf');
