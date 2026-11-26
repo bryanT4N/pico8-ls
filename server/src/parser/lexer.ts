@@ -528,21 +528,13 @@ export default class Lexer {
     return this.makeToken(TokenType.NumericLiteral, literal.value);
   }
 
-  // Lua hexadecimals have an optional fraction part and an optional binary
-  // exoponent part. These are not included in JavaScript so we will compute
-  // all three parts separately and then sum them up at the end of the function
-  // with the following algorithm.
-  //
-  //     Digit := toDec(digit)
-  //     Fraction := toDec(fraction) / 16 ^ fractionCount
-  //     BinaryExp := 2 ^ binaryExp
-  //     Number := ( Digit + Fraction ) * BinaryExp
+  // PICO-8 hexadecimals have an optional fraction part and, unlike Lua's, no p
+  // exponent. JavaScript does not read a hexadecimal fraction, so the two parts
+  // are computed separately and summed.
 
   readHexLiteral() {
     let fraction = 0, // defaults to 0 as it gets summed
-      binaryExponent = 1, // defaults to 1 as it gets multiplied
-      binarySign = 1, // positive
-      fractionStart, exponentStart;
+      fractionStart;
 
     const digitStart = this.index += 2; // Skip 0x part
     let digit;
@@ -576,6 +568,9 @@ export default class Lexer {
         ++this.index;
       }
 
+      if ('.' === this.input.charAt(this.index)) {
+        return this.malformedWithDots(isHexDigit);
+      }
       if (needAtLeastOneFractionalDigit) {
         return this.malformedHexLiteral();
       }
@@ -588,42 +583,23 @@ export default class Lexer {
         : parseInt(fracStr, 16) / Math.pow(16, this.index - fractionStart);
     }
 
-    // Binary exponents are optional
-    let foundBinaryExponent = false;
-    if ([ 'p', 'P' ].includes(this.input.charAt(this.index))) {
-      foundBinaryExponent = true;
-      ++this.index;
-
-      // Sign part is optional and defaults to 1 (positive).
-      if ([ '+', '-' ].includes(this.input.charAt(this.index))) {
-        binarySign = ('+' === this.input.charAt(this.index++)) ? 1 : -1;
-      }
-
-      exponentStart = this.index;
-
-      // The binary exponent sign requires a decimal digit.
-      if (!isDecDigit(this.input.charCodeAt(this.index))) {
-        return this.malformedHexLiteral();
-      }
-
-      while (isDecDigit(this.input.charCodeAt(this.index))) {
-        ++this.index;
-      }
-      binaryExponent = +this.input.slice(exponentStart, this.index);
-
-      // Calculate the binary exponent of the number.
-      binaryExponent = Math.pow(2, binaryExponent * binarySign);
-    }
-
     return {
-      value: (digit + fraction) * binaryExponent,
-      hasFractionPart: foundFraction || foundBinaryExponent,
+      value: digit + fraction,
+      hasFractionPart: foundFraction,
     };
   }
 
   malformedHexLiteral() {
     this.addError(errMessages.malformedNumber, this.input.slice(this.tokenStart, this.index));
     return { value: 0, hasFractionPart: false };
+  }
+
+  // PICO-8 reads a number's digits and dots together, so a second dot makes it malformed, as in 1..2 or 1.."a".
+  malformedWithDots(isDigit: (charCode: number) => boolean) {
+    while ('.' === this.input.charAt(this.index) || isDigit(this.input.charCodeAt(this.index))) {
+      ++this.index;
+    }
+    return this.malformedHexLiteral();
   }
 
   // Decimal numbers are exactly the same in Lua and in JavaScript, because of
@@ -645,6 +621,9 @@ export default class Lexer {
         ++this.index;
       }
     }
+    if (foundFraction && '.' === this.input.charAt(this.index)) {
+      return this.malformedWithDots(isDecDigit);
+    }
 
     return {
       value: parseFloat(this.input.slice(this.tokenStart, this.index)),
@@ -653,7 +632,7 @@ export default class Lexer {
   }
 
   readBinaryLiteral() {
-    this.index += 2; // Skip 0b part
+    const digitStart = this.index += 2; // Skip 0b part
 
     while (isBinaryDigit(this.input.charCodeAt(this.index))) {
       ++this.index;
@@ -668,6 +647,14 @@ export default class Lexer {
       while (isBinaryDigit(this.input.charCodeAt(this.index))) {
         ++this.index;
       }
+      if ('.' === this.input.charAt(this.index)) {
+        return this.malformedWithDots(isBinaryDigit);
+      }
+    }
+
+    // A minimum of one binary digit is required, before or after the dot.
+    if (this.index - digitStart === (foundFraction ? 1 : 0)) {
+      return this.malformedHexLiteral();
     }
 
     return {
@@ -713,9 +700,17 @@ export default class Lexer {
     case '\\': case '"': case '\'':
       return this.input.charAt(this.index++);
 
-    // P8SCII control codes to ignore, see: https://pico-8.fandom.com/wiki/P8SCII
     case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7':
-    case '8': case '9': case '*': case '#': case '-': case '|': case '+': case '^':
+    case '8': case '9': {
+      const digits = /^[0-9]{1,3}/.exec(this.input.slice(this.index, this.index + 3))![0];
+      if (+digits > 255) {
+        this.addError(errMessages.decimalEscapeTooLarge, '\\' + digits);
+      }
+      return this.input.charAt(this.index++);
+    }
+
+    // P8SCII control codes to ignore, see: https://pico-8.fandom.com/wiki/P8SCII
+    case '*': case '#': case '-': case '|': case '+': case '^':
     case 'a': case 'b': case 'v': case 'f':
       return this.input.charAt(this.index++);
     }

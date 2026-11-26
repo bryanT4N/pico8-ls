@@ -24,6 +24,7 @@ export default class Operators {
       case 42: case 47: case 37: case 92: return 10; // * / % \
       case 43: case 45: return 9; // + -
       case 38: return 6; // & (bitwise AND)
+      case 126: return 5; // ~ between two values (bitwise XOR, as ^^)
       case 124: return 4; // | (bitwise OR)
       case 60: case 62: return 3; // < >
       }
@@ -37,7 +38,7 @@ export default class Operators {
         return 3; // <= >=
       case 33: case 61: case 126: return 3; // == ~= !=
       case 111: return 1; // or
-      case 94: return 5; // ^^ (bitwise XOR, pico-8 lua uses the normal bitwise XOR ~ as bitwise NOT)
+      case 94: return 5; // ^^ (bitwise XOR)
       }
     } else if (3 === length) {
       switch (operator) {

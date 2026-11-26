@@ -1,4 +1,4 @@
-import { Expression, Identifier, IndexExpression, Indexer, MemberExpression, TableConstructorExpression, Variable } from '../expressions';
+import { Expression, Identifier, IndexExpression, Indexer, MemberExpression, TableConstructorExpression } from '../expressions';
 import { AnonymousFunctionName, AssignmentStatement, Block, Chunk, ForGenericStatement, ForNumericStatement,
   FunctionDeclaration, GotoStatement, IncludeStatement, isStatementWithBody, LabelStatement, LocalStatement, Statement } from '../statements';
 import { resolveIncludeFile } from '../file-resolver';
@@ -510,13 +510,18 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   // loc: the range of this target's entries.
-  private assign(variable: Variable, value: Expression | undefined, statement: Statement, loc: Bounds, compound: boolean): StatementInfo | undefined {
-    if (variable.type === 'Identifier') {
+  private assign(variable: Expression, value: Expression | undefined, statement: Statement, loc: Bounds, compound: boolean): StatementInfo | undefined {
+    // PICO-8 assigns to nothing when the target is a call or in brackets: (a)+=1 leaves a as it is.
+    if (variable.parens) {
+      return undefined;
+    } else if (variable.type === 'Identifier') {
       return this.assignName(variable, value, statement, loc, compound);
     } else if (variable.type === 'MemberExpression') {
       return this.assignMember(variable, value, statement, loc, compound);
+    } else if (variable.type === 'IndexExpression') {
+      return this.assignIndex(variable);
     }
-    return this.assignIndex(variable);
+    return undefined;
   }
 
   // t[k] = v and t.a[k] = v are about t, as t.k = v is, so that they don't break a run of t's methods.

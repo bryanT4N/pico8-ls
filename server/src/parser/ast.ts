@@ -112,7 +112,7 @@ export default class AST {
     };
   }
 
-  static assignmentStatement(variables: Variable[], operator: string, init: Expression[]): AssignmentStatement {
+  static assignmentStatement(variables: Expression[], operator: string, init: Expression[]): AssignmentStatement {
     return {
       type: 'AssignmentStatement',
       variables,

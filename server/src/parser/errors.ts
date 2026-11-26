@@ -31,6 +31,7 @@ export const errMessages = Object.freeze({
   invalidCodeUnit: 'code unit U+%1 is not allowed in the current encoding mode',
   undefinedVariable: 'undefined variable: %1',
   tooManyLevels: 'too many nested levels (limit is %1) near \'%2\'',
+  endOfLineExpected: '<end of line> expected near \'%1\'',
   unusedLocal: '%1 is defined but not used',
 });
 

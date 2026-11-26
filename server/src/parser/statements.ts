@@ -78,7 +78,7 @@ export type LocalStatement = ASTNode & {
 
 export type AssignmentStatement = ASTNode & {
   type: 'AssignmentStatement',
-  variables: Variable[],
+  variables: Expression[],
   operator: string,
   init: Expression[],
 };

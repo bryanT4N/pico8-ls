@@ -336,3 +336,50 @@ describe('Parser recovery of parameter lists left open', function () {
     });
   }
 });
+
+describe('values as PICO-8 reads them', () => {
+  it('reads ~ between two values as exclusive or, binding as ^^ does', () => {
+    assert.deepStrictEqual(errorsOf(lines('x=6~3', 'y=6 ~ 3', 'z=1~~2', 'w^^=y~z', 'v=1|2~3 u=6&3~1 t=1~1<<2 s=1~1==0')), []);
+  });
+
+  it('reports numbers and escapes that PICO-8 does not read', () => {
+    assert.deepStrictEqual(errorsOf(lines('x=0x1p4', 'printh("ok")')), [ 'main_test_file 2:0 assignment operator expected near \'printh\'' ]);
+    assert.deepStrictEqual(errorsOf('x="\\256"'), [ 'main_test_file 1:2 decimal escape too large near \'\\256\'' ]);
+    assert.deepStrictEqual(errorsOf('x=1..2'), [ 'main_test_file 1:2 malformed number near \'1..2\'' ]);
+    assert.strictEqual(errorsOf(lines('y="b"', 'x=1..y'))[0], 'main_test_file 2:2 malformed number near \'1..\'');
+    assert.strictEqual(errorsOf('x=0b2')[0], 'main_test_file 1:2 malformed number near \'0b\'');
+    assert.deepStrictEqual(errorsOf('x="\\255" y="\\2555" z=1 ..2 w=0x1.8 v=0b1010.1 u=.5 t=1.'), []);
+  });
+
+  it('reports a separator where a table field or the first argument of a call should start', () => {
+    assert.deepStrictEqual(errorsOf('x={,}'), [ 'main_test_file 1:3 <expression> expected near \',\'' ]);
+    assert.deepStrictEqual(errorsOf('x={1,,2}'), [ 'main_test_file 1:5 <expression> expected near \',\'' ]);
+    assert.deepStrictEqual(errorsOf('x={;}'), [ 'main_test_file 1:3 <expression> expected near \';\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f() end', 'f(,1)')), [ 'main_test_file 2:2 <expression> expected near \',\'' ]);
+    assert.deepStrictEqual(errorsOf('f(,)'), [ 'main_test_file 1:2 <expression> expected near \',\'' ]);
+    assert.deepStrictEqual(errorsOf('x={1,2,3,} y={a=1;b=2;}'), []);
+  });
+
+  it('lets ? take the rest of its line, also as a value', () => {
+    assert.deepStrictEqual(errorsOf('?"x" x=1'), [ 'main_test_file 1:5 <end of line> expected near \'x\'' ]);
+    assert.deepStrictEqual(errorsOf('?"a";x=1'), [ 'main_test_file 1:4 <end of line> expected near \';\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('a=1', 'if a then ?"x" end')), [ 'main_test_file 2:15 <end of line> expected near \'end\'' ]);
+    assert.deepStrictEqual(errorsOf('function f() ?"x" end'), [ 'main_test_file 1:18 <end of line> expected near \'end\'' ]);
+    assert.deepStrictEqual(errorsOf('printh(?"a")'), [ 'main_test_file 1:11 <end of line> expected near \')\'' ]);
+    assert.deepStrictEqual(errorsOf('x=?"a" y=1'), [ 'main_test_file 1:7 <end of line> expected near \'y\'' ]);
+    assert.strictEqual(errorsOf(lines('a=1', 'if (a) ?"y" else ?"n"'))[0], 'main_test_file 2:12 <end of line> expected near \'else\'');
+    assert.deepStrictEqual(errorsOf(lines('x=?"a"', 'a=1', 'if (a) ?"yes"', 'while (a) ?"x"', '?"a" -- note', 'x=1 ?"y"')), []);
+  });
+
+  it('takes a compound assignment to one target, which can be a call or a value in brackets', () => {
+    assert.deepStrictEqual(errorsOf(lines('a=1 b=1', 'a,b+=1')), [ 'main_test_file 2:3 \'=\' expected near \'+=\'' ]);
+    assert.deepStrictEqual(errorsOf('local a+=1'), [ 'main_test_file 1:7 unexpected symbol \'+=\' near \'1\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f() end', 'f()=1')), [ 'main_test_file 2:3 unexpected symbol \'=\' near \'1\'' ]);
+    check(lines('t={m=function() end}', 'function f() end', 'f()+=1', 't:m()+=1', 'f"a"+=1', '(a)+=1'), [], [ 't [Table]', '  m() [Method]', 'f() [Function]' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f() end', 'a=1', 'a,f()+=1')), [ 'main_test_file 3:5 unexpected symbol \'+=\' near \'1\'' ]);
+  });
+
+  it('assigns to nothing when a compound assignment\'s target is in brackets, as PICO-8 does', () => {
+    check(lines('t={}', '(t.y)+=1', '(1)+=1', '({})+=1'), [], [ 't [Table]' ]);
+  });
+});

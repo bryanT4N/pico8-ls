@@ -14,7 +14,6 @@ import {
   TableCallExpression,
   TableConstructorExpression,
   VarargLiteral,
-  Variable,
 } from './expressions';
 import ResolvedFile, { FileResolver, RealFileResolver, resolveIncludeFile } from './file-resolver';
 import Lexer from './lexer';
@@ -848,9 +847,8 @@ export default class Parser {
       } while (this.lexer.consume(','));
 
       let operator: string | undefined = undefined;
-      if (isAssignmentOperator(this.token)) {
-        operator = this.token.value as string;
-        this.lexerNext();
+      if (this.lexer.consume('=')) {
+        operator = '=';
 
         do {
           const expression = this.parseExpectedExpression(flowContext);
@@ -885,7 +883,7 @@ export default class Parser {
     let marker: Marker;
     let lvalue, base;
 
-    const targets = [];
+    const targets: Expression[] = [];
 
     const startMarker = this.createLocationMarker();
 
@@ -923,7 +921,7 @@ export default class Parser {
         base = this.parsePrefixExpressionPart(base as Identifier, marker, flowContext);
       }
 
-      targets.push(base);
+      targets.push(base!);
       // PICO-8, as Lua 5.2, counts each target after the first as a level (lparser.c, assignment).
       if (targets.length - 1 + this.levels > MAX_LEVELS) {
         this.tooManyLevels();
@@ -940,11 +938,20 @@ export default class Parser {
       this.lexerNext();
     } while (true);
 
-    if (targets.length === 1 && lvalue === null) {
+    // PICO-8 takes a compound operator, such as +=, after one target of any kind, a call too.
+    const compound = isAssignmentOperator(this.token) && this.token.value !== '=';
+    if (compound && targets.length === 1) {
+      // The brackets are kept because PICO-8 assigns to nothing then: (a)+=1 leaves a as it is.
+      if (lvalue === false) {
+        targets[0].parens = true;
+      }
+    } else if (targets.length === 1 && lvalue === null) {
       this.pushLocation(marker);
       return this.finishNode(AST.callStatement(targets[0]));
     } else if (!lvalue) {
       this.unexpectedToken(this.token);
+    } else if (compound) {
+      errors.raiseErrForToken(this.token, errMessages.expected, '=', this.token.value);
     }
 
     if (!isAssignmentOperator(this.token)) {
@@ -960,25 +967,14 @@ export default class Parser {
     while (this.lexer.consume(','));
 
     this.pushLocation(startMarker);
-    return this.finishNode(AST.assignmentStatement(targets as Variable[], operator, values));
+    return this.finishNode(AST.assignmentStatement(targets, operator, values));
   }
 
   // Special PICO-8 print statement: ? expression '\n'
   parseSpecialPrint(flowContext: FlowContext): CallStatement {
     const startMarker = this.createLocationMarker();
 
-    const args: Expression[] = [];
-    this.lexer.withSignificantNewline(() => {
-      let expression = this.parseExpectedExpression(flowContext);
-      args.push(expression);
-
-      // look for more args
-      while (this.token.type === TokenType.Punctuator && this.token.value === ',') {
-        this.lexerNext();
-        expression = this.parseExpectedExpression(flowContext);
-        args.push(expression);
-      }
-    });
+    const args = this.parsePrintArguments(flowContext);
 
     // Each part uses the same start marker. One instance of it was already
     // pushed above. finishNode will consume the top location on the stack so we
@@ -988,6 +984,20 @@ export default class Parser {
     const callExpression = this.finishNode(AST.callExpression(base, args));
     this.pushLocation(startMarker);
     return this.finishNode(AST.callStatement(callExpression));
+  }
+
+  // PICO-8's ? takes the rest of its line, as a statement or as a value.
+  private parsePrintArguments(flowContext: FlowContext): Expression[] {
+    const args: Expression[] = [];
+    this.lexer.withSignificantNewline(() => {
+      do {
+        args.push(this.parseExpectedExpression(flowContext));
+      } while (this.lexer.consume(','));
+      if (this.token.type !== TokenType.Newline && this.token.type !== TokenType.EOF) {
+        errors.raiseErrForToken(this.token, errMessages.endOfLineExpected, this.token.value);
+      }
+    });
+    return args;
   }
 
   // Special PICO-8 include statement: '#include' filename
@@ -1150,6 +1160,9 @@ export default class Parser {
         }
       } else {
         if (null == (value = this.parseExpression(flowContext))) {
+          if (this.token.type === TokenType.Punctuator && (this.token.value === ',' || this.token.value === ';')) {
+            errors.raiseUnexpectedToken('<expression>', this.token);
+          }
           this.popLocation();
           break;
         }
@@ -1174,7 +1187,7 @@ export default class Parser {
   //     exp ::= (unop exp | primary | prefixexp ) { binop exp }
   //
   //     primary ::= nil | false | true | Number | String | '...'
-  //          | functiondef | tableconstructor
+  //          | functiondef | tableconstructor | '?' explist
   //
   //     prefixexp ::= (Name | '(' exp ')' ) { '[' exp ']'
   //          | '.' Name | ':' Name args | args }
@@ -1369,6 +1382,8 @@ export default class Parser {
         let expression = this.parseExpression(flowContext);
         if (null != expression) {
           expressions.push(expression);
+        } else if (',' === this.token.value as string) {
+          errors.raiseUnexpectedToken('<expression>', this.token);
         }
         while (this.lexer.consume(',')) {
           expression = this.parseExpectedExpression(flowContext);
@@ -1392,9 +1407,9 @@ export default class Parser {
   }
 
   //     primary ::= String | Numeric | nil | true | false
-  //          | functiondef | tableconstructor | '...'
+  //          | functiondef | tableconstructor | '...' | '?' explist
 
-  parsePrimaryExpression(flowContext: FlowContext): Literal | FunctionDeclaration | TableConstructorExpression | null {
+  parsePrimaryExpression(flowContext: FlowContext): Literal | FunctionDeclaration | TableConstructorExpression | CallExpression | null {
     const literals = [ TokenType.StringLiteral, TokenType.NumericLiteral, TokenType.BooleanLiteral, TokenType.NilLiteral, TokenType.VarargLiteral ];
     const value = this.token.value;
     const type = this.token.type;
@@ -1417,6 +1432,11 @@ export default class Parser {
     } else if (this.lexer.consume('{')) {
       this.pushLocation(marker);
       return this.parseTableConstructor(flowContext);
+    } else if (this.lexer.consume('?')) {
+      this.pushLocation(marker);
+      const base = this.finishNode(AST.identifier('?'));
+      this.pushLocation(marker);
+      return this.finishNode(AST.callExpression(base, this.parsePrintArguments(flowContext)));
     }
 
     return null;
@@ -1454,7 +1474,7 @@ function canStartExpression(token: Token): boolean {
   case TokenType.Keyword:
     return token.value === 'not' || token.value === 'function';
   case TokenType.Punctuator:
-    return [ '(', '{', '-', '#', '~', '@', '%', '$' ].includes(token.value as string);
+    return [ '(', '{', '-', '#', '~', '@', '%', '$', '?' ].includes(token.value as string);
   default:
     return false;
   }

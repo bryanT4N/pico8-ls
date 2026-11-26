@@ -83,13 +83,11 @@ describe('Lexer', () => {
 
     it('NumericLiteral', () => {
       // TODO more types of numeric literals
-      const tokens = getLexedTokens('123 45.03 .03 0x34 0x3p1 0x3p-2');
+      const tokens = getLexedTokens('123 45.03 .03 0x34');
       assertNextToken(tokens, TokenType.NumericLiteral, 123);
       assertNextToken(tokens, TokenType.NumericLiteral, 45.03);
       assertNextToken(tokens, TokenType.NumericLiteral, .03);
       assertNextToken(tokens, TokenType.NumericLiteral, 52);
-      assertNextToken(tokens, TokenType.NumericLiteral, 6);
-      assertNextToken(tokens, TokenType.NumericLiteral, 0.75);
       assertNoMoreTokens(tokens);
     });
 
@@ -113,11 +111,14 @@ describe('Lexer', () => {
       assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 malformed number near \'0x.\'' ]);
     });
 
-    it('NumericLiteral - hexadecimal with exponents', () => {
-      const tokens = getLexedTokens('0x3p1 0x3p-2');
-      assertNextToken(tokens, TokenType.NumericLiteral, 6);
-      assertNextToken(tokens, TokenType.NumericLiteral, 0.75);
+    it('NumericLiteral - a hexadecimal number takes no p exponent, as in PICO-8', () => {
+      const { tokens, errors } = lexWithErrors('0x3p1 0x3pQ');
+      assertNextToken(tokens, TokenType.NumericLiteral, 3);
+      assertNextToken(tokens, TokenType.Identifier, 'p1');
+      assertNextToken(tokens, TokenType.NumericLiteral, 3);
+      assertNextToken(tokens, TokenType.Identifier, 'pQ');
       assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors, []);
     });
 
     describe('Punctuators', () => {
@@ -385,12 +386,42 @@ __music__
       assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 malformed number near \'0x\'' ]);
     });
 
-    it('errors on hex number literal with malformed binary exponent', () => {
-      const { tokens, errors } = lexWithErrors('0x3pQ');
-      assertNextToken(tokens, TokenType.NumericLiteral);
-      assertNextToken(tokens, TokenType.Identifier, 'Q');
+    it('errors on a number with a second dot, as PICO-8 reads its digits and dots together', () => {
+      const { tokens, errors } = lexWithErrors('1..2 1.5.2 0x1.8.1 0b1.1.1 1..y');
+      for (let i = 0; i < 5; i++) {
+        assertNextToken(tokens, TokenType.NumericLiteral);
+      }
+      assertNextToken(tokens, TokenType.Identifier, 'y');
       assertNoMoreTokens(tokens);
-      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 malformed number near \'0x3p\'' ]);
+      assert.deepStrictEqual(errors.map(formatLexError), [
+        '1:0 malformed number near \'1..2\'',
+        '1:5 malformed number near \'1.5.2\'',
+        '1:11 malformed number near \'0x1.8.1\'',
+        '1:19 malformed number near \'0b1.1.1\'',
+        '1:27 malformed number near \'1..\'',
+      ]);
+      assert.deepStrictEqual(lexWithErrors('0x..1 0b..1').errors.map(formatLexError), [
+        '1:0 malformed number near \'0x..1\'',
+        '1:6 malformed number near \'0b..1\'',
+      ]);
+    });
+
+    it('errors on 0b with no binary digit after it', () => {
+      const { tokens, errors } = lexWithErrors('0b2');
+      assertNextToken(tokens, TokenType.NumericLiteral);
+      assertNextToken(tokens, TokenType.NumericLiteral, 2);
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 malformed number near \'0b\'' ]);
+      assert.deepStrictEqual(lexWithErrors('0b. 0b.1 0b1.').errors.map(formatLexError), [ '1:0 malformed number near \'0b.\'' ]);
+    });
+
+    it('errors on a decimal escape over 255', () => {
+      const { tokens, errors } = lexWithErrors('"\\256" "\\255" "\\2555"');
+      assertNextToken(tokens, TokenType.StringLiteral);
+      assertNextToken(tokens, TokenType.StringLiteral);
+      assertNextToken(tokens, TokenType.StringLiteral);
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 decimal escape too large near \'\\256\'' ]);
     });
 
     it('skips a lone !', () => {
