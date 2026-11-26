@@ -414,8 +414,9 @@ describe('statements as PICO-8 reads them', () => {
       'if ((f)()) y=1', 'a=1', 'if (a)', 'then x=1 end')), []);
   });
 
-  it('reads an if (c) or while (c) inside a one-line if as needing its then or do when c ends the line, as PICO-8 does', () => {
+  it('reads an if (c) or while (c) inside a one-line if or while as needing its then or do when c ends the line, as PICO-8 does', () => {
     assert.deepStrictEqual(errorsOf(lines('if (b) if (a)', 'x=1')), [ 'main_test_file 1:13 \'then\' expected near \'\\n\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('while (b) if (a)', 'x=1')), [ 'main_test_file 1:16 \'then\' expected near \'\\n\'' ]);
     assert.deepStrictEqual(errorsOf(lines('if (b) while (a)', 'x=1')), [ 'main_test_file 1:16 \'do\' expected near \'\\n\'' ]);
     assert.deepStrictEqual(errorsOf(lines('if (b) x=1 else if (a)', 'y=1')), [ 'main_test_file 1:22 \'then\' expected near \'\\n\'' ]);
     assert.deepStrictEqual(errorsOf(lines('if (b) if (a) else x=2', 'if (b) if (a);', 'if (b) if (a) x=1')), []);
@@ -434,6 +435,20 @@ describe('statements as PICO-8 reads them', () => {
     assert.strictEqual(errorsOf(lines('repeat', 'return 1', 'x=2', 'until true'))[0], 'main_test_file 3:0 \'until\' expected (to close \'repeat\' at line 1) near \'x\'');
     assert.deepStrictEqual(errorsOf(lines('function f(a)', 'if (a) return 1 x=2', 'end')), [ 'main_test_file 2:16 <end of line> expected near \'x\'' ]);
     assert.deepStrictEqual(errorsOf(lines('function f()', '  if a then return end', '  return;', 'end', 'do return end', 'if (a) return', 'x=1')), []);
+  });
+
+  it('reports a second ; after a return where reading stops, as PICO-8 does', () => {
+    assert.strictEqual(errorsOf(lines('function f()', 'return;;', 'end'))[0], 'main_test_file 2:7 \'end\' expected (to close \'function\' at line 1) near \';\'');
+    assert.deepStrictEqual(errorsOf('do return 1; ; end'), [ 'main_test_file 1:13 \'end\' expected (to close \'do\' at line 1) near \';\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f(a)', 'if (a) return;;', 'end')), [ 'main_test_file 2:14 <end of line> expected near \';\'' ]);
+    assert.deepStrictEqual(cartErrors(lines('printh(1)', 'return;;')), [ 'main.p8 2:7 \'<eof>\' expected near \';\'' ]);
+  });
+
+  it('names the block or bracket that a one-line body leaves open at the end of its line, a block as Lua does', () => {
+    assert.strictEqual(errorsOf(lines('a=1', 'if (a) for i=1,3 do', 'x=i', 'end'))[0], 'main_test_file 2:19 \'end\' expected (to close \'for\' at line 2) near \'\\n\'');
+    assert.strictEqual(errorsOf(lines('a=1 b=1', 'if (a) if b then', 'x=1', 'end'))[0], 'main_test_file 2:16 \'end\' expected (to close \'if\' at line 2) near \'\\n\'');
+    assert.strictEqual(errorsOf(lines('t={} a=1', 'if (a) add(t,{', '1})'))[0], 'main_test_file 2:14 \'}\' expected near \'\\n\'');
+    assert.strictEqual(errorsOf(lines('a=1', 'if (a) printh(', '"x")'))[0], 'main_test_file 2:14 \')\' expected near \'\\n\'');
   });
 
   it('reports, in a cart, a return that ends its outermost block, and a goto there past a local to a label at its end', () => {

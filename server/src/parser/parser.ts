@@ -318,7 +318,9 @@ export default class Parser {
 
     const block: Statement[] = [];
 
-    while (!endingFunction(this.token)) {
+    // A newline is a token only in a one-line statement, whose line ends every block in it, as in PICO-8.
+    const ends = (token: Token) => endingFunction(token) || token.type === TokenType.Newline;
+    while (!ends(this.token)) {
       const locationDepth = this.locations.length;
       const levels = this.levels;
 
@@ -346,17 +348,20 @@ export default class Parser {
             }
           }
         } else {
-          // optional semicolon ending the statement
-          this.lexer.consume(';');
-
           // Statements are only added if they are returned, this allows us to
           // ignore some statements, such as EmptyStatement.
           if (statement) {
             block.push(statement);
           }
-          // A return is the last statement of its block: what follows it is for the block's closer to report.
-          if (statement?.type === 'ReturnStatement' && !endingFunction(this.token)) {
-            break;
+          // A return is the last statement of its block, and has taken its own ;: what follows it is for the block's
+          // closer to report.
+          if (statement?.type === 'ReturnStatement') {
+            if (!endingFunction(this.token)) {
+              break;
+            }
+          } else {
+            // optional semicolon ending the statement
+            this.lexer.consume(';');
           }
         }
       } catch (e) {
