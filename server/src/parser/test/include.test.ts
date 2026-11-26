@@ -262,4 +262,28 @@ describe('#include', function () {
     ]);
     assert.deepStrictEqual(parseWith('#include lib.lua', files).errors, []);
   });
+
+  it('reads an #include on the line below a value left to type as an #include', () => {
+    const files = { 'lib.lua': 'function helper() end' };
+    const below = parseWith('x =\n#include lib.lua\ny = 1', files);
+    assert.deepStrictEqual([ below.errors.map(formatError), below.block.body.map(s => s.type) ], [
+      [ 'main_test_file 1:3 <expression> expected near \'#\'' ],
+      [ 'AssignmentStatement', 'IncludeStatement', 'FunctionDeclaration', 'AssignmentStatement' ],
+    ]);
+    const afterOperator = parseWith('x = a +\n#include lib.lua', files);
+    assert.deepStrictEqual([ afterOperator.errors.map(formatError), afterOperator.block.body.map(s => s.type) ], [
+      [ 'main_test_file 1:7 <expression> expected near \'#\'' ],
+      [ 'AssignmentStatement', 'IncludeStatement', 'FunctionDeclaration' ],
+    ]);
+  });
+
+  it('recovers a value left to type in an #included file as in the main file', () => {
+    const typed = parseWith('#include lib.lua\ny = 2', { 'lib.lua': 'x = f(a +\nplayer.x = 3' });
+    assert.deepStrictEqual([ typed.errors.map(formatError), typed.block.body.map(s => s.type + (s.included ? '*' : '')) ], [
+      [ 'lib.lua 1:9 <expression> expected near \'player\'' ],
+      [ 'IncludeStatement', 'AssignmentStatement*', 'AssignmentStatement*', 'AssignmentStatement' ],
+    ]);
+    const header = parseWith('function g()\n  #include lib.lua\nend', { 'lib.lua': 'while f(\n  x = 1\nend' });
+    assert.deepStrictEqual(header.errors.map(formatError), [ 'lib.lua 1:7 \')\' expected (to close \'(\' at line 1) near \'x\'' ]);
+  });
 });

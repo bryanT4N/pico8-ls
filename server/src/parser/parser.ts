@@ -49,8 +49,8 @@ import Operators from './operators';
 // missingAt: where, going by indentation, the block's closer is missing.
 type UnderIndentedClose = { opener: Bounds, word: string, closer: 'end' | 'until', closedAt: number, missingAt: Bounds | null };
 
-// What parsing a simple statement can change, to parse it again. Its flow scope only gains locals and has its
-// deferred gotos reported; a function in it has a flow context of its own.
+// What parsing a simple statement, or the expression in the header of a compound one, can change, to parse it again.
+// Its flow scope only gains locals and has its deferred gotos reported; a function in it has a flow context of its own.
 type ParserSnapshot = {
   lexer: LexerState, errors: number, locations: number, hoisted: Statement[], endBeforeHoisted: CodeLocation | null,
   underIndentedCloses: number, includes: number, includedComments: number, unresolvedIncludes: number,
@@ -133,16 +133,16 @@ export default class Parser {
   private reportedTooManyLevels = false;
   private reportedStop = false;
 
-  // The first tokens of the values in the simple statement being parsed that start on a later line than their
-  // operator, and that could start a statement there too (a name or `(`): the statement is parsed again only when it
-  // fails on one of their lines. Null in a compound statement.
+  // The tokens that start a value, an argument, a field or a key on a later line in the simple statement or header
+  // being parsed, and that could start a statement there too (a name or `(`). Null in a compound statement.
   private continuations: Token[] | null = null;
-  // Where the value is missing in the statement being parsed again.
+  // Where the value is missing in the statement or header being parsed again.
   private stopAt: Token | null = null;
   // The token that already has the error of a missing value, bracket or block closer.
   private reportedNear: Token | null = null;
-  // How many statements have been parsed again, to tell whether one was while a statement around it was parsed.
-  private reparsed = 0;
+  private stops = new Map<string, Token>();
+  private lastStop: Token | null = null;
+  private headerKeyword: Token | null = null;
 
   // eslint-disable-next-line @typescript-eslint/ban-types
   constructor(filename: ResolvedFile, input: string, options: ParserOptions = {}) {
@@ -525,61 +525,114 @@ export default class Parser {
     this.endBeforeHoisted = null;
   }
 
-  // `x =` with `player.x = 3` on the line below reads as `x = player.x` and then fails at `= 3`, which takes the next
-  // statement into this one. So a simple statement that fails on a line where one of its values starts is parsed
-  // again with that value missing, and that line is left for a statement of its own. Code that parses is never
-  // parsed again. A statement in a function value two levels down can hold an #include, so the snapshot holds the
-  // include fields too.
+  // `x =` with `player.x = 3` on the line below reads as `x = player.x` and then fails at the `=` of `= 3`, which takes
+  // the next statement into this one. A parse that fails at an assignment operator, or at a token that only starts a
+  // statement, on a line where one of its values, arguments, fields or keys starts, is done again stopping there: the
+  // value is missing, the brackets still open close there, and the line is left for a statement of its own. A failure
+  // anywhere else is a mistake on that line, reported where it is. Only simple statements and the expressions in the
+  // headers of compound ones are parsed again; a statement in a function value two levels down can hold an #include,
+  // so the snapshot holds the include fields too.
   private parseStatementOrBacktrack(flowContext: FlowContext): Statement | null {
     if (!mayParseAgain(this.token)) {
-      return this.parseStatement(flowContext);
+      const outer = this.continuations;
+      this.continuations = null;
+      try {
+        return this.parseStatement(flowContext);
+      } finally {
+        this.continuations = outer;
+      }
+    }
+    return this.parseAgainIfNeeded(flowContext, () => this.parseStatement(flowContext));
+  }
+
+  // The expression before the do or then of a compound statement, or after its until. stopped: it ended early, at a
+  // line that starts the block, with its error there; a whole header that ends there is missing its do or then. A token
+  // that only starts a statement, first on a line below the keyword and more indented than it, ends it whatever the
+  // indentation of the brackets still open: a block is more indented than its header, and its first line often starts
+  // with local, if or return. A first line that starts with a call still reads as part of the header, as f(b() is valid.
+  private parseHeaderExpression(flowContext: FlowContext, keyword: Token): { expression: Expression, stopped: boolean } {
+    const outerKeyword = this.headerKeyword;
+    this.headerKeyword = keyword;
+    try {
+      const expression = this.parseAgainIfNeeded(flowContext, () => this.parseExpectedExpression(flowContext));
+      const stopped = (this.endsHeader(this.token) && this.token === this.reportedNear)
+        || (this.lastStop !== null && this.isStop(this.token, this.lastStop));
+      return { expression, stopped };
+    } finally {
+      this.headerKeyword = outerKeyword;
+    }
+  }
+
+  private endsHeader(token: Token): boolean {
+    const keyword = this.headerKeyword;
+    return keyword !== null && this.onlyStartsStatement(token)
+      && token.bounds.start.filename.equals(keyword.bounds.start.filename)
+      && token.bounds.start.line > keyword.bounds.start.line
+      && this.isFirstOnLine(token.bounds.start)
+      && this.indentOf(token.bounds.start) > this.indentOf(keyword.bounds.start);
+  }
+
+  private parseAgainIfNeeded<T>(flowContext: FlowContext, parse: () => T): T {
+    const startToken = this.token;
+    const outer = this.continuations;
+    // Parsed again already, while parsing a statement around it: the stop is the same, and trying without it again
+    // would double the work at each level of nesting.
+    const known = this.stops.size > 0 ? this.stops.get(stopKey(startToken)) : undefined;
+    if (known) {
+      return this.parseWithStop(known, outer, parse);
     }
     const start = this.snapshot(flowContext);
-    const reparsedBefore = this.reparsed;
-    const outer = this.continuations;
     const continuations: Token[] = [];
     this.continuations = continuations;
-    let statement: Statement | null = null;
+    let result: T | undefined;
     let thrown: errors.ParseError | null = null;
-    let failedAt: CodeLocation;
     try {
-      statement = this.parseStatement(flowContext);
-      if (this.continuations === null || continuations.length === 0 || canFollowStatement(this.token)) {
-        return statement;
-      }
-      failedAt = this.token.bounds.start;
+      result = parse();
     } catch (e) {
-      if (!errors.isParseError(e) || this.continuations === null || continuations.length === 0) {
+      if (!errors.isParseError(e)) {
         throw e;
       }
       thrown = e;
-      failedAt = e.bounds.start;
     } finally {
       this.continuations = outer;
     }
-
-    // A statement in this one's value that was parsed again keeps its recovery, and this one is left as it is: parsing
-    // it again would parse the inner one twice more, which doubles at each level of nesting.
-    const value = this.reparsed === reparsedBefore
-      ? continuations.find(token => token.bounds.start.line === failedAt.line && token.bounds.start.filename.equals(failedAt.filename))
+    // A parse that ends without failing at a token that only starts a statement is whole: `l =` with `line(w)?"x"` on
+    // the line below is `l = line(w)`, and the print after it is a statement of its own.
+    const endedAt = this.token;
+    const stop = isAssignmentOperator(endedAt) || (thrown !== null && this.onlyStartsStatement(endedAt))
+      ? continuations.find(token => token.bounds.start.line === endedAt.bounds.start.line
+        && token.bounds.start.filename.equals(endedAt.bounds.start.filename))
       : undefined;
-    if (!value) {
+    if (!stop) {
+      this.lastStop = null;
       if (thrown) {
         throw thrown;
       }
-      return statement;
+      return result!;
     }
-
+    this.stops.set(stopKey(startToken), stop);
     this.restore(start, flowContext);
-    this.reparsed++;
+    return this.parseWithStop(stop, outer, parse);
+  }
+
+  private parseWithStop<T>(stop: Token, outer: Token[] | null, parse: () => T): T {
     const outerStop = this.stopAt;
-    this.stopAt = value;
+    this.stopAt = stop;
     this.continuations = null;
     try {
-      return this.parseStatement(flowContext);
+      return parse();
     } finally {
       this.stopAt = outerStop;
       this.continuations = outer;
+      this.lastStop = stop;
+    }
+  }
+
+  private noteLineStart(): void {
+    const token = this.token;
+    if (this.continuations && (token.type === TokenType.Identifier || (token.type === TokenType.Punctuator && token.value === '('))
+        && this.previousToken && token.bounds.start.line > this.previousToken.bounds.end.line && this.isFirstOnLine(token.bounds.start)) {
+      this.continuations.push(token);
     }
   }
 
@@ -628,19 +681,18 @@ export default class Parser {
     scope.deferredGotos = snapshot.deferredGotos;
   }
 
-  // Whether the value after operator is missing. A value that starts on a later line with a token that cannot start
-  // one, or at the end of the file, is missing, and so is the one where a statement parsed again stops; the error
-  // then goes at the end of the operator, where the code is being typed. A bare return is valid, so after one only
-  // the stop counts.
+  // A value that starts on a later line with a token that cannot start one, or at the end of the file, is missing, and
+  // so is the one where a statement parsed again stops; the error then goes at the end of the operator, where the code
+  // is being typed. The line break that ends a one-line if or while ends the value too. A bare return is valid, so
+  // after one only the stop counts.
   private valueMissing(operator: Token, afterReturn = false): boolean {
     const token = this.token;
-    if (token.type !== TokenType.EOF
+    const endsOneLiner = token.type === TokenType.Newline && !afterReturn;
+    if (!endsOneLiner && token.type !== TokenType.EOF
         && (token.bounds.start.line === operator.bounds.end.line || !token.bounds.start.filename.equals(operator.bounds.end.filename))) {
       return false;
     }
-    const stop = this.stopAt !== null && this.stopAt.bounds.start.index === token.bounds.start.index
-      && this.stopAt.bounds.start.filename.equals(token.bounds.start.filename);
-    if (stop || (!afterReturn && !canStartExpression(token, this.lexer.lookahead!))) {
+    if (endsOneLiner || this.isStop(token) || (!afterReturn && !this.canStartExpression(token))) {
       const near = token.type === TokenType.EOF ? '<eof>' : token.value;
       this.report(errors.createErr({ start: operator.bounds.end, end: operator.bounds.end }, errMessages.expectedToken, '<expression>', near), token);
       return true;
@@ -657,10 +709,10 @@ export default class Parser {
   // bracket left open is most likely being typed.
   private closesUnfinished(opener: Token): boolean {
     const token = this.token;
-    if (token.type === TokenType.EOF) {
+    if (token.type === TokenType.EOF || this.isStop(token) || this.endsHeader(token)) {
       return true;
     }
-    return (isStatementOnly(token, this.lexer.lookahead!) || isBlockFollow(token))
+    return (isStatementOnly(token, this.lexer.lookahead!) || this.startsInclude(token) || isBlockFollow(token))
       && token.bounds.start.filename.equals(opener.bounds.start.filename)
       && this.isFirstOnLine(token.bounds.start)
       && this.indentOf(token.bounds.start) <= this.indentOf(opener.bounds.start);
@@ -790,6 +842,28 @@ export default class Parser {
     return i - lineStart;
   }
 
+  private isStop(token: Token, stop = this.stopAt): boolean {
+    return stop !== null && stop.bounds.start.index === token.bounds.start.index
+      && stop.bounds.start.filename.equals(token.bounds.start.filename);
+  }
+
+  // A token that can only start a statement: the line it is on has one.
+  private onlyStartsStatement(token: Token): boolean {
+    return isStatementOnly(token, this.lexer.lookahead!) || this.startsInclude(token)
+      || (token.type === TokenType.Punctuator && (token.value === '?' || token.value === '::'));
+  }
+
+  private canStartExpression(token: Token): boolean {
+    return canStartExpression(token, this.lexer.lookahead!) && !this.startsInclude(token);
+  }
+
+  // PICO-8 reads a line that starts with #include before Lua does, so its # is no length operator.
+  private startsInclude(token: Token): boolean {
+    const lookahead = this.lexer.lookahead!;
+    return token === this.token && token.type === TokenType.Punctuator && token.value === '#'
+      && lookahead.type === TokenType.Identifier && lookahead.value === 'include' && this.isFirstOnLine(token.bounds.start);
+  }
+
   private isFirstOnLine(location: CodeLocation): boolean {
     return this.indentOf(location) === location.column;
   }
@@ -802,9 +876,6 @@ export default class Parser {
 
   parseStatement(flowContext: FlowContext): Statement | null {
     this.markLocation();
-    if (!mayParseAgain(this.token)) {
-      this.continuations = null;
-    }
 
     if (this.token.type === TokenType.Punctuator) {
       if (this.lexer.consume('::')) {
@@ -911,13 +982,16 @@ export default class Parser {
 
   parseWhileStatement(flowContext: FlowContext): WhileStatement {
     const opener = this.locations[this.locations.length - 1].loc;
+    const keyword = this.previousToken;
     let body: Block | undefined;
     let truncatedEnd: CodeLocation | null = null;
 
     const canBeOneLiner = this.lexer.token?.value === '(';
-    const condition = this.parseExpectedExpression(flowContext);
+    const { expression: condition, stopped } = this.parseHeaderExpression(flowContext, keyword);
 
-    if (this.lexer.consume('do')) {
+    // PICO-8 code mostly puts a condition in parentheses before a one-line while, so one that stopped at a line below
+    // takes that line as its statement.
+    if (this.lexer.consume('do') || (stopped && !canBeOneLiner)) {
       // regular while statement with `do` ... `end`
       // (we already consumed the `do`)
       const headerEnd = this.previousToken.bounds.end;
@@ -955,7 +1029,7 @@ export default class Parser {
     let condition: Expression;
     if (truncatedEnd === null) {
       flowContext.raiseDeferredErrors();
-      condition = this.parseExpectedExpression(flowContext);
+      condition = this.parseHeaderExpression(flowContext, this.previousToken).expression;
     } else {
       condition = AST.literal(TokenType.NilLiteral, null, 'nil');
     }
@@ -990,6 +1064,7 @@ export default class Parser {
 
   parseIfStatement(flowContext: FlowContext): IfStatement {
     const opener = this.locations[this.locations.length - 1].loc;
+    const keyword = this.previousToken;
     const clauses: GeneralIfClause[] = [];
     let condition: Expression;
     let body;
@@ -1001,9 +1076,12 @@ export default class Parser {
 
     const canBeOneLiner = this.lexer.token?.value === '(';
 
-    condition = this.parseExpectedExpression(flowContext);
+    const header = this.parseHeaderExpression(flowContext, keyword);
+    condition = header.expression;
 
-    if (!this.lexer.consume('then') && !this.lexer.consume('do')) {
+    // PICO-8 code mostly puts a condition in parentheses before a one-line if, so one that stopped at a line below
+    // takes that line as its statement.
+    if (!(header.stopped && !canBeOneLiner) && !this.lexer.consume('then') && !this.lexer.consume('do')) {
       if (canBeOneLiner) {
 
         // Tell formatter not to use outer parens on the condition expression, since they'll
@@ -1068,9 +1146,10 @@ export default class Parser {
 
     while (this.lexer.consume('elseif')) {
       this.pushLocation(marker);
-      condition = this.parseExpectedExpression(flowContext);
+      const elseifHeader = this.parseHeaderExpression(flowContext, this.previousToken);
+      condition = elseifHeader.expression;
 
-      if (!this.lexer.consume('then') && !this.lexer.consume('do')) {
+      if (!elseifHeader.stopped && !this.lexer.consume('then') && !this.lexer.consume('do')) {
         this.errors.push(this.atEndOfPreviousLine(errors.createErrForToken(this.token, errMessages.expected, 'then', this.token.value)));
       }
 
@@ -1107,6 +1186,7 @@ export default class Parser {
 
   parseForStatement(flowContext: FlowContext): ForGenericStatement | ForNumericStatement {
     const opener = this.locations[this.locations.length - 1].loc;
+    const keyword = this.previousToken;
     let variable = this.parseIdentifier();
     let body;
 
@@ -1117,11 +1197,18 @@ export default class Parser {
       const start = this.parseExpectedExpression(flowContext);
       this.lexer.expect(',');
       // End expression
-      const end = this.parseExpectedExpression(flowContext);
+      let header = this.parseHeaderExpression(flowContext, keyword);
+      const end = header.expression;
       // Optional step expression
-      const step = this.lexer.consume(',') ? this.parseExpectedExpression(flowContext) : null;
+      let step: Expression | null = null;
+      if (!header.stopped && this.lexer.consume(',')) {
+        header = this.parseHeaderExpression(flowContext, keyword);
+        step = header.expression;
+      }
 
-      this.lexer.expect('do');
+      if (!header.stopped) {
+        this.lexer.expect('do');
+      }
       const headerEnd = this.previousToken.bounds.end;
       flowContext.pushScope(true);
       body = this.parseBlock(flowContext);
@@ -1141,12 +1228,16 @@ export default class Parser {
       const iterators: Expression[] = [];
 
       // One or more expressions in the explist.
+      let stopped = false;
       do {
-        const expression = this.parseExpectedExpression(flowContext);
-        iterators.push(expression);
-      } while (this.lexer.consume(','));
+        const header = this.parseHeaderExpression(flowContext, keyword);
+        iterators.push(header.expression);
+        stopped = header.stopped;
+      } while (!stopped && this.lexer.consume(','));
 
-      this.lexer.expect('do');
+      if (!stopped) {
+        this.lexer.expect('do');
+      }
       const headerEnd = this.previousToken.bounds.end;
       flowContext.pushScope(true);
       body = this.parseBlock(flowContext);
@@ -1431,7 +1522,14 @@ export default class Parser {
     }
 
     const headerEnd = this.previousToken.bounds.end;
-    const body = this.parseBlock(flowContext);
+    const outerKeyword = this.headerKeyword;
+    this.headerKeyword = null;
+    let body: Block;
+    try {
+      body = this.parseBlock(flowContext);
+    } finally {
+      this.headerKeyword = outerKeyword;
+    }
     flowContext.popScope();
     const truncatedEnd = this.expectBlockEnd('end', opener, 'function', body, headerEnd);
 
@@ -1479,6 +1577,7 @@ export default class Parser {
       if (this.closesUnfinished(opener)) {
         break;
       }
+      this.noteLineStart();
       this.markLocation();
       if (this.token.type === TokenType.Punctuator && this.lexer.consume('[')) {
         key = this.parseExpectedExpression(flowContext);
@@ -1555,7 +1654,7 @@ export default class Parser {
   // bare `return`). Lua 5.2 looks for `)`, `}` or the end of the block first
   // and enters no level, so a level with no expression in it is not reported.
   parseSubExpression(minPrecedence: number, flowContext: FlowContext): Expression | null {
-    if (++this.levels > MAX_LEVELS && canStartExpression(this.token, this.lexer.lookahead!)) {
+    if (++this.levels > MAX_LEVELS && this.canStartExpression(this.token)) {
       this.tooManyLevels();
       if (this.levels > MAX_PARSED_LEVELS) {
         this.markLocation();
@@ -1720,6 +1819,7 @@ export default class Parser {
           this.popLocation();
           return base;
         }
+        this.noteLineStart();
         expression = this.parseExpectedExpression(flowContext);
         this.expectCloser(']', opener);
         return this.finishNode(AST.indexExpression(base, expression));
@@ -1764,7 +1864,7 @@ export default class Parser {
       this.lexerNext();
       base = this.parseExpectedExpression(flowContext);
       const after: Token = this.token;
-      if (after.type === TokenType.EOF) {
+      if (after.type === TokenType.EOF || this.isStop(after) || this.endsHeader(after)) {
         this.expectCloser(')', opener);
       } else {
         this.lexer.expect(')');
@@ -1798,6 +1898,7 @@ export default class Parser {
 
         // List of expressions
         const expressions = [];
+        this.noteLineStart();
         let expression = this.closesUnfinished(opener) ? null : this.parseExpression(flowContext);
         if (null != expression) {
           expressions.push(expression);
@@ -1806,6 +1907,7 @@ export default class Parser {
           if (this.closesUnfinished(opener)) {
             break;
           }
+          this.noteLineStart();
           expression = this.parseExpectedExpression(flowContext);
           expressions.push(expression);
         }
@@ -1895,18 +1997,13 @@ function canStartStatement(token: Token): boolean {
   }
 }
 
-// The start of a simple statement (an assignment, a call, a local or a return), the only kind parsed again: parsing a
-// compound one again would take its blocks and their goto scopes along. A local function turns out to be compound at
-// its `function`.
+// The start of a simple statement (an assignment, a call, a local or a return): parsing a compound one again would take
+// its blocks and their goto scopes along, so only its headers are parsed again. A local function turns out to be
+// compound at its `function`.
 function mayParseAgain(token: Token): boolean {
   return token.type === TokenType.Identifier
     || (token.type === TokenType.Punctuator && token.value === '(')
     || (token.type === TokenType.Keyword && (token.value === 'local' || token.value === 'return'));
-}
-
-// A statement that stops anywhere else has failed.
-function canFollowStatement(token: Token): boolean {
-  return canStartStatement(token) || isBlockFollow(token) || token.type === TokenType.Newline;
 }
 
 function isStatementOnly(token: Token, lookahead: Token): boolean {
@@ -1936,6 +2033,10 @@ function canStartExpression(token: Token, lookahead: Token): boolean {
   default:
     return false;
   }
+}
+
+function stopKey(token: Token): string {
+  return `${token.bounds.start.filename.path}:${token.bounds.start.index}`;
 }
 
 function isBlockStatement(statement: Statement): boolean {

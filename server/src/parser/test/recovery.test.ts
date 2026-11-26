@@ -390,12 +390,11 @@ describe('Parser recovery', () => {
       check(lines('x =', 'foo()', 'bar()'), [], [ 'x [Variable]' ]);
       check(lines('function f()', '  return', '  foo()', 'end'), [], [ 'f() [Function]' ]);
       check(lines('local a =', '(b)()'), [], [ 'a [Variable]' ]);
+      check(lines('l =', 'line(w)?"x"'), [], [ 'l [Variable]' ]);
     });
 
     it('parses again only when the statement fails on the line where the value starts', () => {
       check(lines('x = a +', '  b', ')'), [ 'main_test_file 3:0 unexpected symbol \')\' near \'<eof>\'' ], [ 'x [Variable]' ]);
-      check(lines('if a and', 'player.x = 3', 'end'),
-        [ 'main_test_file 2:9 \'then\' expected near \'=\'', 'main_test_file 3:0 unexpected keyword \'end\' near \'<eof>\'' ], []);
     });
 
     it('keeps what came before a statement parsed again, once', () => {
@@ -415,8 +414,58 @@ describe('Parser recovery', () => {
       assert.deepStrictEqual(chunk.comments!.map(c => c.value), [ ' todo' ]);
     });
 
-    it('leaves a one-line if as it is', () => {
-      check(lines('if (c) x =', 'y = 2'), [ 'main_test_file 1:10 <expression> expected near \'\\n\'' ], [ 'y [Variable]' ]);
+    it('keeps a statement whose value is missing at the end of a one-line if or while', () => {
+      check(lines('if (c) x =', 'y = 2'), [ 'main_test_file 1:10 <expression> expected near \'\\n\'' ], [ 'x [Variable]', 'y [Variable]' ]);
+      check(lines('while (c) x =', 'y = 2'), [ 'main_test_file 1:13 <expression> expected near \'\\n\'' ], [ 'x [Variable]', 'y [Variable]' ]);
+      check(lines('function f()', '  if (c) x =', '  player.x = 3', 'end'), [ 'main_test_file 2:12 <expression> expected near \'\\n\'' ],
+        [ 'f() [Function]', 'x [Variable]', 'player [Table]', '  x [Field]' ]);
+    });
+
+    it('stops a value left to type in the header of an if, a while, a for or an until at the line below', () => {
+      check(lines('if a and', 'player.x = 3', 'end'), [ 'main_test_file 1:8 <expression> expected near \'player\'' ], [ 'player [Table]', '  x [Field]' ]);
+      check(lines('while a +', 'player.x = 3', 'end'), [ 'main_test_file 1:9 <expression> expected near \'player\'' ], [ 'player [Table]', '  x [Field]' ]);
+      check(lines('for i = 1, n +', 'player.x = 3', 'end'), [ 'main_test_file 1:14 <expression> expected near \'player\'' ], [ 'player [Table]', '  x [Field]' ]);
+      check(lines('repeat', '  y = 1', 'until a +', 'player.x = 3'), [ 'main_test_file 3:9 <expression> expected near \'player\'' ],
+        [ 'y [Variable]', 'player [Table]', '  x [Field]' ]);
+      check(lines('if a and', '  local y = 1', 'end'), [ 'main_test_file 1:8 <expression> expected near \'local\'' ], [ 'y [Variable]' ]);
+      check(lines('while a +', '  if c then x = 1 end', 'end'), [ 'main_test_file 1:9 <expression> expected near \'if\'' ], [ 'x [Variable]' ]);
+      check(lines('for i = 1, n +', '  for j = 1, 2 do x = 1 end', 'end'), [ 'main_test_file 1:14 <expression> expected near \'for\'' ], [ 'x [Variable]' ]);
+      check(lines('while a +', '  return', 'end'), [ 'main_test_file 1:9 <expression> expected near \'return\'' ], []);
+    });
+
+    it('takes the line below as the statement of a one-line if or while whose condition stopped there', () => {
+      check(lines('if (a and', 'b = 1'), [ 'main_test_file 1:9 <expression> expected near \'b\'' ], [ 'b [Variable]' ]);
+      check(lines('while (a +', 'b = 1'), [ 'main_test_file 1:10 <expression> expected near \'b\'' ], [ 'b [Variable]' ]);
+    });
+
+    it('reports as the first error a do or then missing above a block that starts with a statement keyword', () => {
+      const firstError = (code: string) => formatError(parse(code).errors[0]);
+      assert.deepStrictEqual([
+        firstError(lines('while a', '  local y = 1', 'end')),
+        firstError(lines('if a', '  return', 'end')),
+        firstError(lines('for i = 1, n', '  for j = 1, 2 do x = 1 end', 'end')),
+      ], [
+        'main_test_file 1:7 \'do\' expected near \'local\'',
+        'main_test_file 1:4 \'then\' expected near \'return\'',
+        'main_test_file 1:12 \'do\' expected near \'for\'',
+      ]);
+    });
+
+    it('closes the brackets still open where the line below starts a statement', () => {
+      check(lines('x = f(a +', 'player.x = 3'), [ 'main_test_file 1:9 <expression> expected near \'player\'' ], [ 'x [Variable]', 'player [Table]', '  x [Field]' ]);
+      check(lines('x = {a +', 'player.x = 3'), [ 'main_test_file 1:8 <expression> expected near \'player\'' ], [ 'x [Array]', 'player [Table]', '  x [Field]' ]);
+      check(lines('x = (a +', 'player.x = 3'), [ 'main_test_file 1:8 <expression> expected near \'player\'' ], [ 'x [Variable]', 'player [Table]', '  x [Field]' ]);
+      check(lines('foo(', 'x = 1'), [ 'main_test_file 1:3 \')\' expected (to close \'(\' at line 1) near \'x\'' ], [ 'x [Variable]' ]);
+      check(lines('t = {', 'a.b = 1'), [ 'main_test_file 1:4 \'}\' expected (to close \'{\' at line 1) near \'a\'' ], [ 't [Table]', 'a [Table]', '  b [Field]' ]);
+      check(lines('x = a[', 'b.c = 1'), [ 'main_test_file 1:5 \']\' expected (to close \'[\' at line 1) near \'b\'' ], [ 'x [Variable]', 'b [Table]', '  c [Field]' ]);
+      const printed = check(lines('x = f(j *', 'line(w)?"x"'), [ 'main_test_file 1:9 <expression> expected near \'line\'' ], [ 'x [Variable]' ]);
+      assert.deepStrictEqual(printed.block.body.map(s => s.type), [ 'AssignmentStatement', 'CallStatement', 'CallStatement' ]);
+    });
+
+    it('reports a mistake on the line below at the mistake alone when that line is no new statement', () => {
+      check(lines('x =', 'foo(a b)'), [ 'main_test_file 2:6 \')\' expected near \'b\'' ], []);
+      check(lines('x =', 'foo() ]'), [ 'main_test_file 2:6 unexpected symbol \']\' near \'<eof>\'' ], [ 'x [Variable]' ]);
+      check(lines('x = f(', '  a b', ')'), [ 'main_test_file 2:4 \')\' expected near \'b\'', 'main_test_file 3:0 unexpected symbol \')\' near \'<eof>\'' ], []);
     });
 
     it('reports the missing value in a cart at its line', () => {
@@ -424,11 +473,12 @@ describe('Parser recovery', () => {
         [ 'main_test_file 4:3 <expression> expected near \'player\'' ], [ 'x [Variable]', 'player [Table]', '  x [Field]' ]);
     });
 
-    // The outer statement gives what it gave before any statement was parsed again: the error at 5:4, no w.
-    it('parses again the inner of two unfinished statements, one in the other\'s function value, and not the outer', () => {
+    it('parses again both of two unfinished statements, one in the other\'s function value', () => {
       check(lines('v = g(function()', '  x =', '  y.z = 2', 'end) +', 'w.x = 3'),
-        [ 'main_test_file 2:5 <expression> expected near \'y\'', 'main_test_file 5:4 unexpected symbol \'=\' near \'3\'' ],
-        [ 'v [Variable]', '  <anonymous function>() [Function]', 'x [Variable]', 'y [Table]', '  z [Field]' ]);
+        [ 'main_test_file 2:5 <expression> expected near \'y\'', 'main_test_file 4:6 <expression> expected near \'w\'' ],
+        [ 'v [Variable]', '  <anonymous function>() [Function]', 'x [Variable]', 'y [Table]', '  z [Field]', 'w [Table]', '  x [Field]' ]);
+      check(lines('x = g(function() if a then end end) +', 'player.x = 3'), [ 'main_test_file 1:37 <expression> expected near \'player\'' ],
+        [ 'x [Variable]', '  <anonymous function>() [Function]', 'player [Table]', '  x [Field]' ]);
     });
   });
 
@@ -484,6 +534,27 @@ describe('Parser recovery', () => {
       check('x = (a', [ 'main_test_file 1:5 \')\' expected near \'<eof>\'' ], [ 'x [Variable]' ]);
       check(lines('t = {', '  a = 1,'), [ 'main_test_file 2:7 \'}\' expected near \'<eof>\'' ], [ 't [Table]', '  a [Field]' ]);
       check('x = a[', [ 'main_test_file 1:5 \']\' expected near \'<eof>\'' ], [ 'x [Variable]' ]);
+    });
+
+    it('closes a bracket left open in the header of a while, a for, an if or an elseif at the line below, which starts the block', () => {
+      check(lines('function g()', '  while f(', '    x = 1', '  end', 'end'),
+        [ 'main_test_file 2:9 \')\' expected (to close \'(\' at line 2) near \'x\'' ], [ 'g() [Function]', 'x [Variable]' ]);
+      check(lines('function g()', '  for k in pairs(', '    x = 1', '  end', 'end'),
+        [ 'main_test_file 2:16 \')\' expected (to close \'(\' at line 2) near \'x\'' ], [ 'g() [Function]', 'x [Variable]' ]);
+      check(lines('function g()', '  if h(a,', '    x = 1', '  end', 'end'),
+        [ 'main_test_file 2:6 \')\' expected (to close \'(\' at line 2) near \'x\'' ], [ 'g() [Function]', 'x [Variable]' ]);
+      check(lines('if a then', '  y = 1', 'elseif h(a,', '  x = 1', 'end'),
+        [ 'main_test_file 3:8 \')\' expected (to close \'(\' at line 3) near \'x\'' ], [ 'y [Variable]', 'x [Variable]' ]);
+      check(lines('pico-8 cartridge // http://www.pico-8.com', 'version 42', '__lua__', 'function g()', '  while f(', '    x = 1', '  end', 'end', '__gfx__', ''),
+        [ 'main_test_file 5:9 \')\' expected (to close \'(\' at line 5) near \'x\'' ], [ 'g() [Function]', 'x [Variable]' ]);
+      check(lines('function g()', '  while f(', '    local y = 1', '  end', 'end'),
+        [ 'main_test_file 2:9 \')\' expected (to close \'(\' at line 2) near \'local\'' ], [ 'g() [Function]', '  y [Variable]' ]);
+      check(lines('function g()', '  for k in pairs(', '    if k then x = 1 end', '  end', 'end'),
+        [ 'main_test_file 2:16 \')\' expected (to close \'(\' at line 2) near \'if\'' ], [ 'g() [Function]', 'x [Variable]' ]);
+      check(lines('function g()', '  if h(a,', '    for i = 1, 2 do x = 1 end', '  end', 'end'),
+        [ 'main_test_file 2:6 \')\' expected (to close \'(\' at line 2) near \'for\'' ], [ 'g() [Function]', 'x [Variable]' ]);
+      check(lines('if a then', '  y = 1', 'elseif h(a,', '  return', 'end'),
+        [ 'main_test_file 3:8 \')\' expected (to close \'(\' at line 3) near \'return\'' ], [ 'y [Variable]' ]);
     });
 
     it('closes an index left open before its key', () => {
