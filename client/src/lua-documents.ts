@@ -60,9 +60,7 @@ export function diagnosticsFilter(kept: Set<string>): DiagnosticsFilter {
       next(uri, hidden(uri) ? [] : diagnostics);
     },
     refresh: client => {
-      for (const { uri, diagnostics } of received.values()) {
-        client.diagnostics?.set(uri, hidden(uri) ? [] : diagnostics);
-      }
+      client.diagnostics?.set([ ...received.values() ].map(({ uri, diagnostics }) => [ uri, hidden(uri) ? [] : diagnostics ]));
     },
   };
 }

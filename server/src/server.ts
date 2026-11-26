@@ -207,7 +207,8 @@ function scanWorkspaceFolder(workspaceFolder: WorkspaceFolder): Promise<void> {
   return scanFolder(url.fileURLToPath(workspaceFolder.uri));
 }
 
-async function scanFolder(folderPath: string, onlyNew = false): Promise<void> {
+async function scanFolder(folderPath: string, onlyNew = false, alsoPublish: string[] = []): Promise<void> {
+  let published = false;
   try {
     // A folder inside a workspace folder is listed as the scan of the outermost one that reaches it would list it.
     const from = workspaceRoots.filter(root => scansFolder(folderPath, [ root ]))
@@ -236,10 +237,14 @@ async function scanFolder(folderPath: string, onlyNew = false): Promise<void> {
     }
     // A scan of no file would send every file's diagnostics again.
     if (stillMembers.size > 0) {
-      publish(index.scan([ ...stillMembers ]));
+      publish([ ...alsoPublish, ...index.scan([ ...stillMembers ]) ]);
+      published = true;
     }
   } finally {
     // Also after a scan that failed, so that whatever waits for the end of the scan is not left waiting.
+    if (!published) {
+      publish(alsoPublish);
+    }
     notifyCartFiles();
   }
 }
@@ -516,14 +521,18 @@ connection.onDidChangeWatchedFiles(change => {
       uris.push(...index.uris(), ...left);
     }
   }
-  publish(uris);
+  // The scan of a new cart's folder sends the problems of every file when it parses any, so this batch's go with it,
+  // not before.
+  if (newCarts.length === 0) {
+    publish(uris);
+  }
   // A new cart brings in the .lua files of its folder and the folders below, which the scan left out while no cart was
   // near them.
-  for (const cart of newCarts) {
-    void scanFolder(path.dirname(cart), true).catch(e => {
+  newCarts.forEach((cart, i) => {
+    void scanFolder(path.dirname(cart), true, i === 0 ? uris : []).catch(e => {
       console.error('Error scanning the folder of ' + cart, e);
     });
-  }
+  });
   for (const folder of newFolders) {
     void scanFolder(folder).catch(e => {
       console.error('Error scanning ' + folder, e);
