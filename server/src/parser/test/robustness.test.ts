@@ -1,15 +1,43 @@
 import * as assert from 'assert';
 import { performance } from 'perf_hooks';
+import Lexer from '../lexer';
 import Parser from '../parser';
+import { Token, TokenType } from '../tokens';
 import { getTestFileContents, parseManyInChild, TEST_CARTS, testFile } from './test-utils';
 
 const SAMPLES = 40;
 const EDIT_SAMPLES = 20;
 const MAX_MS = 2000;
 
+// The tokens of the code that match, by line from 0: an = or a } in a comment or a string is none.
+function tokensOf(text: string, matches: (token: Token) => boolean): Map<number, Token[]> {
+  const result = new Map<number, Token[]>();
+  const lexer = new Lexer(text, testFile());
+  do {
+    lexer.next();
+    if (lexer.token!.type !== TokenType.EOF && matches(lexer.token!)) {
+      const line = lexer.token!.bounds.start.line - 1;
+      const list = result.get(line) ?? [];
+      list.push(lexer.token!);
+      result.set(line, list);
+    }
+  } while (lexer.token!.type !== TokenType.EOF);
+  return result;
+}
+
+function isAssignment(token: Token): boolean {
+  return token.type === TokenType.Punctuator &&
+    typeof token.value === 'string' && token.value.endsWith('=') &&
+    token.value !== '==' && token.value !== '~=' && token.value !== '!=' && token.value !== '<=' && token.value !== '>=';
+}
+
+function isClosingBrace(token: Token): boolean {
+  return token.type === TokenType.Punctuator && token.value === '}';
+}
+
 // Each version changes one code line, sampled from those edit applies to, as code is changed while it is typed. In a
 // .p8, only the __lua__ section is code.
-function editedVersions(name: string, text: string, count: number, edit: (line: string) => string | undefined): string[] {
+function editedVersions(name: string, text: string, count: number, edit: (line: string, index: number) => string | undefined): string[] {
   const lines = text.split('\n');
   let first = 0;
   let last = lines.length;
@@ -20,7 +48,7 @@ function editedVersions(name: string, text: string, count: number, edit: (line: 
   }
   const edits = new Map<number, string>();
   for (let i = first; i < last; i++) {
-    const edited = edit(lines[i].replace(/\r$/, ''));
+    const edited = edit(lines[i].replace(/\r$/, ''), i);
     if (edited !== undefined) {
       edits.set(i, edited);
     }
@@ -39,15 +67,36 @@ function editedVersions(name: string, text: string, count: number, edit: (line: 
 const cutInHalf = (line: string) => line.trim().length > 1 ? line.slice(0, Math.ceil(line.length / 2)) : undefined;
 
 // x = 1 becomes x =, with the value still to be typed; += and the like too.
-function cutAfterAssignment(line: string): string | undefined {
-  const match = /[^=~<>!]=(?!=)/.exec(line);
-  return match ? line.slice(0, match.index + 2) : undefined;
+function cutAfterAssignment(text: string): (line: string, index: number) => string | undefined {
+  const byLine = tokensOf(text, isAssignment);
+  return (line, index) => {
+    const tokens = byLine.get(index);
+    if (!tokens || tokens.length === 0) {
+      return undefined;
+    }
+    return line.slice(0, tokens[0].bounds.end.column);
+  };
 }
 
 // A table being typed, before its } is.
-function deleteLastBrace(line: string): string | undefined {
-  const i = line.lastIndexOf('}');
-  return i === -1 ? undefined : line.slice(0, i) + line.slice(i + 1);
+function deleteLastBrace(text: string): (line: string, index: number) => string | undefined {
+  const byLine = tokensOf(text, isClosingBrace);
+  return (line, index) => {
+    const tokens = byLine.get(index);
+    if (!tokens || tokens.length === 0) {
+      return undefined;
+    }
+    const col = tokens[tokens.length - 1].bounds.start.column;
+    return line.slice(0, col) + line.slice(col + 1);
+  };
+}
+
+function bracesIn(text: string): number {
+  let count = 0;
+  for (const tokens of tokensOf(text, isClosingBrace).values()) {
+    count += tokens.length;
+  }
+  return count;
 }
 
 describe('robustness on half-typed lines', function () {
@@ -56,10 +105,12 @@ describe('robustness on half-typed lines', function () {
   for (const name of TEST_CARTS) {
     it(`parses ${name} with sampled lines cut in half or after an =, or missing a }`, () => {
       const text = getTestFileContents(name);
+      const withoutBrace = editedVersions(name, text, EDIT_SAMPLES, deleteLastBrace(text));
+      assert.deepStrictEqual(withoutBrace.map(bracesIn), withoutBrace.map(() => bracesIn(text) - 1));
       const versions = [
         ...editedVersions(name, text, SAMPLES, cutInHalf),
-        ...editedVersions(name, text, EDIT_SAMPLES, cutAfterAssignment),
-        ...editedVersions(name, text, EDIT_SAMPLES, deleteLastBrace),
+        ...editedVersions(name, text, EDIT_SAMPLES, cutAfterAssignment(text)),
+        ...withoutBrace,
       ];
       const results = parseManyInChild(versions.map(code => ({ code })), 60000);
       results.forEach((r, i) => {

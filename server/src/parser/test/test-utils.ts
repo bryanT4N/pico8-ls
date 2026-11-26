@@ -41,9 +41,13 @@ export function lexWithErrors(input: string): { tokens: Token[], errors: ParseEr
 
   const tokens: Token[] = [];
 
+  // Every token but the last takes at least one character, so more would mean the lexer stopped moving.
   do {
     lexer.next();
     tokens.push(lexer.token!);
+    if (tokens.length > input.length + 1) {
+      fail(`the lexer does not reach the end of ${JSON.stringify(input)}`);
+    }
   } while (lexer.token!.type !== TokenType.EOF);
 
   return { tokens, errors: lexer.errors, comments: lexer.comments };
@@ -120,7 +124,6 @@ export type ChildParseResult = {
   statements: string[],
   outline: string[],
   invalid: string[],
-  // How many queries ran, analyze among them.
   queries: number,
   // Hover and signature help calls that returned, whatever they gave: on some files signature help never finds a call.
   hovers: number,

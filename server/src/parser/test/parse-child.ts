@@ -5,7 +5,7 @@ import Parser from '../parser';
 import { analyze } from '../analysis/binder';
 import { Analysis } from '../analysis/model';
 import { definitionsAt, membersAt, referenceAt, referencesOf, visibleAt, warningsOf } from '../analysis/queries';
-import { outlineFor, CodeSymbol } from '../symbols';
+import { outlineFor, CodeSymbol, CodeSymbolType } from '../symbols';
 import { Chunk } from '../statements';
 import { codeLocationToString } from '../types';
 import { completionItems, completionRequestAt } from '../../completion';
@@ -19,7 +19,7 @@ const PLACES = 25;
 
 function collectInvalid(syms: CodeSymbol[], mainFile: ResolvedFile): string[] {
   const invalid: string[] = [];
-  function walk(list: CodeSymbol[]) {
+  function walk(list: CodeSymbol[], block?: CodeSymbol) {
     for (const s of list) {
       if (
         s.loc.start.index > s.loc.end.index ||
@@ -28,11 +28,13 @@ function collectInvalid(syms: CodeSymbol[], mainFile: ResolvedFile): string[] {
         !mainFile.equals(s.loc.start.filename) ||
         !mainFile.equals(s.loc.end.filename) ||
         !mainFile.equals(s.selectionLoc.start.filename) ||
-        !mainFile.equals(s.selectionLoc.end.filename)
+        !mainFile.equals(s.selectionLoc.end.filename) ||
+        s.name === '' ||
+        (block !== undefined && (s.loc.start.index < block.loc.start.index || s.loc.end.index > block.loc.end.index))
       ) {
         invalid.push(s.name);
       }
-      walk(s.children);
+      walk(s.children, s.type === CodeSymbolType.Block ? s : undefined);
     }
   }
   walk(syms);
@@ -107,7 +109,6 @@ function parseJob(job: ChildParseJob): ChildParseResult {
   const counts: Counts = { queries: 0, hovers: 0, signatureHelps: 0, symbols: 0 };
   try {
     const analysis = analyze(chunk);
-    counts.queries++;
     symbols = outlineFor(analysis, mainFile);
     allOptions = outlineFor(analysis, mainFile, ALL_OUTLINE_OPTIONS, job.code);
     runQueries(analysis, mainFile, job.code, counts);
