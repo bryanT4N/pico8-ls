@@ -46,7 +46,8 @@ import * as path from 'path';
 import { ASTNode, Bounds, CodeLocation, codeLocationsEqual } from './types';
 import Operators from './operators';
 
-type UnderIndentedClose = { opener: Bounds, word: string, closer: 'end' | 'until', closedAt: number };
+// missingAt: where, going by indentation, the block's closer is missing.
+type UnderIndentedClose = { opener: Bounds, word: string, closer: 'end' | 'until', closedAt: number, missingAt: Bounds | null };
 
 // What parsing a simple statement can change, to parse it again. Its flow scope only gains locals and has its
 // deferred gotos reported; a function in it has a flow context of its own.
@@ -652,11 +653,14 @@ export default class Parser {
 
   // A token that only starts statements, or end, else, elseif or until, cannot be in a table, an argument list or an
   // index, so one first on a line no more indented than the bracket's is the code after a bracket left open:
-  // indentation tells, as for a missing end. The end of the file closes none: a bracket left open there is most likely
-  // the one being typed, so its error stays at the end.
+  // indentation tells, as for a missing end. The end of the file closes them all; the error stays at the end, where a
+  // bracket left open is most likely being typed.
   private closesUnfinished(opener: Token): boolean {
     const token = this.token;
-    return (isStatementOnly(token, this.lexer.lookahead!) || (isBlockFollow(token) && token.type !== TokenType.EOF))
+    if (token.type === TokenType.EOF) {
+      return true;
+    }
+    return (isStatementOnly(token, this.lexer.lookahead!) || isBlockFollow(token))
       && token.bounds.start.filename.equals(opener.bounds.start.filename)
       && this.isFirstOnLine(token.bounds.start)
       && this.indentOf(token.bounds.start) <= this.indentOf(opener.bounds.start);
@@ -664,7 +668,9 @@ export default class Parser {
 
   private expectCloser(closer: '}' | ')' | ']', opener: Token) {
     if (this.closesUnfinished(opener)) {
-      this.report(errors.createErrForToken(opener, errMessages.expectedToClose, closer, opener.value, opener.bounds.start.line, this.token.value), this.token);
+      this.report(this.token.type === TokenType.EOF
+        ? errors.createErrForToken(this.token, errMessages.expected, closer, '<eof>')
+        : errors.createErrForToken(opener, errMessages.expectedToClose, closer, opener.value, opener.bounds.start.line, this.token.value), this.token);
       return;
     }
     this.lexer.expect(closer);
@@ -700,19 +706,25 @@ export default class Parser {
     return error;
   }
 
-  // A block without its `end` (or `until`) has taken in all the code after it.
-  // It's kept, the error goes at its first token, and the statements from the
-  // first one no more indented than that token's line are handed back to the
-  // enclosing block. Returns null when the closer is there, and otherwise where
-  // the block's node should now end.
+  // A block without its `end` (or `until`) has taken in all the code after it. It's kept, the error goes at its
+  // first token, at the inner block that most likely took its closer (underIndentedCloses), or where its closer
+  // is missing (see below), and the statements from the first one no more indented than that token's line are
+  // handed back to the enclosing block. Returns null when the closer is there, and otherwise where the block's
+  // node should now end.
   private expectBlockEnd(closer: 'end' | 'until', opener: Bounds, word: string, body: Block, headerEnd: CodeLocation): CodeLocation | null {
     const file = opener.start.filename;
     const openerIndent = this.indentOf(opener.start);
+    const statements = body.body;
+    const cutAt = () => statements.findIndex(statement => statement.loc
+      && statement.loc.start.filename.equals(file)
+      && this.isFirstOnLine(statement.loc.start)
+      && this.indentOf(statement.loc.start) <= openerIndent);
+    const missingAt = (cut: number) => cut > 0 && isBlockStatement(statements[cut]) ? this.firstTokenAt(statements[cut].loc!.start) : null;
 
     if (this.token.type === TokenType.Keyword && this.token.value === closer) {
       const closedAt = this.token.bounds.start;
       if (this.isFirstOnLine(closedAt) && this.indentOf(closedAt) < openerIndent) {
-        this.underIndentedCloses.push({ opener, word, closer, closedAt: closedAt.index });
+        this.underIndentedCloses.push({ opener, word, closer, closedAt: closedAt.index, missingAt: missingAt(cutAt()) });
       }
       this.lexerNext();
       return null;
@@ -721,15 +733,17 @@ export default class Parser {
     const inside = this.underIndentedCloses.filter(close => close.closer === closer
       && close.opener.start.filename.equals(file) && close.opener.start.index > opener.start.index);
     this.underIndentedCloses = this.underIndentedCloses.filter(close => !inside.includes(close));
-    const blamed = inside.sort((a, b) => a.closedAt - b.closedAt)[0] ?? { opener, word };
-    const near = this.token.type === TokenType.EOF ? '<eof>' : this.token.value;
-    this.errors.push(errors.createErr(blamed.opener, errMessages.expectedToClose, closer, blamed.word, blamed.opener.start.line, near));
+    const cut = cutAt();
+    const blamed = inside.sort((a, b) => a.closedAt - b.closedAt)[0] ?? { opener, word, missingAt: missingAt(cut) };
+    // Two blocks as indented as each other, one in the other, read as two blocks one after the other when the closer
+    // is missing before the second. The error goes there: it is the line being typed, or the one after it, whichever
+    // of the two is new.
+    const at = blamed.missingAt ?? blamed.opener;
+    const near = blamed.missingAt ? this.lexer.input.slice(blamed.missingAt.start.index, blamed.missingAt.end.index)
+      : this.token.type === TokenType.EOF ? '<eof>' : this.token.value;
+    this.errors.push(errors.createErr(at, errMessages.expectedToClose, closer, blamed.word, blamed.opener.start.line, near));
+    this.reportedNear = this.token;
 
-    const statements = body.body;
-    const cut = statements.findIndex(statement => statement.loc
-      && statement.loc.start.filename.equals(file)
-      && this.isFirstOnLine(statement.loc.start)
-      && this.indentOf(statement.loc.start) <= openerIndent);
     if (cut !== -1) {
       this.hoisted = statements.splice(cut).concat(this.hoisted);
     }
@@ -753,6 +767,11 @@ export default class Parser {
       }
     }
     return end;
+  }
+
+  private firstTokenAt(start: CodeLocation): Bounds {
+    const length = /^(?:[A-Za-z_][A-Za-z0-9_]*|::|.)/.exec(this.lexer.input.slice(start.index))![0].length;
+    return { start, end: { ...start, index: start.index + length, column: start.column + length } };
   }
 
   // The whitespace that starts the line `location` is on, in the file being
@@ -1735,10 +1754,17 @@ export default class Parser {
     // The prefix
     if (TokenType.Identifier === this.token.type) {
       base = this.parseIdentifier();
-    } else if (this.lexer.consume('(')) {
+    } else if (this.token.type === TokenType.Punctuator && this.token.value === '(') {
       // Parentheses surrounding a new expression.
+      const opener = this.token;
+      this.lexerNext();
       base = this.parseExpectedExpression(flowContext);
-      this.lexer.expect(')');
+      const after: Token = this.token;
+      if (after.type === TokenType.EOF) {
+        this.expectCloser(')', opener);
+      } else {
+        this.lexer.expect(')');
+      }
       base.parens = true;
     } else {
       return null;
@@ -1906,6 +1932,11 @@ function canStartExpression(token: Token, lookahead: Token): boolean {
   default:
     return false;
   }
+}
+
+function isBlockStatement(statement: Statement): boolean {
+  return [ 'DoStatement', 'WhileStatement', 'RepeatStatement', 'IfStatement', 'ForNumericStatement', 'ForGenericStatement',
+    'FunctionDeclaration' ].includes(statement.type);
 }
 
 // A keyword or the end of the file can't be in a parameter list, so skipping a

@@ -57,7 +57,7 @@ describe('Parser recovery', () => {
   it('keeps a do block whose end is missing', () => {
     check(
       lines('do', '  x = 1', '', 'function g()', 'end'),
-      [ 'main_test_file 1:0 \'end\' expected (to close \'do\' at line 1) near \'<eof>\'' ],
+      [ 'main_test_file 4:0 \'end\' expected (to close \'do\' at line 1) near \'function\'' ],
       [ 'x [Variable]', 'g() [Function]' ],
     );
   });
@@ -85,6 +85,19 @@ describe('Parser recovery', () => {
       [ '_update() [Function]', 'y [Variable]', '_draw() [Function]' ],
     );
     assert.strictEqual(span(block.body[0].loc), '1:0-4:3');
+  });
+
+  it('reports a block missing its closer where the closer goes, when a block as indented follows inside it', () => {
+    check(lines('if dead then', '  a()', 'else', '  b()', 'if dead then', 'end'),
+      [ 'main_test_file 5:0 \'end\' expected (to close \'if\' at line 1) near \'if\'' ], []);
+    check(lines('if new then', '  foo()', 'if dead then', '  bar()', 'end'),
+      [ 'main_test_file 3:0 \'end\' expected (to close \'if\' at line 1) near \'if\'' ], []);
+    check(lines('function f()', '  if dead then', '    a()', '  else', '    b()', '  if dead then', '  end', 'end', 'function g()', 'end'),
+      [ 'main_test_file 6:2 \'end\' expected (to close \'if\' at line 2) near \'if\'' ], [ 'f() [Function]', 'g() [Function]' ]);
+    check(lines('function f()', '  if new then', '    foo()', '  if dead then', '    bar()', '  end', 'end', 'function g()', 'end'),
+      [ 'main_test_file 4:2 \'end\' expected (to close \'if\' at line 2) near \'if\'' ], [ 'f() [Function]', 'g() [Function]' ]);
+    check(lines('pico-8 cartridge // http://www.pico-8.com', 'version 42', '__lua__', 'if dead then', '  a()', 'else', '  b()', 'if dead then', 'end', '__gfx__', ''),
+      [ 'main_test_file 8:0 \'end\' expected (to close \'if\' at line 4) near \'if\'' ], []);
   });
 
   it('blames the inner block with tab indentation', () => {
@@ -280,28 +293,25 @@ describe('Parser recovery', () => {
     [
       'ends an assignment around a function left open before the code handed back',
       lines('f = function()', '  x()', 'function g()', '  y()', 'end'),
-      [ 'main_test_file 1:4 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ],
+      [ 'main_test_file 3:0 \'end\' expected (to close \'function\' at line 1) near \'function\'' ],
       [ 'f() [Function]', 'g() [Function]' ],
     ],
     [
       'ends a local statement around a function left open before the code handed back',
       lines('local f = function()', '  x()', 'function g()', '  y()', 'end'),
-      [ 'main_test_file 1:10 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ],
+      [ 'main_test_file 3:0 \'end\' expected (to close \'function\' at line 1) near \'function\'' ],
       [ 'f() [Function]', 'g() [Function]' ],
     ],
     [
-      'hands back the code after a function left open in a table field, though the table statement is dropped',
+      'hands back the code after a function left open in a table field, keeping the table',
       lines('t = {', '  update = function()', '    x()', 'function g()', '  y()', 'end'),
-      [
-        'main_test_file 2:11 \'end\' expected (to close \'function\' at line 2) near \'<eof>\'',
-        'main_test_file 6:0 \'}\' expected near \'<eof>\'',
-      ],
-      [ 'g() [Function]' ],
+      [ 'main_test_file 4:0 \'end\' expected (to close \'function\' at line 2) near \'function\'' ],
+      [ 't [Table]', '  update() [Method]', 'g() [Function]' ],
     ],
     [
       'ends a field assignment around a function left open before the code handed back',
       lines('t = {}', 't.update = function()', '  x()', 'function g()', '  y()', 'end'),
-      [ 'main_test_file 2:11 \'end\' expected (to close \'function\' at line 2) near \'<eof>\'' ],
+      [ 'main_test_file 4:0 \'end\' expected (to close \'function\' at line 2) near \'function\'' ],
       [ 't [Table]', '  update() [Method]', 'g() [Function]' ],
     ],
   ];
@@ -314,7 +324,7 @@ describe('Parser recovery', () => {
   it('keeps a one-line if whose multi-line else is missing its end', () => {
     const chunk = check(
       lines('if (x) y() else', '  z()', 'function b()', 'end'),
-      [ 'main_test_file 1:0 \'end\' expected (to close \'if\' at line 1) near \'<eof>\'' ],
+      [ 'main_test_file 3:0 \'end\' expected (to close \'if\' at line 1) near \'function\'' ],
       [ 'b() [Function]' ],
     );
     assertHandedBack(chunk, 'b');
@@ -325,7 +335,7 @@ describe('Parser recovery', () => {
       lines('function h()', '  return function()', '    x()', '  function g()', '    y()', '  end'),
       [
         'main_test_file 1:0 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'',
-        'main_test_file 2:9 \'end\' expected (to close \'function\' at line 2) near \'<eof>\'',
+        'main_test_file 4:2 \'end\' expected (to close \'function\' at line 2) near \'function\'',
       ],
       [ 'h() [Function]', '  <anonymous function>() [Function]', '  g() [Function]' ],
     );
@@ -435,6 +445,28 @@ describe('Parser recovery', () => {
       check(lines('if a then', '  x = t[1', 'else', 'end'), [ 'main_test_file 2:7 \']\' expected (to close \'[\' at line 2) near \'else\'' ], [ 'x [Variable]' ]);
       check(lines('function f()', '  t = {', '    a = g(', 'end'),
         [ 'main_test_file 3:9 \')\' expected (to close \'(\' at line 3) near \'end\'' ], [ 'f() [Function]', 't [Table]', '  a [Field]' ]);
+      check(lines('if a then', '  t = {', 'elseif b then', '  y = 1', 'end'),
+        [ 'main_test_file 2:6 \'}\' expected (to close \'{\' at line 2) near \'elseif\'' ], [ 't [Table]', 'y [Variable]' ]);
+      check(lines('if a then', '  f(1,', 'else', '  y = 1', 'end'), [ 'main_test_file 2:3 \')\' expected (to close \'(\' at line 2) near \'else\'' ], [ 'y [Variable]' ]);
+      check(lines('if a then', '  x = t[', 'elseif b then', '  y = 1', 'end'),
+        [ 'main_test_file 2:7 \']\' expected (to close \'[\' at line 2) near \'elseif\'' ], [ 'x [Variable]', 'y [Variable]' ]);
+    });
+
+    it('reports only the function left open when else, elseif or until closes the bracket around it', () => {
+      check(lines('if a then', '  f(function()', 'else', '  y = 1', 'end'),
+        [ 'main_test_file 2:4 \'end\' expected (to close \'function\' at line 2) near \'else\'' ], [ '<anonymous function>() [Function]', 'y [Variable]' ]);
+      check(lines('if a then', '  f(function()', 'elseif b then', '  y = 1', 'end'),
+        [ 'main_test_file 2:4 \'end\' expected (to close \'function\' at line 2) near \'elseif\'' ], [ '<anonymous function>() [Function]', 'y [Variable]' ]);
+      check(lines('repeat', '  f(function()', 'until x'),
+        [ 'main_test_file 2:4 \'end\' expected (to close \'function\' at line 2) near \'until\'' ], [ '<anonymous function>() [Function]' ]);
+    });
+
+    it('closes at the end of the file, keeping the statement and the error at the end', () => {
+      check(lines('x = 1', 'foo(a,'), [ 'main_test_file 2:5 \')\' expected near \'<eof>\'' ], [ 'x [Variable]' ]);
+      check('x = f(1', [ 'main_test_file 1:6 \')\' expected near \'<eof>\'' ], [ 'x [Variable]' ]);
+      check('x = (a', [ 'main_test_file 1:5 \')\' expected near \'<eof>\'' ], [ 'x [Variable]' ]);
+      check(lines('t = {', '  a = 1,'), [ 'main_test_file 2:7 \'}\' expected near \'<eof>\'' ], [ 't [Table]', '  a [Field]' ]);
+      check('x = a[', [ 'main_test_file 1:5 \']\' expected near \'<eof>\'' ], [ 'x [Variable]' ]);
     });
 
     it('closes an index left open before its key', () => {

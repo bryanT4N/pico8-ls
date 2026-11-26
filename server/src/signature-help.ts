@@ -235,14 +235,15 @@ function helpOf(signatures: Signature[]): SignatureHelp {
 }
 
 // For a.b.c, the member c of a.b; when a.b has no c with a definition, every method named c, as the table may inherit
-// it. Nothing when a or b is not found.
+// it. Nothing when a or b is not found, or nothing defines it: such a path leads to no known table. self has no
+// definition, but stands for the method's table.
 function calleesOf(analysis: Analysis, file: ResolvedFile, offset: number, path: string[]): LuaSymbol[] {
   if (path.length === 1) {
     const symbol = symbolOfPath(analysis, file, offset, path);
     return symbol && hasFunction(symbol) ? [ symbol ] : [];
   }
   const table = symbolOfPath(analysis, file, offset, path.slice(0, -1));
-  if (!table) {
+  if (!table || (table.kind !== 'self' && table.definitions.length === 0)) {
     return [];
   }
   const last = path[path.length - 1];

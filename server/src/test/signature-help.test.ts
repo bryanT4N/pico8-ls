@@ -203,6 +203,8 @@ describe('signatureHelpAt', () => {
     const methods = lines('a = {}', 'entity = {}', 'function entity:f() end');
     strictEqual(helpAt(lines(methods, 'nosuch.f(')), undefined);
     strictEqual(helpAt(lines(methods, 'a.nosuch.f(')), undefined);
+    strictEqual(helpAt(lines(methods, 'nosuch.f()', 'x = 1'), 4, 9), undefined);
+    strictEqual(helpAt(lines(methods, 'a.nosuch.f()', 'x = 1'), 4, 11), undefined);
     strictEqual(helpAt(lines(methods, 'spr('))!.signatures[0].label, builtinInfo('spr')!.sig);
     // A field that holds no function is not called as a method of another table.
     strictEqual(helpAt(lines(methods, 'obj = {}', 'obj.f = 1', 'obj:f(')), undefined);
