@@ -100,6 +100,23 @@ describe('Parser recovery', () => {
       [ 'main_test_file 8:0 \'end\' expected (to close \'if\' at line 4) near \'if\'' ], []);
   });
 
+  it('reports a block missing its closer at its opener when the block where the closer goes has its own error there', () => {
+    check(lines('function _update()', '  if a then', '    x()', '  if b then', '    y()'), [
+      'main_test_file 1:0 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'',
+      'main_test_file 2:2 \'end\' expected (to close \'if\' at line 2) near \'<eof>\'',
+      'main_test_file 4:2 \'end\' expected (to close \'if\' at line 4) near \'<eof>\'',
+    ], [ '_update() [Function]' ]);
+    check(lines('do', '  x()', 'do', '  y()'), [
+      'main_test_file 1:0 \'end\' expected (to close \'do\' at line 1) near \'<eof>\'',
+      'main_test_file 3:0 \'end\' expected (to close \'do\' at line 3) near \'<eof>\'',
+    ], []);
+    check(lines('if a then', '  x()', 'if b then', '  y()', 'if c then', '  z()'), [
+      'main_test_file 1:0 \'end\' expected (to close \'if\' at line 1) near \'<eof>\'',
+      'main_test_file 3:0 \'end\' expected (to close \'if\' at line 3) near \'<eof>\'',
+      'main_test_file 5:0 \'end\' expected (to close \'if\' at line 5) near \'<eof>\'',
+    ], []);
+  });
+
   it('blames the inner block with tab indentation', () => {
     check(
       'function a()\n\tif x then\n\t\ty()\nend\nfunction b()\nend',

@@ -139,7 +139,7 @@ export default class Parser {
   private continuations: Token[] | null = null;
   // Where the value is missing in the statement being parsed again.
   private stopAt: Token | null = null;
-  // The token that already has the error of a missing value or bracket.
+  // The token that already has the error of a missing value, bracket or block closer.
   private reportedNear: Token | null = null;
   // How many statements have been parsed again, to tell whether one was while a statement around it was parsed.
   private reparsed = 0;
@@ -400,8 +400,8 @@ export default class Parser {
 
           // Caught a parse error. Add it to errors and synchronize. A statement
           // that fails at the token where a bracket in it was closed, or a value
-          // in it found missing, has its error there already. An error near its
-          // first token belongs to the statement before it.
+          // or block closer in it found missing, has its error there already. An
+          // error near its first token belongs to the statement before it.
           if (!(this.token !== startToken && this.token === this.reportedNear
               && codeLocationsEqual(e.bounds.start, this.token.bounds.start))) {
             this.report(this.token === startToken ? e : this.atEndOfPreviousLine(e));
@@ -676,8 +676,8 @@ export default class Parser {
     this.lexer.expect(closer);
   }
 
-  // One error for each place: none when near already has a missing value's or bracket's error, or when the last error
-  // starts where this one does.
+  // One error for each place: none when near already has a missing value's, bracket's or block closer's error, or when
+  // the last error starts where this one does.
   private report(error: errors.ParseError, near?: Token) {
     const last = this.errors[this.errors.length - 1];
     const at = error.bounds.start;
@@ -708,7 +708,7 @@ export default class Parser {
 
   // A block without its `end` (or `until`) has taken in all the code after it. It's kept, the error goes at its
   // first token, at the inner block that most likely took its closer (underIndentedCloses), or where its closer
-  // is missing (see below), and the statements from the first one no more indented than that token's line are
+  // is missing (see below), and the statements from the first one no more indented than its opener's line are
   // handed back to the enclosing block. Returns null when the closer is there, and otherwise where the block's
   // node should now end.
   private expectBlockEnd(closer: 'end' | 'until', opener: Bounds, word: string, body: Block, headerEnd: CodeLocation): CodeLocation | null {
@@ -735,11 +735,15 @@ export default class Parser {
     this.underIndentedCloses = this.underIndentedCloses.filter(close => !inside.includes(close));
     const cut = cutAt();
     const blamed = inside.sort((a, b) => a.closedAt - b.closedAt)[0] ?? { opener, word, missingAt: missingAt(cut) };
-    // Two blocks as indented as each other, one in the other, read as two blocks one after the other when the closer
-    // is missing before the second. The error goes there: it is the line being typed, or the one after it, whichever
-    // of the two is new.
-    const at = blamed.missingAt ?? blamed.opener;
-    const near = blamed.missingAt ? this.lexer.input.slice(blamed.missingAt.start.index, blamed.missingAt.end.index)
+    // Going by indentation, a block statement no more indented than the opener's line, after other code in the block,
+    // comes after the block, so the closer is missing just before it. When the two are as indented as each other, that
+    // is also the line being typed, or the one after it, whichever of the two openers is new. When an error is already
+    // there, such as the inner block's own, this one stays at the opener: one error for each place.
+    const candidate = blamed.missingAt;
+    const missing = candidate && !this.errors.some(error => error.bounds.start.index === candidate.start.index
+      && error.bounds.start.filename.equals(candidate.start.filename)) ? candidate : null;
+    const at = missing ?? blamed.opener;
+    const near = missing ? this.lexer.input.slice(missing.start.index, missing.end.index)
       : this.token.type === TokenType.EOF ? '<eof>' : this.token.value;
     this.errors.push(errors.createErr(at, errMessages.expectedToClose, closer, blamed.word, blamed.opener.start.line, near));
     this.reportedNear = this.token;
