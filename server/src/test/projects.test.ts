@@ -12,8 +12,8 @@ import { NO_OUTLINE_OPTIONS } from '../parser/outline/model';
 import { outlineLines } from '../parser/test/outline-utils';
 import { ALL_OUTLINE_OPTIONS, deepEquals, formatError } from '../parser/test/test-utils';
 import {
-  findProjects, FolderReader, isScanned, isTrackedPath, listCartFiles, makeFileResolver, nearCart, ParsedDocumentsMap, ProjectDocument, ProjectIndex,
-  scansFolder,
+  findProjects, FolderReader, isScanned, isTrackedPath, isWatched, listCartFiles, makeFileResolver, nearCart, ParsedDocumentsMap, ProjectDocument,
+  ProjectIndex, scansFolder,
 } from '../projects';
 import { callContextAt } from '../signature-help';
 
@@ -179,6 +179,28 @@ describe('listCartFiles', () => {
       realpath: file => Promise.resolve(file),
     };
     deepStrictEqual(sortedUnder(ws, await listCartFiles(ws, ws, reader)), [ 'lib.lua', 'main.p8' ]);
+  });
+});
+
+describe('isWatched', () => {
+  it('takes a file under a workspace folder, but not one reached through a junction, whose changes the file watcher does not report', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pico8-ls-watch-'));
+    try {
+      const ws = path.join(dir, 'ws');
+      const outside = path.join(dir, 'outside');
+      for (const file of [ 'ws/game/main.p8', 'outside/lib.lua' ]) {
+        fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        fs.writeFileSync(path.join(dir, file), '');
+      }
+      const linked = path.join(ws, 'linked');
+      fs.symlinkSync(outside, linked, 'junction');
+      deepStrictEqual([ path.join(ws, 'game', 'main.p8'), path.join(linked, 'lib.lua'), path.join(outside, 'lib.lua') ].map(file => isWatched(file, [ ws ])),
+        [ true, false, false ]);
+      // A workspace folder is watched also when it is a junction itself.
+      eq(isWatched(path.join(linked, 'lib.lua'), [ ws, linked ]), true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -730,6 +752,20 @@ describe('ProjectIndex', () => {
     files['gone.lua'] = 'y = 2';
     index.update(uriOf('gone.lua'));
     deepStrictEqual([ index.isAwaited(uriOf('gone.lua')), index.isIncluded(uriOf('gone.lua')) ], [ false, true ]);
+  });
+
+  it('lists the files under a folder that an #include waits for, which a scan of them links', () => {
+    const onDisk = new Map([[ 'main.p8', '#include .shared/lib.lua\n#include .shared/sub/x.lua\n#include .sharedx/y.lua' ]]);
+    const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') });
+    index.scan([ uriOf('main.p8') ]);
+    const awaited = index.awaitedUnder(uriOf('.shared'));
+    deepStrictEqual(sorted(awaited), [ '.shared/lib.lua', '.shared/sub/x.lua' ]);
+    // A folder renamed to .shared, which no scan goes into.
+    onDisk.set('lib.lua', 'function helper() end');
+    onDisk.set('x.lua', 'x = 1');
+    index.scan(awaited);
+    deepStrictEqual([ sorted(index.uris()), index.awaitedUnder(uriOf('.shared')), index.isAwaited(uriOf('.sharedx/y.lua')) ],
+      [[ '.shared/lib.lua', '.shared/sub/x.lua', 'main.p8' ], [], true ]);
   });
 
   it('drops several deleted files at once, parsing their includer once', () => {

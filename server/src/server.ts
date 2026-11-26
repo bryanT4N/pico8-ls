@@ -12,7 +12,7 @@ import { isParseError } from './parser/errors';
 import { builtinInfo } from './parser/builtins';
 import ResolvedFile, { pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
-import { isScanned, isUnder, listCartFiles, makeFileResolver, nearCart, ProjectDocument, ProjectIndex, scansFolder } from './projects';
+import { isScanned, isUnder, isWatched, listCartFiles, makeFileResolver, nearCart, ProjectDocument, ProjectIndex, scansFolder } from './projects';
 import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -34,7 +34,8 @@ const documents = new TextDocuments(TextDocument);
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 
-// The text of the index's files as the scan, the file watcher or a first read took it from the disk.
+// The text of the index's files that the file watcher keeps current, as the scan, the file watcher or a first read took
+// it from the disk.
 const diskText = new Map<string, string>();
 
 // The paths of the workspace folders, which change as folders are added and removed. Which files belong to a cart
@@ -65,7 +66,7 @@ function hasCart(folder: string): boolean {
 // Reads the disk, for a file the scan has not seen yet, or one outside the workspace folders.
 function folderHasCart(folder: string): boolean {
   try {
-    return fs.readdirSync(folder).some(name => /\.p8$/i.test(name) && !isFolder(path.join(folder, name)));
+    return fs.readdirSync(folder).some(name => /\.p8$/i.test(name) && isFile(path.join(folder, name)));
   } catch {
     return false;
   }
@@ -150,18 +151,19 @@ connection.onInitialized(() => {
         }
       }
       // The file watcher reports nothing under a removed folder, so an includer reads such a file from the disk from
-      // now on, as textOf keeps the text of none outside the workspace folders.
+      // now on, as textOf keeps the text of none that the watcher does not report.
       for (const uri of [ ...diskText.keys() ]) {
         const filePath = pathOf(uri);
-        if (filePath === undefined || !workspaceRoots.some(root => isUnder(filePath, root))) {
+        if (filePath === undefined || !isWatched(filePath, workspaceRoots)) {
           diskText.delete(uri);
         }
       }
       const joined = index.joins();
       const left = index.prune();
       // A file that left gets empty diagnostics, which clears its warnings from the Problems panel. With none leaving
-      // there is nothing to send here: the scans of the added folders send every file's diagnostics, and with no folder
-      // added nothing changed. A file can still join, one whose parse failed before, and it gets its diagnostics too.
+      // there is nothing to send here: the scan of an added folder that finds files for the index sends every file's
+      // diagnostics, and otherwise nothing changed. A file can still join, one whose parse failed before, and it gets
+      // its diagnostics too.
       if (left.length > 0 || index.joins() > joined) {
         publish([ ...index.uris(), ...left ]);
       }
@@ -214,28 +216,37 @@ async function scanFolder(folderPath: string, onlyNew = false): Promise<void> {
         addCart(filePath);
       }
     }
-    // A .lua file that belongs to no cart is not read at all, so a folder of plain Lua costs only its listing.
-    const members = allFiles.map(filePath => pathToFileURL(filePath)).filter(uri => isMember(uri) && !(onlyNew && index.document(uri)));
+    // A .lua file that belongs to no cart is not read at all, so a folder of plain Lua costs only its listing. One that an
+    // #include waits for is read, as it is when the file watcher reports it.
+    const members = allFiles.map(filePath => pathToFileURL(filePath))
+      .filter(uri => (isMember(uri) || index.isAwaited(uri)) && !(onlyNew && index.document(uri)));
     await readFromDisk(members);
 
     // The folder can have been removed while its files were being read, when the index did not have them yet for the
     // removal to drop. Files open in the editor stay, as they do when a folder is removed.
-    const stillMembers = new Set(members.filter(isMember));
+    const stillMembers = new Set(members.filter(uri => isMember(uri) || index.isAwaited(uri)));
     for (const uri of members) {
       if (!stillMembers.has(uri)) {
         diskText.delete(uri);
       }
     }
-    publish(index.scan([ ...stillMembers ]));
+    // A scan of no file would send every file's diagnostics again.
+    if (stillMembers.size > 0) {
+      publish(index.scan([ ...stillMembers ]));
+    }
   } finally {
     // Also after a scan that failed, so that whatever waits for the end of the scan is not left waiting.
     notifyCartFiles();
   }
 }
 
+// The text of a file that the file watcher does not report would go stale; textOf reads such a file when it is parsed.
 async function readFromDisk(uris: string[]) {
   await Promise.all(uris.map(async uri => {
     const filePath = url.fileURLToPath(uri);
+    if (!isWatched(filePath, workspaceRoots)) {
+      return;
+    }
     try {
       diskText.set(uri, (await fs.promises.readFile(filePath)).toString());
     } catch (e) {
@@ -270,8 +281,8 @@ function textOf(uri: string): string | undefined {
     const kept = diskText.has(uri);
     const text = fileResolver.loadFileContents(filePath);
     // A file the scan did not read, like one only an #include brings in, is kept too, so that its includers do not read
-    // the disk on every keystroke; only under a workspace folder, where the file watcher keeps it current.
-    if (!kept && workspaceRoots.some(root => isUnder(filePath, root))) {
+    // the disk on every keystroke; only where the file watcher keeps it current.
+    if (!kept && isWatched(filePath, workspaceRoots)) {
       diskText.set(uri, text);
     }
     return text;
@@ -362,8 +373,9 @@ documents.onDidClose(e => {
     diskText.delete(uri);
     publish(index.remove(uri));
   } else {
-    // Outside the workspace folders no file watcher keeps the text current, so it is read again when it is needed.
-    if (filePath !== undefined && workspaceRoots.some(root => isUnder(filePath, root))) {
+    // Where the file watcher does not keep the text current, outside the workspace folders or under a link, it is read
+    // again when it is needed.
+    if (filePath !== undefined && isWatched(filePath, workspaceRoots)) {
       diskText.set(uri, text);
     } else {
       diskText.delete(uri);
@@ -437,9 +449,9 @@ connection.onDidChangeWatchedFiles(change => {
     }
     if (type === FileChangeType.Deleted) {
       // A folder that is deleted or renamed is reported alone, without the files under it. A tool that deletes a folder
-      // file by file sends an event for each, so the files the server keeps are matched as text, without converting or
-      // normalizing each: a cart by its path, spelled as filePath is, any other file by its URI, in VS Code's form as the
-      // event's is.
+      // file by file can send an event for each, when its deletes span the watcher's batches, so the files the server
+      // keeps are matched as text, without converting or normalizing each: a cart by its path, spelled as filePath is,
+      // any other file by its URI, in VS Code's form as the event's is.
       const gone = (other: string, folder: string, separator: string) => other === folder || other.startsWith(folder + separator);
       for (const cart of [ ...carts ].filter(cart => gone(cart, filePath, path.sep))) {
         deleteCart(cart);
@@ -454,13 +466,24 @@ connection.onDidChangeWatchedFiles(change => {
       }
       continue;
     }
-    if (type === FileChangeType.Created && scansFolder(filePath, workspaceRoots) && !newFolders.some(folder => isUnder(filePath, folder))
-      && isFolder(filePath)) {
-      newFolders.push(filePath);
-      continue;
+    const named = /\.(p8|lua)$/i.test(filePath);
+    if (type === FileChangeType.Created) {
+      // A folder that appears with its files, as a renamed one does, is reported alone. The files under it that an
+      // #include waits for and that no scan lists, as in a dot-folder, are parsed here.
+      const awaited = index.awaitedUnder(uri).filter(file => !isScanned(url.fileURLToPath(file), workspaceRoots));
+      if (awaited.length > 0) {
+        uris.push(...index.scan(awaited));
+      }
+      const toScan = scansFolder(filePath, workspaceRoots) && !newFolders.some(folder => isUnder(filePath, folder));
+      // A folder can have a name like a cart's or a .lua file's, such as json.lua.
+      if ((toScan || named) && isFolder(filePath)) {
+        if (toScan) {
+          newFolders.push(filePath);
+        }
+        continue;
+      }
     }
-    // A folder can have a name like a cart's or a .lua file's, such as json.lua.
-    if (!/\.(p8|lua)$/i.test(filePath) || (type === FileChangeType.Created && isFolder(filePath))) {
+    if (!named) {
       continue;
     }
     // A file in a dot-folder is in the index when a file of the index #includes it, and an #include can wait for one
@@ -477,10 +500,12 @@ connection.onDidChangeWatchedFiles(change => {
     if (!known && !isMember(uri) && !index.isAwaited(uri)) {
       continue;
     }
-    try {
-      diskText.set(uri, fs.readFileSync(filePath).toString());
-    } catch (e) {
-      console.error('Error reading ' + uri, e);
+    if (isWatched(filePath, workspaceRoots)) {
+      try {
+        diskText.set(uri, fs.readFileSync(filePath).toString());
+      } catch (e) {
+        console.error('Error reading ' + uri, e);
+      }
     }
     if (!documents.get(uri)) {
       uris.push(...index.update(uri));
@@ -516,6 +541,14 @@ connection.onDidChangeWatchedFiles(change => {
 function isFolder(filePath: string): boolean {
   try {
     return fs.statSync(filePath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isFile(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
   } catch {
     return false;
   }

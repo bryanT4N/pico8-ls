@@ -76,6 +76,22 @@ export function isUnder(filePath: string, folder: string): boolean {
   return path.normalize(filePath).startsWith(dir.endsWith(path.sep) ? dir : dir + path.sep);
 }
 
+// Whether the file watcher reports the file's changes, files.watcherExclude aside. It watches the workspace folders,
+// also one that is a link, and reports nothing under a link inside them, a junction among them.
+export function isWatched(filePath: string, roots: string[]): boolean {
+  return roots.some(root => {
+    if (!isUnder(filePath, root)) {
+      return false;
+    }
+    const parts = path.relative(root, filePath).split(path.sep);
+    try {
+      return parts.every((_, i) => !fs.lstatSync(path.join(root, ...parts.slice(0, i + 1))).isSymbolicLink());
+    } catch {
+      return false;
+    }
+  });
+}
+
 type Kind = { isDirectory(): boolean, isFile(): boolean };
 type Entry = Kind & { name: string, isSymbolicLink(): boolean };
 
@@ -409,6 +425,12 @@ export class ProjectIndex {
   // although it is not a member.
   isAwaited(uri: string): boolean {
     return [ ...this.documents.values() ].some(document => (document.chunk.unresolvedIncludes ?? []).some(file => file.fileURL === uri));
+  }
+
+  // The files under the folder with this URI that #includes of the index could not find.
+  awaitedUnder(folder: string): string[] {
+    return unique([ ...this.documents.values() ].flatMap(document => (document.chunk.unresolvedIncludes ?? []).map(file => file.fileURL))
+      .filter(uri => uri.startsWith(folder + '/')));
   }
 
   uris(): string[] {
