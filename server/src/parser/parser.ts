@@ -147,8 +147,8 @@ export default class Parser {
   private continuations: Token[] | null = null;
   // Where the value is missing in the statement or header being parsed again.
   private stopAt: Token | null = null;
-  // The token where a missing value, bracket or block closer was found. Its error is reported there, unless the errors
-  // before it are the ones to fix.
+  // The token near which a missing value, bracket or block closer was last found, or a head failed. Its error was
+  // reported near it, except for a bracket closed by indentation after errors in it, which has none (see expectCloser).
   private reportedNear: Token | null = null;
   private stops = new Map<string, Token>();
   private lastStop: Token | null = null;
@@ -584,10 +584,10 @@ export default class Parser {
       && this.isFirstOnLine(token.bounds.start);
   }
 
-  // A head that fails is reported, and the statement kept, when its then or do is further on the line where it failed or
-  // the line below starts the block: dropped, its else or end would close the block around it, whose missing end,
-  // reported at that block's first line, would come before the mistake.
-  private parseHead<T>(keyword: Token, followers: string[], parse: () => T, failed: () => T): T {
+  // A head that fails is reported, and the statement kept, when its then or do is further on the line where it failed:
+  // dropped, its else or end would close the block around it, whose missing end, reported at that block's first line,
+  // would come before the mistake.
+  private parseHead<T>(followers: string[], parse: () => T, failed: () => T): T {
     const locationDepth = this.locations.length;
     const levels = this.levels;
     try {
@@ -598,7 +598,7 @@ export default class Parser {
       }
       this.locations.length = locationDepth;
       this.levels = levels;
-      if (!this.skipToFollower(e, keyword, followers)) {
+      if (!this.skipToFollower(e, followers)) {
         throw e;
       }
       return failed();
@@ -613,22 +613,15 @@ export default class Parser {
     return value;
   }
 
-  // Whether the then or do the head needs is further on this line, or the block starts on this line, below the head and
-  // more indented than it. The error is reported, and the token left after the then or do. A line below as indented as
-  // the head is most likely code that a head being typed above it has reached.
-  private skipToFollower(error: errors.ParseError, keyword: Token, followers: string[]): boolean {
+  // Whether the then or do the head needs is further on the line it reached. The error is reported, and the token left
+  // after the then or do. A head that failed at the line below is not kept: that line is most likely code that a head
+  // being typed above it has reached.
+  private skipToFollower(error: errors.ParseError, followers: string[]): boolean {
     const at = this.token;
     const previous = this.previousToken;
-    if (at.type === TokenType.EOF || !previous || !at.bounds.start.filename.equals(previous.bounds.end.filename)) {
+    if (at.type === TokenType.EOF || !previous || !at.bounds.start.filename.equals(previous.bounds.end.filename)
+        || at.bounds.start.line > previous.bounds.end.line) {
       return false;
-    }
-    if (at.bounds.start.line > previous.bounds.end.line) {
-      if (!at.bounds.start.filename.equals(keyword.bounds.start.filename) || !this.isFirstOnLine(at.bounds.start)
-          || this.indentOf(at.bounds.start) <= this.indentOf(keyword.bounds.start)) {
-        return false;
-      }
-      this.report(this.atEndOfPreviousLine(error), at);
-      return true;
     }
     const state = this.lexer.save();
     while (this.token.type !== TokenType.EOF && this.token.bounds.start.line === at.bounds.start.line
@@ -811,8 +804,8 @@ export default class Parser {
     }
   }
 
-  // One error for each place: none when a missing value, bracket or block closer was already found at near, or when
-  // the last error starts where this one does. That last error is near's too, as when a file included twice gives the
+  // One error for each place: none when near is reportedNear, which one error already stands for, or when the last
+  // error starts where this one does. That last error is near's too, as when a file included twice gives the
   // same error again, so near is marked either way.
   private report(error: errors.ParseError, near?: Token) {
     if (near && near === this.reportedNear) {
@@ -848,8 +841,8 @@ export default class Parser {
   // first token, at the inner block that most likely took its closer (underIndentedCloses), or where its closer
   // is missing (see below), and the statements from the first one no more indented than its opener's line are
   // handed back to the enclosing block. A block whose header stopped early gets no error, and nor does any block
-  // around one that took a closer, as that closer may be theirs, or one with an error in it that an else or an elseif
-  // ends (see below). Returns null when the closer is there, and otherwise where the block's node should now end.
+  // around one that took a closer, as that closer may be theirs (see below). Returns null when the closer is there,
+  // and otherwise where the block's node should now end.
   // errorsBefore: how many errors there were where the block's statement starts.
   private expectBlockEnd(closer: 'end' | 'until', opener: Bounds, word: string, body: Block, headerEnd: CodeLocation,
     errorsBefore: number, headerStopped = false): CodeLocation | null {
@@ -901,14 +894,7 @@ export default class Parser {
       const at = missing ?? blamed.opener;
       const near = missing ? this.lexer.input.slice(missing.start.index, missing.end.index)
         : this.token.type === TokenType.EOF ? '<eof>' : this.token.value;
-      // Only an if takes an else or an elseif, and an if has taken its own: with an error in the block, one here is most
-      // likely left over from an if in the block that was dropped for an error in its head. That error is the one to fix,
-      // and this one, at the opener, would come before it.
-      const strayElse = this.token.type === TokenType.Keyword && (this.token.value === 'else' || this.token.value === 'elseif')
-        && this.errors.length > errorsBefore;
-      if (!strayElse) {
-        this.errors.push(errors.createErr(at, errMessages.expectedToClose, closer, blamed.word, blamed.opener.start.line, near));
-      }
+      this.errors.push(errors.createErr(at, errMessages.expectedToClose, closer, blamed.word, blamed.opener.start.line, near));
       this.reportedNear = this.token;
     }
 
@@ -1113,12 +1099,12 @@ export default class Parser {
     let truncatedEnd: CodeLocation | null = null;
 
     const canBeOneLiner = this.lexer.token?.value === '(';
-    const { expression: condition, stopped, followed } = this.parseHead(keyword, [ 'do' ],
+    const { expression: condition, stopped, followed } = this.parseHead([ 'do' ],
       () => ({ ...this.parseHeaderExpression(flowContext, keyword), followed: false }),
       () => ({ expression: this.missingValue() as Expression, stopped: false, followed: true }));
 
     if (followed || this.lexer.consume('do') || stopped
-        || (!canBeOneLiner && this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'do', this.token.value), keyword, [ 'do' ]))) {
+        || (!canBeOneLiner && this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'do', this.token.value), [ 'do' ]))) {
       // regular while statement with `do` ... `end`
       // (we already consumed the `do`)
       const headerEnd = this.previousToken.bounds.end;
@@ -1205,7 +1191,7 @@ export default class Parser {
 
     const canBeOneLiner = this.lexer.token?.value === '(';
 
-    const header = this.parseHead(keyword, [ 'then', 'do' ], () => ({ ...this.parseHeaderExpression(flowContext, keyword), followed: false }),
+    const header = this.parseHead([ 'then', 'do' ], () => ({ ...this.parseHeaderExpression(flowContext, keyword), followed: false }),
       () => ({ expression: this.missingValue() as Expression, stopped: false, followed: true }));
     condition = header.expression;
 
@@ -1260,7 +1246,7 @@ export default class Parser {
         });
 
         return endAt(this.finishNode(AST.ifStatement(clauses, true)), truncatedEnd);
-      } else if (!this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'then', this.token.value), keyword, [ 'then', 'do' ])) {
+      } else if (!this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'then', this.token.value), [ 'then', 'do' ])) {
         errors.raiseErrForToken(this.token, errMessages.expected, 'then', this.token.value);
       }
     }
@@ -1276,7 +1262,7 @@ export default class Parser {
     while (this.lexer.consume('elseif')) {
       this.pushLocation(marker);
       const elseifKeyword = this.previousToken;
-      const elseifHeader = this.parseHead(elseifKeyword, [ 'then', 'do' ], () => ({ ...this.parseHeaderExpression(flowContext, elseifKeyword), followed: false }),
+      const elseifHeader = this.parseHead([ 'then', 'do' ], () => ({ ...this.parseHeaderExpression(flowContext, elseifKeyword), followed: false }),
         () => ({ expression: this.missingValue() as Expression, stopped: false, followed: true }));
       condition = elseifHeader.expression;
 
@@ -1330,7 +1316,7 @@ export default class Parser {
       let end: Expression = this.missingValue();
       let step: Expression | null = null;
       let stopped = false;
-      this.parseHead(keyword, [ 'do' ], () => {
+      this.parseHead([ 'do' ], () => {
         let header = this.parseHeaderExpression(flowContext, keyword);
         start = header.expression;
         if (!header.stopped) {
@@ -1345,7 +1331,7 @@ export default class Parser {
         }
         stopped = header.stopped;
         if (!stopped && !this.lexer.consume('do')
-            && !this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'do', this.token.value), keyword, [ 'do' ])) {
+            && !this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'do', this.token.value), [ 'do' ])) {
           errors.raiseErrForToken(this.token, errMessages.expected, 'do', this.token.value);
         }
       }, () => undefined);
@@ -1362,7 +1348,7 @@ export default class Parser {
       const variables = [ variable ];
       const iterators: Expression[] = [];
       let stopped = false;
-      this.parseHead(keyword, [ 'do' ], () => {
+      this.parseHead([ 'do' ], () => {
         while (this.lexer.consume(',')) {
           variable = this.parseIdentifier();
           variables.push(variable);
@@ -1377,7 +1363,7 @@ export default class Parser {
         } while (!stopped && this.lexer.consume(','));
 
         if (!stopped && !this.lexer.consume('do')
-            && !this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'do', this.token.value), keyword, [ 'do' ])) {
+            && !this.skipToFollower(errors.createErrForToken(this.token, errMessages.expected, 'do', this.token.value), [ 'do' ])) {
           errors.raiseErrForToken(this.token, errMessages.expected, 'do', this.token.value);
         }
       }, () => undefined);
