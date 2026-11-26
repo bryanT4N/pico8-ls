@@ -54,7 +54,7 @@ type ParserSnapshot = {
   lexer: LexerState, errors: number, locations: number, hoisted: Statement[], endBeforeHoisted: CodeLocation | null,
   underIndentedCloses: number, includes: number, includedComments: number, unresolvedIncludes: number,
   includeParses: number, reportedTooManyIncludeParses: boolean, levels: number, reportedTooManyLevels: boolean,
-  locals: number, deferredGotos: Goto[],
+  reportedStop: boolean, locals: number, deferredGotos: Goto[],
 };
 
 // The circular #include check compares paths, and a link to a parent
@@ -70,10 +70,9 @@ const MAX_INCLUDE_PARSES = 256;
 const MAX_LEVELS = 200;
 
 // Past MAX_LEVELS the parser reports once and goes on, so that a long `..`
-// chain keeps its statement and the lines after it are not each reported as
-// errors. It stops here so that the parser and the code that walks the syntax
-// tree stay within the call stack: on a cold start they overflow at about
-// 1,300 levels.
+// chain keeps its statement. It stops here so that the parser and the code
+// that walks the syntax tree stay within the call stack: on a cold start they
+// overflow at about 1,300 levels.
 const MAX_PARSED_LEVELS = 500;
 
 export type ParserOptions = {
@@ -131,6 +130,7 @@ export default class Parser {
   // Code nested too deep is reported once, for the innermost statement within
   // MAX_LEVELS, rather than at every level past it.
   private reportedTooManyLevels = false;
+  private reportedStop = false;
 
   // The first tokens of the values in the simple statement being parsed that start on a later line than their
   // operator, and that could start a statement there too (a name or `(`): the statement is parsed again only when it
@@ -347,7 +347,11 @@ export default class Parser {
       const levels = this.levels;
 
       try {
-        this.enterStatementLevel();
+        if (this.enterStatementLevel()) {
+          this.skipTooDeep(true);
+          this.levels--;
+          continue;
+        }
         const statement = this.parseStatementOrBacktrack(flowContext);
         this.levels--;
 
@@ -594,6 +598,7 @@ export default class Parser {
       reportedTooManyIncludeParses: this.reportedTooManyIncludeParses,
       levels: this.levels,
       reportedTooManyLevels: this.reportedTooManyLevels,
+      reportedStop: this.reportedStop,
       locals: scope.locals.length,
       deferredGotos: scope.deferredGotos,
     };
@@ -616,6 +621,7 @@ export default class Parser {
     this.reportedTooManyIncludeParses = snapshot.reportedTooManyIncludeParses;
     this.levels = snapshot.levels;
     this.reportedTooManyLevels = snapshot.reportedTooManyLevels;
+    this.reportedStop = snapshot.reportedStop;
     const scope = flowContext.currentScope();
     scope.locals.length = snapshot.locals;
     scope.deferredGotos = snapshot.deferredGotos;
@@ -1234,6 +1240,11 @@ export default class Parser {
       }
 
       targets.push(base);
+      // PICO-8, as Lua 5.2, counts each target after the first as a level (lparser.c, assignment).
+      if (!this.reportedTooManyLevels && targets.length - 1 + this.levels > MAX_LEVELS) {
+        this.reportedTooManyLevels = true;
+        this.errors.push(errors.createErrForToken(this.token, errMessages.tooManyLevels, MAX_LEVELS, this.token.value));
+      }
 
       if (',' !== this.token.value) {
         break;
@@ -1523,20 +1534,28 @@ export default class Parser {
   parseSubExpression(minPrecedence: number, flowContext: FlowContext): Expression | null {
     if (++this.levels > MAX_LEVELS && canStartExpression(this.token, this.lexer.lookahead!)) {
       this.tooManyLevels();
+      if (this.levels > MAX_PARSED_LEVELS) {
+        this.markLocation();
+        this.skipTooDeep(false);
+        this.levels--;
+        return this.finishNode(AST.literal(TokenType.NilLiteral, null, 'nil'));
+      }
     }
     const expression = this.parseSubExpressionInLevel(minPrecedence, flowContext);
     this.levels--;
     return expression;
   }
 
-  private enterStatementLevel() {
+  private enterStatementLevel(): boolean {
     if (++this.levels > MAX_LEVELS) {
       this.tooManyLevels();
-    } else {
-      // A statement within the limit gets its own report of what is nested in
-      // it too deep.
-      this.reportedTooManyLevels = false;
+      return this.levels > MAX_PARSED_LEVELS;
     }
+    // A statement within the limit gets its own report of what is nested in
+    // it too deep.
+    this.reportedTooManyLevels = false;
+    this.reportedStop = false;
+    return false;
   }
 
   private tooManyLevels() {
@@ -1544,8 +1563,44 @@ export default class Parser {
       this.reportedTooManyLevels = true;
       this.errors.push(errors.createErrForToken(this.token, errMessages.tooManyLevels, MAX_LEVELS, this.token.value));
     }
-    if (this.levels > MAX_PARSED_LEVELS) {
-      raiseErrForToken(this.token, errMessages.tooManyLevels, MAX_LEVELS, this.token.value);
+    if (this.levels > MAX_PARSED_LEVELS && !this.reportedStop) {
+      this.reportedStop = true;
+      this.errors.push(errors.createErrForToken(this.token, errMessages.tooManyLevels, MAX_LEVELS, this.token.value));
+    }
+  }
+
+  // Past MAX_PARSED_LEVELS the code is skipped up to where what encloses it closes, so that its closers do not each
+  // end a block of their own and get reported.
+  private skipTooDeep(statement: boolean) {
+    let depth = 0;
+    let operand = true;
+    while (this.token.type !== TokenType.EOF) {
+      const token = this.token;
+      if (depth === 0 && !operand) {
+        const ends = statement
+          ? token.type === TokenType.Newline || (token.type === TokenType.Punctuator && token.value === ';')
+            || (this.isFirstOnLine(token.bounds.start) && canStartStatement(token))
+          : !continuesExpression(token);
+        if (ends) {
+          break;
+        }
+      }
+      // A bracket that closes nothing cannot end the block around a statement, and a skip stopped at it would never
+      // move past it.
+      if (closesNesting(token)) {
+        if (depth > 0) {
+          depth--;
+        } else if (!statement || token.type === TokenType.Keyword) {
+          break;
+        }
+      } else if (opensNesting(token)) {
+        depth++;
+      } else if (depth === 0 && token.type === TokenType.Keyword && (token.value === 'else' || token.value === 'elseif')) {
+        break;
+      }
+      operand = isBinaryOperator(token) || isUnary(token)
+        || (token.type === TokenType.Punctuator && (token.value === '.' || token.value === ':'));
+      this.lexerNext();
     }
   }
 
@@ -1895,4 +1950,24 @@ function isBlockFollow(token: Token) {
 
 function isEndOfFile(token: Token) {
   return token.type === TokenType.EOF;
+}
+
+function opensNesting(token: Token): boolean {
+  return (token.type === TokenType.Punctuator && [ '(', '{', '[' ].includes(token.value as string))
+    || (token.type === TokenType.Keyword && [ 'function', 'do', 'if', 'repeat' ].includes(token.value as string));
+}
+
+function closesNesting(token: Token): boolean {
+  return (token.type === TokenType.Punctuator && [ ')', '}', ']' ].includes(token.value as string))
+    || (token.type === TokenType.Keyword && (token.value === 'end' || token.value === 'until'));
+}
+
+function isBinaryOperator(token: Token): boolean {
+  return (token.type === TokenType.Punctuator || token.type === TokenType.Keyword)
+    && Operators.binaryPrecedenceOf(token.value as string) !== Operators.minPrecedenceValue;
+}
+
+function continuesExpression(token: Token): boolean {
+  return isBinaryOperator(token) || token.type === TokenType.StringLiteral
+    || (token.type === TokenType.Punctuator && [ '.', ':', '[', '(', '{' ].includes(token.value as string));
 }

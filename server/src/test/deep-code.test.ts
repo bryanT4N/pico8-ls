@@ -79,6 +79,6 @@ describe('code nested deep or chained long', function () {
 
   it('serves 1,500 nested ifs and 5,000 nested parentheses', () => {
     assert.strictEqual(serve('if a then\n'.repeat(1500) + 'end\n'.repeat(1500) + 'y = 1').outline.includes('y [Variable]'), true);
-    assert.deepStrictEqual(serve('x = ' + '('.repeat(5000) + '1' + ')'.repeat(5000) + '\ny = 1').outline, [ 'y [Variable]' ]);
+    assert.deepStrictEqual(serve('x = ' + '('.repeat(5000) + '1' + ')'.repeat(5000) + '\ny = 1').outline, [ 'x [Variable]', 'y [Variable]' ]);
   });
 });
