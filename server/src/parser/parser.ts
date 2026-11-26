@@ -804,8 +804,8 @@ export default class Parser {
     }
   }
 
-  // One error for each place: none when near is reportedNear, which one error already stands for, or when the last
-  // error starts where this one does. That last error is near's too, as when a file included twice gives the
+  // One error for each place: none when near is reportedNear, which has had its error or none (see there), or when the
+  // last error starts where this one does. That last error is near's too, as when a file included twice gives the
   // same error again, so near is marked either way.
   private report(error: errors.ParseError, near?: Token) {
     if (near && near === this.reportedNear) {
