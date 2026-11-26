@@ -433,6 +433,17 @@ describe('Parser recovery', () => {
       check(lines('while a +', '  return', 'end'), [ 'main_test_file 1:9 <expression> expected near \'return\'' ], []);
     });
 
+    it('reports only the header of a block missing its end when the header stopped at the line below', () => {
+      check(lines('if a and', 'b = 1'), [ 'main_test_file 1:8 <expression> expected near \'b\'' ], [ 'b [Variable]' ]);
+      check(lines('while f(', '  x = 1'), [ 'main_test_file 1:7 \')\' expected (to close \'(\' at line 1) near \'x\'' ], [ 'x [Variable]' ]);
+      check(lines('for i = 1, n +', '  x = 1'), [ 'main_test_file 1:14 <expression> expected near \'x\'' ], [ 'x [Variable]' ]);
+      check(lines('if a then', '  y = 1', 'elseif h(a,', '  x = 1'),
+        [ 'main_test_file 3:8 \')\' expected (to close \'(\' at line 3) near \'x\'' ], [ 'y [Variable]', 'x [Variable]' ]);
+      check(lines('function _update()', '  if btn(0,', '  x -= 1', 'end'),
+        [ 'main_test_file 2:8 \')\' expected (to close \'(\' at line 2) near \'x\'' ], [ '_update() [Function]' ]);
+      check(lines('if a then', '  b = 1'), [ 'main_test_file 1:0 \'end\' expected (to close \'if\' at line 1) near \'<eof>\'' ], [ 'b [Variable]' ]);
+    });
+
     it('takes the line below as the statement of a one-line if or while whose condition stopped there', () => {
       check(lines('if (a and', 'b = 1'), [ 'main_test_file 1:9 <expression> expected near \'b\'' ], [ 'b [Variable]' ]);
       check(lines('while (a +', 'b = 1'), [ 'main_test_file 1:10 <expression> expected near \'b\'' ], [ 'b [Variable]' ]);
