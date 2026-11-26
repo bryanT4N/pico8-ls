@@ -156,6 +156,13 @@ describe('Parser recovery', () => {
       [ 'main_test_file 3:4 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ]);
   });
 
+  it('reports the end of a cart\'s code, where its __gfx__ section starts, as the end of the file', () => {
+    const cart = (...code: string[]) => lines('pico-8 cartridge // http://www.pico-8.com', 'version 42', '__lua__', ...code, '__gfx__', '0000');
+    check(cart('function f()', '  x = 1'), [ 'main_test_file 6:0 \'end\' expected (to close \'function\' at line 4) near \'<eof>\'' ], [ 'f() [Function]', 'x [Variable]' ]);
+    check(cart('x ='), [ 'main_test_file 5:0 <expression> expected near \'<eof>\'' ], []);
+    check(cart('x = 1', 'end'), [ 'main_test_file 5:0 unexpected keyword \'end\' near \'<eof>\'' ], [ 'x [Variable]' ]);
+  });
+
   it('reports break outside a loop at the break', () => {
     check(
       lines('function f()', '  break', 'end'),

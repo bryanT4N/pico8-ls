@@ -418,6 +418,7 @@ export default class Lexer {
         && isLineTerminator(this.input.charCodeAt(this.index))) {
       this.reachedEnd = true;
       type = TokenType.EOF;
+      value = '<eof>';
     } else {
       type = TokenType.Identifier;
     }
