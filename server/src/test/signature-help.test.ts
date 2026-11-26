@@ -61,6 +61,16 @@ describe('signatureHelpAt', () => {
     deepStrictEqual(callContextAt(code, code.length), { path: [ 'foreach' ], colon: false, argument: 2 });
   });
 
+  it('takes the then of a one-line if\'s elseif as opening no block, and an elseif after an if\'s do as closing its block', () => {
+    for (const shape of [ 'if (e.z) x=1 elseif (e.y) then x=2', 'if (e.z) x=1 elseif (e.y) then', 'if e.z do x=1 elseif e.y do x=2 end',
+      'if (e.z) x=1', 'if (e.z) x=1 else x=2', 'if (e.z) x=1 else' ]) {
+      const code = lines('foreach(t, function(e)', `  ${shape}`, 'end, ');
+      deepStrictEqual(callContextAt(code, code.length), { path: [ 'foreach' ], colon: false, argument: 2 }, shape);
+    }
+    const inBranch = 'foreach(t, function(e)\n  if e.z do x=1 elseif e.y do print(1, ';
+    deepStrictEqual(callContextAt(inBranch, inBranch.length), { path: [ 'print' ], colon: false, argument: 1 });
+  });
+
   it('stops at a keyword that starts a statement, unless the keyword is in a closed block', () => {
     for (const t of [ 'foo(1,\nlocal x = (2', 'foo(1,\nlocal x = 2', 'foo(1,\nreturn (2', 'foo(1,\n  goto skip', 'foo(1,\nwhile (a',
       'foo(1,\nfor i = 1, (2', 'foo(1,\nif (a', 'foo(1,\nrepeat x = (2', 'foo(1,\nbreak', 'foo(1, {\n  local', 'print((x)\nlocal y = 1\nz = (a' ]) {

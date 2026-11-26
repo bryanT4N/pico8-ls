@@ -23,7 +23,8 @@ type Callee = { path: string[], colon: boolean };
 // or a group.
 type Paren = Callee | 'unnamed call' | 'parameters' | 'group';
 // A function's body opens where its parameter list closes; the other blocks open at then, do and repeat, so that
-// PICO-8's one-line if (c) and while (c), which have neither, open none.
+// PICO-8's one-line if (c) and while (c), which have neither, open none. A then block is an if's, opened by its then or
+// do.
 type Open = { kind: '(', paren: Paren, commas: number } | { kind: '{' | '[', commas: number } | { kind: 'function' | 'then' | 'do' | 'repeat' };
 
 // The innermost call still open at offset. The tokens are read from the start of the text, so strings, comments,
@@ -41,6 +42,10 @@ export function callContextAt(text: string, offset: number): CallContext | undef
     return undefined;
   }
   const open: Open[] = [];
+  // What the then or do still to come at each depth of open opens: the block of an if or elseif, a loop's, or, for a
+  // one-line if's elseif, none. A one-line if leaves its entry, so a later do block at that depth is read as an if's,
+  // which finds the same call.
+  const headers: Array<'then' | 'do' | null | undefined> = [];
   tokens.forEach((token, at) => {
     if (token.type === TokenType.Keyword) {
       switch (token.value) {
@@ -55,19 +60,35 @@ export function callContextAt(text: string, offset: number): CallContext | undef
       case 'return':
       case 'goto':
       case 'break':
-        while (open.length > 0 && [ '(', '{', '[' ].includes(open[open.length - 1].kind)) {
-          open.pop();
-        }
+        closeBrackets(open);
         if (token.value === 'repeat') {
           open.push({ kind: token.value });
+        } else if (token.value === 'if') {
+          headers[open.length] = 'then';
+        } else if (token.value === 'for' || token.value === 'while') {
+          headers[open.length] = 'do';
         }
         break;
       case 'then':
-      case 'do':
-        open.push({ kind: token.value });
+      case 'do': {
+        const header = headers[open.length];
+        headers[open.length] = undefined;
+        if (header !== null) {
+          open.push({ kind: header ?? token.value });
+        }
         break;
+      }
+      // An elseif closes its if's block, and its then or do opens the next one. When the innermost block is not an if's,
+      // the elseif is a one-line if's, whose then or do opens none. In an if's block it can still be a one-line if's, but
+      // either reading finds the same call.
       case 'elseif':
-        close(open, [ 'then' ]);
+        closeBrackets(open);
+        if (open[open.length - 1]?.kind === 'then') {
+          open.pop();
+          headers[open.length] = 'then';
+        } else {
+          headers[open.length] = null;
+        }
         break;
       case 'end':
         close(open, [ 'function', 'then', 'do' ]);
@@ -107,6 +128,8 @@ export function callContextAt(text: string, offset: number): CallContext | undef
       }
       }
     }
+    // A then or do that never came, as in a one-line while, is no longer waited for once its depth closes.
+    headers.length = Math.min(headers.length, open.length + 1);
   });
   let inside = false;
   for (let i = open.length - 1; i >= 0; i--) {
@@ -135,6 +158,12 @@ function close(open: Open[], kinds: Array<Open['kind']>): Open | undefined {
     }
   }
   return undefined;
+}
+
+function closeBrackets(open: Open[]) {
+  while (open.length > 0 && [ '(', '{', '[' ].includes(open[open.length - 1].kind)) {
+    open.pop();
+  }
 }
 
 // The ( at tokens[at] calls the names before it, separated by . or by a last :, as in a.b.c( or obj:m(, unless function
