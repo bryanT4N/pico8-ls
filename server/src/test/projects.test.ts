@@ -141,6 +141,18 @@ describe('nearCart', () => {
     eq(nearCart(path.join(game, 'x.lua'), [ ws ], folder => folder === game), true);
     eq(nearCart(path.join(game, 'src', 'x.lua'), [ ws ], folder => folder === game), false);
   });
+
+  it('looks up to a drive root that is a workspace folder', () => {
+    const root = path.parse(process.cwd()).root;
+    const file = path.join(root, 'games', 'src', 'x.lua');
+    const asked: string[] = [];
+    eq(nearCart(file, [ root ], folder => {
+      asked.push(folder);
+      return folder === root;
+    }), true);
+    deepStrictEqual(asked, [ path.join(root, 'games', 'src'), path.join(root, 'games'), root ]);
+    eq(nearCart(file, [ root ], () => false), false);
+  });
 });
 
 describe('listCartFiles', () => {
@@ -340,12 +352,13 @@ describe('ProjectIndex', () => {
   it('shares a file between two roots: lookups from both, warnings only if both agree', () => {
     const files = {
       'a.p8': 'player = {}\n#include common.lua',
-      'b.p8': '#include common.lua',
-      'common.lua': 'function draw_player()\n  spr(1, player.x, player.y)\nend',
+      'b.p8': 'enemy = {}\n#include common.lua',
+      'common.lua': 'function draw_player()\n  spr(1, player.x, enemy.y)\nend',
     };
     const index = scanned(files);
     deepStrictEqual(index.warnings(uriOf('common.lua')), []);
     deepStrictEqual(index.definitions(uriOf('common.lua'), offsetIn(files, 'common.lua', 2, 9)).map(loc), [ 'a.p8 1:0-1:6' ]);
+    deepStrictEqual(index.definitions(uriOf('common.lua'), offsetIn(files, 'common.lua', 2, 19)).map(loc), [ 'b.p8 1:0-1:5' ]);
   });
 
   it('analyses a file that no project contains as its own project', () => {
@@ -561,17 +574,20 @@ describe('ProjectIndex', () => {
     deepStrictEqual(index.references(uriOf('main.p8'), a, false).map(loc), [ 'main.p8 2:4-2:5' ]);
   });
 
-  // An index whose analysis of main.p8 throws. logged: how many errors the scan reported.
-  const failedAnalysis = (files: { 'main.p8': string }) => {
+  const failedAnalysis = (files: Record<string, string>, failing = 'main.p8') => {
     // The kind of node the formatter inserts, which the analysis does not know.
-    const index = indexOver(files, { tweak: doc => doc.chunk.block.body.push({ type: 'Whitespace', count: 1 } as any) });
+    const index = indexOver(files, { tweak: doc => {
+      if (doc.textDocument.uri === uriOf(failing)) {
+        doc.chunk.block.body.push({ type: 'Whitespace', count: 1 } as any);
+      }
+    } });
     const consoleError = console.error;
-    let logged = 0;
-    console.error = () => {
-      logged++;
+    const logged: unknown[] = [];
+    console.error = (message: unknown) => {
+      logged.push(message);
     };
     try {
-      index.scan([ uriOf('main.p8') ]);
+      index.scan(Object.keys(files).map(uriOf));
     } finally {
       console.error = consoleError;
     }
@@ -582,42 +598,20 @@ describe('ProjectIndex', () => {
     const { index, logged } = failedAnalysis({ 'main.p8': 'function f() end' });
     deepStrictEqual(index.outline(uriOf('main.p8')), []);
     deepStrictEqual(index.warnings(uriOf('main.p8')), []);
-    eq(logged, 1);
+    deepStrictEqual(logged, [ `Failed to analyse the project of ${uriOf('main.p8')}` ]);
   });
 
   it('takes the outline from the next project when the first one\'s analysis failed', () => {
     const files = { 'a.p8': '#include common.lua', 'b.p8': '#include common.lua', 'common.lua': 'function helper()\n  local x = 1\nend' };
-    // The kind of node the formatter inserts, which the analysis does not know, in a.p8 only.
-    const index = indexOver(files, { tweak: doc => {
-      if (doc.textDocument.uri === uriOf('a.p8')) {
-        doc.chunk.block.body.push({ type: 'Whitespace', count: 1 } as any);
-      }
-    } });
-    const consoleError = console.error;
-    console.error = () => undefined;
-    try {
-      index.scan(Object.keys(files).map(uriOf));
-    } finally {
-      console.error = consoleError;
-    }
+    const { index, logged } = failedAnalysis(files, 'a.p8');
+    deepStrictEqual(logged, [ `Failed to analyse the project of ${uriOf('a.p8')}` ]);
     deepStrictEqual(outlineLines(index.outline(uriOf('common.lua'))), [ 'helper() [Function]', '  x [Variable]' ]);
   });
 
   it('takes the warnings from the projects whose analysis did not fail', () => {
     const files = { 'a.p8': '#include common.lua', 'b.p8': '#include common.lua', 'common.lua': 'function helper()\n  print(undefined_thing)\nend' };
-    // The kind of node the formatter inserts, which the analysis does not know, in a.p8 only.
-    const index = indexOver(files, { tweak: doc => {
-      if (doc.textDocument.uri === uriOf('a.p8')) {
-        doc.chunk.block.body.push({ type: 'Whitespace', count: 1 } as any);
-      }
-    } });
-    const consoleError = console.error;
-    console.error = () => undefined;
-    try {
-      index.scan(Object.keys(files).map(uriOf));
-    } finally {
-      console.error = consoleError;
-    }
+    const { index, logged } = failedAnalysis(files, 'a.p8');
+    deepStrictEqual(logged, [ `Failed to analyse the project of ${uriOf('a.p8')}` ]);
     deepStrictEqual(index.warnings(uriOf('common.lua')).map(formatError), [ 'common.lua 2:8 undefined variable: undefined_thing' ]);
   });
 
@@ -752,6 +746,38 @@ describe('ProjectIndex', () => {
     delete files['x.lua'];
     const resend = index.update(uriOf('x.lua'));
     deepStrictEqual([ sorted(index.uris()), resend.includes(uriOf('x.lua')) ], [[], true ]);
+  });
+
+  it('drops the files that a file open only as PICO-8 Lua includes once it closes', () => {
+    const files: Record<string, string> = { 'x.lua': '#include y.lua\nhelper()' };
+    const onDisk = new Map([[ 'x.lua', files['x.lua'] ], [ 'y.lua', 'function helper() end' ]]);
+    const index = indexOver(files, { disk: diskOf(onDisk), isMember: uri => files[nameOf(uri)] !== undefined });
+    index.update(uriOf('x.lua'));
+    deepStrictEqual(sorted(index.uris()), [ 'x.lua', 'y.lua' ]);
+    delete files['x.lua'];
+    const resend = index.update(uriOf('x.lua'));
+    deepStrictEqual([ sorted(index.uris()), sorted(resend) ], [[], [ 'x.lua', 'y.lua' ]]);
+  });
+
+  it('drops two files that include each other once no member includes either', () => {
+    const files: Record<string, string> = { 'main.p8': '#include .shared/a.lua' };
+    const onDisk = new Map([[ 'a.lua', '#include b.lua\nfunction fa() end' ], [ 'b.lua', '#include a.lua\nfunction fb() end' ]]);
+    const index = indexOver(files, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') });
+    index.update(uriOf('main.p8'));
+    deepStrictEqual(sorted(index.uris()), [ '.shared/a.lua', '.shared/b.lua', 'main.p8' ]);
+    files['main.p8'] = 'x = 1';
+    const resend = index.update(uriOf('main.p8'));
+    deepStrictEqual([ sorted(index.uris()), sorted(resend) ], [[ 'main.p8' ], [ '.shared/a.lua', '.shared/b.lua', 'main.p8' ]]);
+  });
+
+  it('takes back a removed file that a member still includes', () => {
+    const onDisk = new Map([[ 'main.p8', '#include lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ]]);
+    const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') });
+    index.scan([ uriOf('main.p8') ]);
+    const joins = index.joins();
+    eq(index.removeAll([ uriOf('lib.lua') ]).includes(uriOf('lib.lua')), true);
+    deepStrictEqual([ sorted(index.uris()), index.joins() ], [[ 'lib.lua', 'main.p8' ], joins + 1 ]);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(Object.fromEntries(onDisk), 'main.p8', 2, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
   });
 
   it('counts the files that join', () => {
@@ -990,7 +1016,7 @@ describe('ProjectIndex', () => {
   });
 
   it('hovers from the first project by root URI', () => {
-    const files = { 'a.p8': 'x = 1\n-- from a\nplayer = {}\n#include common.lua', 'b.p8': 'x = 1\n-- from b\nplayer = {}\n#include common.lua', 'common.lua': 'print(player)' };
+    const files = { 'b.p8': 'x = 1\n-- from b\nplayer = {}\n#include common.lua', 'a.p8': 'x = 1\n-- from a\nplayer = {}\n#include common.lua', 'common.lua': 'print(player)' };
     eq(scanned(files).hover(uriOf('common.lua'), offsetIn(files, 'common.lua', 1, 6)), '```pico-8-lua\n(global) player = {\u2026}\n```\n\nfrom a');
   });
 

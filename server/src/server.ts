@@ -18,11 +18,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { buildDocumentSymbols } from './document-symbols';
 import { computeFoldingRanges } from './folding-ranges';
-import { maxProblems } from './diagnostics';
 import { completionItems, completionRequestAt, Offered, resolveUserItem, wordAt } from './completion';
 import { builtinMarkdown } from './hover';
 import { builtinSignatureHelp, CallContext, callContextAt } from './signature-help';
-import { NO_OUTLINE_OPTIONS, OutlineOptions, outlineOptionsFrom } from './parser/outline/model';
+import { DEFAULT_SETTINGS, PicoSettings, settingsFrom } from './settings';
 import { guarded } from './guarded';
 
 console.log('PICO-8-LS language server starting.');
@@ -100,15 +99,7 @@ function notifyCartFiles() {
   connection.sendNotification('pico-8-ls/didChangeCartFiles');
 }
 
-// Set up some initial configs
-connection.onInitialize((params: InitializeParams) => {
-  const capabilities = params.capabilities;
-
-  // Does the client support the `workspace/configuration` request?
-  // If not, we fall back using global settings.
-  hasConfigurationCapability = !!(capabilities.workspace && capabilities.workspace.configuration);
-  hasWorkspaceFolderCapability = !!(capabilities.workspace && capabilities.workspace.workspaceFolders);
-
+function initializeResult(): InitializeResult {
   const result: InitializeResult = {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
@@ -131,7 +122,19 @@ connection.onInitialize((params: InitializeParams) => {
   }
 
   return result;
-});
+}
+
+// The fallback takes the client to support neither workspace/configuration nor workspace folders.
+connection.onInitialize(guarded('read the client capabilities', initializeResult, (params: InitializeParams) => {
+  const capabilities = params.capabilities;
+
+  // Does the client support the `workspace/configuration` request?
+  // If not, we fall back using global settings.
+  hasConfigurationCapability = !!(capabilities.workspace && capabilities.workspace.configuration);
+  hasWorkspaceFolderCapability = !!(capabilities.workspace && capabilities.workspace.workspaceFolders);
+
+  return initializeResult();
+}));
 
 connection.onInitialized(() => {
   if (hasConfigurationCapability) {
@@ -167,7 +170,8 @@ connection.onInitialized(() => {
       if (left.length > 0 || index.joins() > joined) {
         publish([ ...index.uris(), ...left ]);
       }
-      if (index.joins() > joined) {
+      // A file under a removed folder and in a dot-folder of it can now belong to a cart in its own folder.
+      if (removed.length > 0 || index.joins() > joined) {
         notifyCartFiles();
       }
       Promise.all(event.added.map(scanWorkspaceFolder)).catch(e => {
@@ -317,16 +321,9 @@ function publish(uris: string[]) {
   }
 }
 
-interface DocumentSettings {
-  maxNumberOfProblems: number;
-  outline: OutlineOptions;
-}
-
 // Diagnostics are sent synchronously after each parse, so they take the limit last fetched rather than asking for the
 // settings each time.
-let globalSettings: DocumentSettings = { maxNumberOfProblems: maxProblems(undefined), outline: NO_OUTLINE_OPTIONS };
-
-type PicoSettings = { maxNumberOfProblems?: unknown, outline?: unknown } | null | undefined;
+let globalSettings = DEFAULT_SETTINGS;
 
 async function fetchGlobalSettings() {
   if (!hasConfigurationCapability) {
@@ -341,11 +338,10 @@ async function fetchGlobalSettings() {
 
 // VS Code keeps the outline it has until it is asked again, which the client does on the notification. The first
 // settings count too: the scan does not wait for them, so an outline given before they came had the defaults.
-function takeSettings(settings: PicoSettings) {
-  const outline = outlineOptionsFrom(settings?.outline);
-  const changed = (Object.keys(outline) as Array<keyof OutlineOptions>).some(key => outline[key] !== globalSettings.outline[key]);
-  globalSettings = { maxNumberOfProblems: maxProblems(settings?.maxNumberOfProblems), outline };
-  if (changed) {
+function takeSettings(given: PicoSettings) {
+  const { settings, outlineChanged } = settingsFrom(given, globalSettings);
+  globalSettings = settings;
+  if (outlineChanged) {
     connection.sendNotification('pico-8-ls/didChangeOutlineOptions');
   }
 }
