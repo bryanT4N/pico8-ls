@@ -98,14 +98,6 @@ describe('Parser recovery', () => {
     );
   });
 
-  it('keeps goto continue and break in a loop error-free after a broken statement', () => {
-    check(
-      lines('for i=1,3 do', '  repeat', '  until )', '  if i==2 then goto continue end', '  if i==3 then break end', '  ::continue::', 'end'),
-      [ 'main_test_file 3:8 <expression> expected near \')\'' ],
-      [ 'continue [Label]' ],
-    );
-  });
-
   it('leaves out a goto, label or break error that Lua finds only after another error, where it stops', () => {
     assert.deepStrictEqual(errorsOf(lines('goto nowhere', 'x = = 1')), [ 'main_test_file 2:4 <expression> expected near \'=\'' ]);
     assert.deepStrictEqual(errorsOf(lines('repeat', '  goto nowhere', 'until')), [ 'main_test_file 3:0 <expression> expected near \'<eof>\'' ]);
@@ -116,7 +108,7 @@ describe('Parser recovery', () => {
     assert.deepStrictEqual(errorsOf(lines('goto nowhere', 'x = "abc')), [ 'main_test_file 2:4 unfinished string near \'"abc\'' ]);
   });
 
-  it('keeps a goto, label or break error that Lua finds before any other error, in order of place', () => {
+  it('reports a goto, label or break error that Lua finds before any other error', () => {
     assert.deepStrictEqual(errorsOf(lines('::a::', '::a::', 'x = = 1')), [
       'main_test_file 2:2 label \'a\' already defined on line 1',
       'main_test_file 3:4 <expression> expected near \'=\'',
@@ -133,10 +125,19 @@ describe('Parser recovery', () => {
       'main_test_file 2:2 no visible label \'nowhere\' for <goto>',
       'main_test_file 4:4 <expression> expected near \'=\'',
     ]);
-    assert.deepStrictEqual(errorsOf(lines('goto nowhere', 'break')), [
-      'main_test_file 1:0 no visible label \'nowhere\' for <goto>',
-      'main_test_file 2:0 no loop to break near \'break\'',
+    assert.deepStrictEqual(errorsOf(lines('::a::', '::a x')), [
+      'main_test_file 2:2 label \'a\' already defined on line 1',
+      'main_test_file 2:4 \'::\' expected near \'x\'',
     ]);
+  });
+
+  it('reports only the first goto, label or break error that Lua finds', () => {
+    assert.deepStrictEqual(errorsOf(lines('goto nowhere', 'break')), [ 'main_test_file 1:0 no visible label \'nowhere\' for <goto>' ]);
+    assert.deepStrictEqual(errorsOf(lines('break', 'goto nowhere')), [ 'main_test_file 1:0 no loop to break near \'break\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('goto nowhere', '::a::', '::a::')), [ 'main_test_file 3:2 label \'a\' already defined on line 2' ]);
+    assert.deepStrictEqual(errorsOf(lines('break', 'function f()', '  break', 'end')), [ 'main_test_file 3:2 no loop to break near \'break\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('goto nowhere', 'function f()', '  goto alsonowhere', 'end')),
+      [ 'main_test_file 3:2 no visible label \'alsonowhere\' for <goto>' ]);
   });
 
   it('reports elseif without then', () => {

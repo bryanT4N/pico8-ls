@@ -686,7 +686,7 @@ describe('ProjectIndex', () => {
       .map(d => `${d.range.start.line + 1}:${d.range.start.character} ${d.message}`);
     deepStrictEqual([ 'labels.p8', 'lib.lua', 'one.p8', 'two.p8', 'va.lua', 'typo.p8', 'bad.lua' ].map(shown), [
       [],
-      [ '1:2 label \'a\' already defined on line 1' ],
+      [ '1:2 label \'a\' already defined on line 1 of labels.p8' ],
       [],
       [],
       [ '1:4 cannot use \'...\' outside a Vararg function near \'...\'' ],

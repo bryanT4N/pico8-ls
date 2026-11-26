@@ -1,4 +1,6 @@
+import * as path from 'path';
 import { createErrForToken, errMessages, ParseError } from './errors';
+import ResolvedFile from './file-resolver';
 import { Token } from './tokens';
 
 export type Goto = {
@@ -11,6 +13,7 @@ export type Goto = {
 export type Label = {
   localCount: number,
   line: number,
+  file: ResolvedFile,
 };
 
 export type Local = {
@@ -37,7 +40,6 @@ export class FlowContext {
   allowVararg: boolean;
   scopes: FlowScope[];
   pendingGotos: Goto[];
-  breaksOutsideLoops: Token[];
   errors: ParseError[];
   stoppedBefore: (found: Token) => boolean;
 
@@ -45,7 +47,6 @@ export class FlowContext {
     this.allowVararg = false;
     this.scopes = [];
     this.pendingGotos = [];
-    this.breaksOutsideLoops = [];
     this.errors = errors;
     this.stoppedBefore = stoppedBefore;
   }
@@ -83,24 +84,25 @@ export class FlowContext {
     this.scopes.pop();
   }
 
-  // Leaves the function's own scope, where Lua reports a goto that is still
-  // without its label and a break outside a loop. found: the token Lua has read
-  // there, the one after the function's `end`, or the end of the file.
+  // Leaves the function's own scope, where Lua reports the first goto that is
+  // still without its label, a break outside a loop being one. found: the token
+  // Lua has read there, the one after the function's `end`, or the end of the
+  // file.
   endFunction(found: Token) {
-    for (const theGoto of this.pendingGotos) {
-      this.report(found, createErrForToken(theGoto.token, errMessages.labelNotVisible, theGoto.target));
+    const [ first ] = this.pendingGotos;
+    if (first) {
+      this.report(found, first.target === 'break'
+        ? createErrForToken(first.token, errMessages.noLoopToBreak, 'break')
+        : createErrForToken(first.token, errMessages.labelNotVisible, first.target));
     }
-    for (const token of this.breaksOutsideLoops) {
-      this.report(found, createErrForToken(token, errMessages.noLoopToBreak, 'break'));
-    }
-    this.pendingGotos = [];
-    this.breaksOutsideLoops = [];
     this.scopes.pop();
   }
 
+  // Lua takes a break as a goto to a label named break, which no code can
+  // define, so one outside a loop is still pending at the end of the function.
   addBreak(token: Token) {
     if (!this.isInLoop()) {
-      this.breaksOutsideLoops.push(token);
+      this.pendingGotos.push({ maxDepth: this.scopes.length, target: 'break', token, localCounts: [] });
     }
   }
 
@@ -129,7 +131,10 @@ export class FlowContext {
 
     // The first label of a name stays the one gotos jump to.
     if (Object.prototype.hasOwnProperty.call(scope.labels, name)) {
-      this.report(found, createErrForToken(token, errMessages.labelAlreadyDefined, name, scope.labels[name].line));
+      const first = scope.labels[name];
+      this.report(found, first.file.equals(token.bounds.start.filename)
+        ? createErrForToken(token, errMessages.labelAlreadyDefined, name, first.line)
+        : createErrForToken(token, errMessages.labelAlreadyDefinedInFile, name, first.line, path.basename(first.file.path)));
       return;
     }
 
@@ -154,6 +159,7 @@ export class FlowContext {
     scope.labels[name] = {
       localCount: scope.locals.length,
       line: token.bounds.start.line,
+      file: token.bounds.start.filename,
     };
   }
 

@@ -87,8 +87,8 @@ export default class Parser {
   // Keep track of all errors that occurred while parsing.
   errors: errors.ParseError[] = [];
 
-  // The errors of gotos, labels and breaks, apart from the others, which stoppedBefore checks: each is kept only when
-  // Lua finds it before any other error, and does not count as one itself.
+  // The error of a goto, a label or a break, kept apart from the others until the end: only one, the first that Lua
+  // finds, and only when Lua finds no other error before it (stoppedBefore).
   private gotoErrors: errors.ParseError[] = [];
 
   includes: Include[] = [];
@@ -268,11 +268,11 @@ export default class Parser {
     }
   }
 
-  // Whether Lua stops at another error before it is done reading found: one in errors, or one that a lexer still
-  // reading has found before there. The lexer of the file being read has read up to found, and each lexer under it
-  // up to the #include of the next one.
+  // Whether Lua stops at an error before it is done reading found: one found so far, or one that a lexer still reading
+  // has found before there. The lexer of the file being read has read up to found, and each lexer under it up to the
+  // #include of the next one.
   private stoppedBefore(found: Token): boolean {
-    if (this.errors.length > 0) {
+    if (this.errors.length > 0 || this.gotoErrors.length > 0) {
       return true;
     }
     return this.lexerStack.some(({ lexer }, i) => {
@@ -310,7 +310,6 @@ export default class Parser {
 
     while (!endingFunction(this.token)) {
       const locationDepth = this.locations.length;
-      const flowDepth = flowContext.scopes.length;
       const levels = this.levels;
 
       try {
@@ -349,15 +348,10 @@ export default class Parser {
       } catch (e) {
         if (errors.isParseError(e)) {
           // A statement that throws part-way through leaves its location
-          // markers, nesting levels and flow scopes behind: the nodes around it
-          // would get the wrong start, later statements would count as nested
-          // in it, and the flow scopes of every such statement would pile up
-          // for each later break and goto to go through.
+          // markers and nesting levels behind: the nodes around it would get
+          // the wrong start, and later statements would count as nested in it.
           this.locations.length = locationDepth;
           this.levels = levels;
-          while (flowContext.scopes.length > flowDepth) {
-            flowContext.popScope();
-          }
 
           // Caught a parse error. Add it to errors and synchronize.
           this.errors.push(e);
@@ -552,9 +546,10 @@ export default class Parser {
     const nameToken = this.token;
     const label = this.parseIdentifier();
 
+    // Before the `::`, as Lua finds the name taken before it reads on.
+    flowContext.addLabel(nameToken.value as string, nameToken, this.token);
     this.lexer.expect('::');
 
-    flowContext.addLabel(nameToken.value as string, nameToken, this.previousToken);
     return this.finishNode(AST.labelStatement(label));
   }
 

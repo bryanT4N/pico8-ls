@@ -24,6 +24,7 @@ export const errMessages = Object.freeze({
   ambiguousSyntax: 'ambiguous syntax (function call x new statement) near \'%1\'',
   noLoopToBreak: 'no loop to break near \'%1\'',
   labelAlreadyDefined: 'label \'%1\' already defined on line %2',
+  labelAlreadyDefinedInFile: 'label \'%1\' already defined on line %2 of %3',
   labelNotVisible: 'no visible label \'%1\' for <goto>',
   gotoJumpInLocalScope: '<goto %1> jumps into the scope of local \'%2\'',
   cannotUseVararg: 'cannot use \'...\' outside a Vararg function near \'%1\'',
