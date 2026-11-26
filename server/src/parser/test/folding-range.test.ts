@@ -248,11 +248,6 @@ end
     ]);
   });
 
-  it('takes no #region or #endregion in a long comment', () => {
-    deepEquals(foldingRegionsOf('test.lua', lines('--[[ #region ]]', 'x = 1', '--[[ #endregion ]]', 'y = 2')), []);
-    deepEquals(foldingRegionsOf('test.lua', lines('--[==[', '#region b', ']==]', 'x = 1', '-- #endregion')), []);
-  });
-
   it('should create folding regions when #region has a label and #endregion does not', () => {
     const code = `
 -- #region MyLabeledRegion
@@ -296,6 +291,11 @@ local a = 1
     deepEquals(regions, [
       { name: 'StartLabel', startLine: 0, endLine: 2 },
     ]);
+  });
+
+  it('takes no #region or #endregion in a long comment', () => {
+    deepEquals(foldingRegionsOf('test.lua', lines('--[[ #region ]]', 'x = 1', '--[[ #endregion ]]', 'y = 2')), []);
+    deepEquals(foldingRegionsOf('test.lua', lines('--[==[', '#region b', ']==]', 'x = 1', '-- #endregion')), []);
   });
 
   it('should handle deeply nested #region and #endregion markers with labels', () => {

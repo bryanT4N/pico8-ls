@@ -32,7 +32,7 @@ function collectInvalid(syms: CodeSymbol[], mainFile: ResolvedFile): string[] {
         s.name === '' ||
         (block !== undefined && (s.loc.start.index < block.loc.start.index || s.loc.end.index > block.loc.end.index))
       ) {
-        invalid.push(s.name);
+        invalid.push(s.name || '<empty>');
       }
       walk(s.children, s.type === CodeSymbolType.Block ? s : undefined);
     }
@@ -104,12 +104,12 @@ function parseJob(job: ChildParseJob): ChildParseResult {
 
   // A throw in the analysis or in a query shows up in `threw` too, along with
   // what the parse found.
-  let symbols: CodeSymbol[];
+  let noOptions: CodeSymbol[];
   let allOptions: CodeSymbol[];
   const counts: Counts = { queries: 0, hovers: 0, signatureHelps: 0, symbols: 0 };
   try {
     const analysis = analyze(chunk);
-    symbols = outlineFor(analysis, mainFile);
+    noOptions = outlineFor(analysis, mainFile);
     allOptions = outlineFor(analysis, mainFile, ALL_OUTLINE_OPTIONS, job.code);
     runQueries(analysis, mainFile, job.code, counts);
   } catch (e) {
@@ -130,8 +130,8 @@ function parseJob(job: ChildParseJob): ChildParseResult {
     threw: null,
     errors: chunk.errors.map(formatError),
     statements: chunk.block.body.map(s => s.type + (s.included ? '*' : '')),
-    outline: outlineLines(symbols),
-    invalid: [ ...collectInvalid(symbols, mainFile), ...collectInvalid(allOptions, mainFile).map(name => 'all options: ' + name) ],
+    outline: outlineLines(noOptions),
+    invalid: [ ...collectInvalid(noOptions, mainFile), ...collectInvalid(allOptions, mainFile).map(name => 'all options: ' + name) ],
     ...counts,
   };
 }

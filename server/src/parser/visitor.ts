@@ -13,6 +13,8 @@ export type VisitableASTNode = Statement | Expression | GeneralIfClause | Genera
 
 export type NodeGettingVisited = {
   node: VisitableASTNode,
+  // The index in nodeStack of the nearest entry below this one that callbackOwner looks at, or -1.
+  below?: number,
 };
 
 // Defines the visitor pattern for all nodes in the AST structure.

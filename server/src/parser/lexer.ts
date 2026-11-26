@@ -789,7 +789,7 @@ export default class Lexer {
   }
 
   // -- or, in PICO-8, //.
-  isCommentStart(index: number): boolean {
+  private isCommentStart(index: number): boolean {
     const charCode = this.input.charCodeAt(index);
     return (45 === charCode || 47 === charCode) && charCode === this.input.charCodeAt(index + 1);
   }

@@ -1,6 +1,6 @@
 import { strictEqual as eq } from 'assert';
 import { Statement } from '../statements';
-import { analyzeCode, bounds, deepEquals, deepEqualsAST, formatError, getTestFileContents, MockFileResolver, parse, TestFilesResolver, warningsIn } from './test-utils';
+import { analyzeCode, bounds, deepEquals, deepEqualsAST, formatError, getTestFileContents, MockFileResolver, parse, parseInChild, TestFilesResolver, warningsIn } from './test-utils';
 
 describe('Parser', () => {
   it('parses basic assignment statement', () => {
@@ -927,9 +927,10 @@ __music__
     });
 
     it('skips a lone !', () => {
-      const { errors, block } = parse('x = 1 !\ny = 2');
-      deepEquals(errors.map(formatError), [ 'main_test_file 1:6 unexpected symbol \'!\'' ]);
-      deepEquals(statementsOf(block.body), [ 'AssignmentStatement 1', 'AssignmentStatement 2' ]);
+      const result = parseInChild('x = 1 !\ny = 2');
+      eq(result.threw, null);
+      deepEquals(result.errors, [ 'main_test_file 1:6 unexpected symbol \'!\'' ]);
+      deepEquals(result.statements, [ 'AssignmentStatement', 'AssignmentStatement' ]);
     });
 
     it('sorts lexical and syntax errors by position', () => {

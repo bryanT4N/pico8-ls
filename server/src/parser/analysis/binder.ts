@@ -812,7 +812,7 @@ class Binder extends ASTVisitor<BinderScope> {
   // first assigned in _init is listed at the top level, and a cursor in a callback listed there would no longer find _init.
   private callbackOwner(): { owner: Owner, natural?: Owner } {
     const natural = this.topScope().owner;
-    for (let i = this.nodeStack.length - 1; i >= 0; i--) {
+    for (let i = this.nodeStack.length - 1; i >= 0; i = this.candidateBelow(i)) {
       const { node } = this.nodeStack[i];
       if (node.type === 'FunctionDeclaration') {
         break;
@@ -823,6 +823,29 @@ class Binder extends ASTVisitor<BinderScope> {
       }
     }
     return { owner: natural };
+  }
+
+  // The stack below a node does not change while the node is on it, so each entry keeps the next one with a value
+  // entry or a function below it: a chain of 30,000 values, as in a and function() end and ..., would otherwise be
+  // walked once for each of its functions.
+  private candidateBelow(i: number): number {
+    if (this.nodeStack[i].below === undefined) {
+      const walked: number[] = [ i ];
+      let j = i - 1;
+      while (j >= 0 && this.nodeStack[j].node.type !== 'FunctionDeclaration' && !this.valueEntries.has(this.nodeStack[j].node)) {
+        const below = this.nodeStack[j].below;
+        if (below !== undefined) {
+          j = below;
+          break;
+        }
+        walked.push(j);
+        j--;
+      }
+      for (const k of walked) {
+        this.nodeStack[k].below = j;
+      }
+    }
+    return this.nodeStack[i].below!;
   }
 
   // Breadcrumbs descend into the first entry whose range contains the cursor, and the range of a member can lie outside

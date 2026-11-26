@@ -77,6 +77,7 @@ describe('Parser recovery', () => {
       [ 'main_test_file 2:2 <goto f> jumps into the scope of local \'x\'' ],
       [ 'x [Variable]', 'f [Label]', 'y [Variable]', 'z [Variable]', 'w [Variable]' ],
     );
+    assert.strictEqual(block.body[0].type, 'DoStatement');
     assert.deepStrictEqual((block.body[0] as DoStatement).block.body.map(s => s.type), [
       'GotoStatement', 'LocalStatement', 'LabelStatement', 'CallStatement', 'AssignmentStatement', 'AssignmentStatement',
     ]);
@@ -219,6 +220,7 @@ describe('Parser recovery', () => {
   it('parses the statement after a broken for statement into the function', () => {
     const { errors, block } = parse(lines('function f()', '  for i=1,10 x', '  i = 5', 'end'));
     assert.deepStrictEqual(errors.map(formatError), [ 'main_test_file 2:13 \'do\' expected near \'x\'' ]);
+    assert.deepStrictEqual(block.body.map(s => s.type), [ 'FunctionDeclaration' ]);
     const statement = (block.body[0] as FunctionDeclaration).block.body[0];
     assert.strictEqual(statement.type, 'AssignmentStatement');
     assert.strictEqual(((statement as AssignmentStatement).variables[0] as Identifier).name, 'i');
