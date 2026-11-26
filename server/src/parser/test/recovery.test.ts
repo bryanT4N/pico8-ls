@@ -1,9 +1,11 @@
 import * as assert from 'assert';
+import { performance } from 'perf_hooks';
 import { Identifier } from '../expressions';
 import { FoldingRangeVisitor } from '../folding-range-visitor';
+import Parser from '../parser';
 import { AssignmentStatement, DoStatement, FunctionDeclaration, getFunctionDeclarationName, IfStatement } from '../statements';
 import { ASTNode, Bounds } from '../types';
-import { formatError, parse, ParsedForTest, parseInChild, TestFilesResolver } from './test-utils';
+import { formatError, parse, ParsedForTest, parseInChild, TestFilesResolver, testFile } from './test-utils';
 import { allSymbols, outlineLines } from './outline-utils';
 
 const lines = (...l: string[]) => l.join('\n');
@@ -14,6 +16,8 @@ function check(code: string, errors: string[], outline: string[]) {
   assert.deepStrictEqual(outlineLines(chunk.symbols), outline);
   return chunk;
 }
+
+const errorsOf = (code: string) => parse(code).errors.map(formatError);
 
 const span = (loc: Bounds | undefined) => `${loc!.start.line}:${loc!.start.column}-${loc!.end.line}:${loc!.end.column}`;
 
@@ -219,7 +223,7 @@ describe('Parser recovery', () => {
   it('reports a goto without its label inside a statement that failed', () => {
     check(
       lines('repeat', '  goto nowhere', 'until'),
-      [ 'main_test_file 2:2 no visible label \'nowhere\' for <goto>', 'main_test_file 3:0 <expression> expected near \'<eof>\'' ],
+      [ 'main_test_file 2:2 no visible label \'nowhere\' for <goto>', 'main_test_file 3:5 <expression> expected near \'<eof>\'' ],
       [],
     );
   });
@@ -511,6 +515,78 @@ describe('Parser recovery', () => {
       check(lines('x = g(function() if a then end end) +', 'player.x = 3'), [ 'main_test_file 1:37 <expression> expected near \'player\'' ],
         [ 'x [Variable]', '  <anonymous function>() [Function]', 'player [Table]', '  x [Field]' ]);
     });
+
+    it('reports a value left to type after a unary operator, a dot, a colon or a comma at the end of its line', () => {
+      assert.deepStrictEqual(errorsOf(lines('x = -', 'player.x = 3')), [ 'main_test_file 1:5 <expression> expected near \'player\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('x = not', 'player.x = 3')), [ 'main_test_file 1:7 <expression> expected near \'player\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('x = #', 'player.x = 3')), [ 'main_test_file 1:5 <expression> expected near \'player\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('x = a.', 'player.x = 3')), [ 'main_test_file 1:6 <name> expected near \'player\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('x = a:', 'player.x = 3')), [ 'main_test_file 1:6 <name> expected near \'player\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('x = 1,', 'player.x = 3')), [ 'main_test_file 1:6 <expression> expected near \'player\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('x = 1,', 'y = 2')), [ 'main_test_file 1:6 <expression> expected near \'y\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('local x = 1,', 'player.x = 3')), [ 'main_test_file 1:12 <expression> expected near \'player\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('return 1,', 'player.x = 3')), [ 'main_test_file 1:9 <expression> expected near \'player\'' ]);
+    });
+
+    it('reads the line below a colon, a dot or a comma as the rest of the value when it can be', () => {
+      for (const code of [ lines('x = a:', 'update()'), lines('x = a.', '  b'), lines('x = 1,', 'foo()'), lines('function a.', 'b()', 'end') ]) {
+        assert.deepStrictEqual(errorsOf(code), [], code);
+      }
+    });
+
+    it('reports the value of a table field left to type at the end of its line', () => {
+      assert.deepStrictEqual(errorsOf(lines('t = { a =', 'player.x = 3')), [ 'main_test_file 1:9 <expression> expected near \'player\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('t = { [1] =', 'player.x = 3')), [ 'main_test_file 1:11 <expression> expected near \'player\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('t = {', '  a =', '}')), [ 'main_test_file 2:5 <expression> expected near \'}\'' ]);
+      assert.strictEqual(errorsOf(lines('t = {', '  a = 1,', '  b =', '  c = 3,', '}'))[0], 'main_test_file 3:5 <expression> expected near \'c\'');
+    });
+
+    it('reports the value of a header left to type right after its keyword, its = or a comma', () => {
+      assert.deepStrictEqual(errorsOf(lines('while', '  x = 1', 'end')), [ 'main_test_file 1:5 <expression> expected near \'x\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('function f()', '  if', '    x = 1', '  end', 'end')), [ 'main_test_file 2:4 <expression> expected near \'x\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('for i =', '  x = 1', 'end')), [ 'main_test_file 1:7 <expression> expected near \'x\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('for k, v in pairs(t),', '    y = 1', 'end')), [ 'main_test_file 1:21 <expression> expected near \'y\'' ]);
+      assert.deepStrictEqual(errorsOf(lines('repeat', '  y = 1', 'until', 'x = 1')), [ 'main_test_file 3:5 <expression> expected near \'x\'' ]);
+    });
+
+    it('reports a function name left to type after a dot or a colon at the end of its line', () => {
+      assert.strictEqual(errorsOf(lines('function guy:', '  self.weight = 0', 'end'))[0], 'main_test_file 1:13 <name> expected near \'self\'');
+      assert.strictEqual(errorsOf(lines('function guy.', '  x = 1', 'end'))[0], 'main_test_file 1:13 <name> expected near \'x\'');
+    });
+
+    const nestedInFunctionValues = (depth: number, innermost: string, atEachLevel = '') => {
+      let code = innermost;
+      for (let i = 0; i < depth; i++) {
+        code = `v = g(function()\n${atEachLevel}${code}end) +\nw.x = 3\n`;
+      }
+      return code;
+    };
+
+    it('parses again no statement whose function values had 8 statements parsed again, and keeps the first error', () => {
+      const errors = errorsOf(nestedInFunctionValues(12, 'y = 1\n'));
+      assert.deepStrictEqual([ errors.length, errors[0], errors[errors.length - 1] ],
+        [ 12, 'main_test_file 14:6 <expression> expected near \'w\'', 'main_test_file 37:4 unexpected symbol \'=\' near \'3\'' ]);
+    });
+
+    it('parses unfinished statements nested in function values, as many as a cart holds, in under 50 ms', () => {
+      // Mocha sets Error.stackTraceLimit to Infinity, so each parse error would copy the parser's whole stack, which is
+      // deep here; the server runs with Node's default.
+      const stackTraceLimit = Error.stackTraceLimit;
+      Error.stackTraceLimit = 10;
+      try {
+        for (const code of [ nestedInFunctionValues(60, 'a = b + c * d\n'.repeat(900)), nestedInFunctionValues(90, 'y = 1\n', 'x =\ny.z = 2\n'),
+          nestedInFunctionValues(150, 'a = b + c * d\n'.repeat(300)) ]) {
+          const times = [ 0, 1, 2, 3 ].map(() => {
+            const start = performance.now();
+            new Parser(testFile(), code).parseChunk();
+            return performance.now() - start;
+          }).slice(1).sort((a, b) => a - b);
+          assert.ok(times[1] < 50, `${times[1]} ms`);
+        }
+      } finally {
+        Error.stackTraceLimit = stackTraceLimit;
+      }
+    });
   });
 
   describe('a table, an argument list or an index left open', () => {
@@ -519,8 +595,7 @@ describe('Parser recovery', () => {
         [ 't [Table]', '  a [Field]', '_update() [Function]' ]);
       check(lines('t = {', '  a = 1', 'function _update()', 'end'), [ 'main_test_file 1:4 \'}\' expected (to close \'{\' at line 1) near \'function\'' ],
         [ 't [Table]', '  a [Field]', '_update() [Function]' ]);
-      check(lines('t = {', '  a =', 'local x = 1'), [ 'main_test_file 1:4 \'}\' expected (to close \'{\' at line 1) near \'local\'' ],
-        [ 't [Table]', 'x [Variable]' ]);
+      check(lines('t = {', '  a =', 'local x = 1'), [ 'main_test_file 2:5 <expression> expected near \'local\'' ], [ 't [Table]', 'x [Variable]' ]);
       check(lines('function f()', '  t = {', '    a = 1,', '  local b = 2', 'end'),
         [ 'main_test_file 2:6 \'}\' expected (to close \'{\' at line 2) near \'local\'' ], [ 'f() [Function]', '  b [Variable]', 't [Table]', '  a [Field]' ]);
       check(lines('foo(a,', 'if b then end'), [ 'main_test_file 1:3 \')\' expected (to close \'(\' at line 1) near \'if\'' ], []);
@@ -535,7 +610,7 @@ describe('Parser recovery', () => {
       check(lines('if a then', '  t = {', 'else', 'end'), [ 'main_test_file 2:6 \'}\' expected (to close \'{\' at line 2) near \'else\'' ], [ 't [Table]' ]);
       check(lines('repeat', '  t = {', '    a = 1,', 'until done'),
         [ 'main_test_file 2:6 \'}\' expected (to close \'{\' at line 2) near \'until\'' ], [ 't [Table]', '  a [Field]' ]);
-      check(lines('function f()', '  t = {', '    a =', 'end'), [ 'main_test_file 2:6 \'}\' expected (to close \'{\' at line 2) near \'end\'' ], [ 'f() [Function]', 't [Table]' ]);
+      check(lines('function f()', '  t = {', '    a =', 'end'), [ 'main_test_file 3:7 <expression> expected near \'end\'' ], [ 'f() [Function]', 't [Table]' ]);
       check(lines('function f()', '  print("x",', 'end'), [ 'main_test_file 2:7 \')\' expected (to close \'(\' at line 2) near \'end\'' ], [ 'f() [Function]' ]);
       check(lines('if a then', '  f(1,', 'elseif b then', 'end'), [ 'main_test_file 2:3 \')\' expected (to close \'(\' at line 2) near \'elseif\'' ], []);
       check(lines('repeat', '  f(', 'until x'), [ 'main_test_file 2:3 \')\' expected (to close \'(\' at line 2) near \'until\'' ], []);
