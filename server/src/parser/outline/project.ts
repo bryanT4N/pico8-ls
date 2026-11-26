@@ -1,5 +1,6 @@
 import ResolvedFile from '../file-resolver';
 import { Bounds, boundsContain } from '../types';
+import { groupBy } from '../util';
 import { CodeSymbol, CodeSymbolType, NO_OUTLINE_OPTIONS, OutlineBlock, OutlineEntry, OutlineOptions } from './model';
 
 // blocks: those of the analysis; text: the file's, which names the blocks.
@@ -51,25 +52,22 @@ function project(entries: OutlineEntry[], file: ResolvedFile, levels?: Levels): 
 // What the options add to each level of the outline: the level of an entry of this file, or the top, whose owner is
 // undefined, as it is for the blocks there.
 class Levels {
-  private readonly blocksByOwner = new Map<OutlineEntry | undefined, OutlineBlock[]>();
+  private readonly blocksByOwner: Map<OutlineEntry | undefined, OutlineBlock[]>;
   private readonly ownerOf = new Map<OutlineBlock, OutlineEntry | undefined>();
   // The block that a symbol made from an entry, or a loop variable, is in.
   private readonly blockOf = new Map<CodeSymbol, OutlineBlock>();
 
   constructor(private readonly file: ResolvedFile, blocks: OutlineBlock[], private readonly options: OutlineOptions, private readonly text: string) {
-    for (const block of blocks) {
-      if (block.loc.start.filename.equals(file)) {
-        // A block in the body of a function of another file goes up with the entries lifted from there.
-        let owner = block.owner;
-        while (owner && !owner.loc.start.filename.equals(file)) {
-          owner = 'loc' in owner.parent ? owner.parent as OutlineEntry : undefined;
-        }
-        this.ownerOf.set(block, owner);
-        const owned = this.blocksByOwner.get(owner) ?? [];
-        owned.push(block);
-        this.blocksByOwner.set(owner, owned);
+    const inFile = blocks.filter(block => block.loc.start.filename.equals(file));
+    // A block in the body of a function of another file goes up with the entries lifted from there.
+    for (const block of inFile) {
+      let owner = block.owner;
+      while (owner && !owner.loc.start.filename.equals(file)) {
+        owner = 'loc' in owner.parent ? owner.parent as OutlineEntry : undefined;
       }
+      this.ownerOf.set(block, owner);
     }
+    this.blocksByOwner = groupBy(inFile, block => this.ownerOf.get(block));
   }
 
   made(symbol: CodeSymbol, entry: OutlineEntry): void {

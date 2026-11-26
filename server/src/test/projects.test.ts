@@ -792,6 +792,15 @@ describe('ProjectIndex', () => {
     eq(index.joins(), 3);
   });
 
+  it('does not count a file that joins and leaves in one call', () => {
+    const files = { 'main.p8': 'x = 1', 'loose.lua': 'y = 2' };
+    const index = indexOver(files, { isMember: uri => nameOf(uri) === 'main.p8' });
+    index.scan([ uriOf('main.p8') ]);
+    eq(index.joins(), 1);
+    index.update(uriOf('loose.lua'));
+    deepStrictEqual([ index.uris().map(nameOf), index.joins() ], [[ 'main.p8' ], 1 ]);
+  });
+
   it('knows which files are included, and which an #include waits for', () => {
     const files: Record<string, string> = { 'main.p8': '#include lib.lua\n#include gone.lua', 'lib.lua': 'x = 1' };
     const index = scanned(files);

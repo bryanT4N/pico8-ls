@@ -5,6 +5,7 @@ import { placeOf } from './parser/analysis/queries';
 import { CodeSymbolType, isColonMethod, NO_OUTLINE_OPTIONS, OutlineBlock, OutlineEntry, OutlineOptions, OutlineVariable } from './parser/outline/model';
 import { AnonymousFunctionName } from './parser/statements';
 import { Bounds } from './parser/types';
+import { compareStrings, groupBy } from './parser/util';
 import { rangeOf } from './ranges';
 
 export type SymbolItem = {
@@ -12,6 +13,9 @@ export type SymbolItem = {
   name: string,
   // The last part of name: update.
   own: string,
+  // name and own in lower case, for searchSymbols.
+  nameKey: string,
+  ownKey: string,
   // name, then () for a function or method.
   label: string,
   // '' at the top of a file.
@@ -50,16 +54,15 @@ export function searchSymbols(items: SymbolItem[], query: string, limit = SYMBOL
   }
   const ranked: Array<{ item: SymbolItem, name: string, tier: number }> = [];
   for (const item of items) {
-    const name = item.name.toLowerCase();
+    const { nameKey: name, ownKey: own } = item;
     if (!hasInOrder(name, q)) {
       continue;
     }
-    const own = item.own.toLowerCase();
     const tier = own === q || name === q ? 0 : own.startsWith(q) || name.startsWith(q) ? 1 : name.includes(q) ? 2 : 3;
     ranked.push({ item, name, tier });
   }
-  ranked.sort((a, b) => a.tier - b.tier || a.name.length - b.name.length || compare(a.name, b.name)
-    || compare(a.item.selectionLoc.start.filename.fileURL, b.item.selectionLoc.start.filename.fileURL)
+  ranked.sort((a, b) => a.tier - b.tier || a.name.length - b.name.length || compareStrings(a.name, b.name)
+    || compareStrings(a.item.selectionLoc.start.filename.fileURL, b.item.selectionLoc.start.filename.fileURL)
     || a.item.selectionLoc.start.index - b.item.selectionLoc.start.index);
   return ranked.slice(0, limit).map(({ item }) => item);
 }
@@ -117,17 +120,11 @@ function buildItems(analysis: Analysis, options: OutlineOptions): Items {
   // Left out of byPlace, so that hover does not change with the options.
   const addVariables = (variables: OutlineVariable[], container: string) => {
     for (const { name, loc } of variables) {
-      add({ name, own: name, label: name, container, type: CodeSymbolType.Variable, selectionLoc: loc });
+      const nameKey = name.toLowerCase();
+      add({ name, own: name, nameKey, ownKey: nameKey, label: name, container, type: CodeSymbolType.Variable, selectionLoc: loc });
     }
   };
-  const blocksByOwner = new Map<OutlineEntry | undefined, OutlineBlock[]>();
-  if (options.showLoopVariables) {
-    for (const block of analysis.blocks) {
-      const owned = blocksByOwner.get(block.owner) ?? [];
-      owned.push(block);
-      blocksByOwner.set(block.owner, owned);
-    }
-  }
+  const blocksByOwner = options.showLoopVariables ? groupBy(analysis.blocks, block => block.owner) : new Map<OutlineEntry | undefined, OutlineBlock[]>();
   const addLoopVariables = (owner: OutlineEntry | undefined, container: string) => {
     for (const block of blocksByOwner.get(owner) ?? []) {
       addVariables(block.variables, container);
@@ -143,9 +140,12 @@ function buildItems(analysis: Analysis, options: OutlineOptions): Items {
         : member || parent.entry.name === AnonymousFunctionName ? parent.container : parent.name;
       if (isListed(entry)) {
         const isFunction = entry.type === CodeSymbolType.Function || entry.type === CodeSymbolType.Method;
+        const own = entry.name.split(/[.:]/).pop()!;
         const item: SymbolItem = {
           name,
-          own: entry.name.split(/[.:]/).pop()!,
+          own,
+          nameKey: name.toLowerCase(),
+          ownKey: own.toLowerCase(),
           label: isFunction ? name + '()' : name,
           container,
           type: entry.type,
@@ -208,11 +208,4 @@ function hasInOrder(text: string, query: string): boolean {
     }
   }
   return true;
-}
-
-function compare(a: string, b: string): number {
-  if (a === b) {
-    return 0;
-  }
-  return a < b ? -1 : 1;
 }

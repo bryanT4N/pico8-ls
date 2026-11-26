@@ -25,3 +25,21 @@ export function logObj(x: any, label?: string): void {
   const inspected = util.inspect(x, { depth: 90 });
   console.log(label ? `${label}: ${inspected}` : inspected);
 }
+
+export function compareStrings(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+  return a < b ? -1 : 1;
+}
+
+export function groupBy<T, K>(items: Iterable<T>, keyOf: (item: T) => K): Map<K, T[]> {
+  const groups = new Map<K, T[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    const group = groups.get(key) ?? [];
+    group.push(item);
+    groups.set(key, group);
+  }
+  return groups;
+}
