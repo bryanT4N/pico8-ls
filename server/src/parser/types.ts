@@ -9,10 +9,6 @@ export type CodeLocation = {
   filename: ResolvedFile,
 };
 
-export function codeLocationsEqual(a: CodeLocation, b: CodeLocation): boolean {
-  return a.line === b.line && a.column === b.column && a.index === b.index && a.filename.equals(b.filename);
-}
-
 export function codeLocationToString(cl: CodeLocation) {
   return `${path.basename(cl.filename.path)} ${cl.line}:${cl.column}`;
 }
@@ -55,10 +51,6 @@ export function containsIndex(bounds: Bounds, file: ResolvedFile, index: number)
 export function boundsContain(outer: Bounds, inner: Bounds): boolean {
   return inner.start.filename.equals(outer.start.filename)
     && outer.start.index <= inner.start.index && inner.end.index <= outer.end.index;
-}
-
-export function boundsEqual(a: Bounds, b: Bounds): boolean {
-  return a && b && codeLocationsEqual(a.start, b.start) && codeLocationsEqual(a.end, b.end);
 }
 
 export function boundsToString(bounds: Bounds): string {
