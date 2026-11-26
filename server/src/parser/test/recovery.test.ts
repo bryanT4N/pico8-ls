@@ -5,7 +5,7 @@ import { FoldingRangeVisitor } from '../folding-range-visitor';
 import Parser from '../parser';
 import { AssignmentStatement, DoStatement, FunctionDeclaration, getFunctionDeclarationName, IfStatement } from '../statements';
 import { ASTNode, Bounds } from '../types';
-import { formatError, parse, ParsedForTest, parseInChild, TestFilesResolver, testFile } from './test-utils';
+import { formatError, nestedInFunctionValues, parse, ParsedForTest, parseInChild, TestFilesResolver, testFile } from './test-utils';
 import { allSymbols, outlineLines } from './outline-utils';
 
 const lines = (...l: string[]) => l.join('\n');
@@ -554,18 +554,17 @@ describe('Parser recovery', () => {
       assert.strictEqual(errorsOf(lines('function guy.', '  x = 1', 'end'))[0], 'main_test_file 1:13 <name> expected near \'x\'');
     });
 
-    const nestedInFunctionValues = (depth: number, innermost: string, atEachLevel = '') => {
-      let code = innermost;
-      for (let i = 0; i < depth; i++) {
-        code = `v = g(function()\n${atEachLevel}${code}end) +\nw.x = 3\n`;
-      }
-      return code;
-    };
-
     it('parses again no statement whose function values had 8 statements parsed again, and keeps the first error', () => {
       const errors = errorsOf(nestedInFunctionValues(12, 'y = 1\n'));
-      assert.deepStrictEqual([ errors.length, errors[0], errors[errors.length - 1] ],
-        [ 12, 'main_test_file 14:6 <expression> expected near \'w\'', 'main_test_file 37:4 unexpected symbol \'=\' near \'3\'' ]);
+      // The 8 innermost are parsed again (errors 0 to 7); the 9th from the inside, the first with 8 in its function
+      // values, is not (error 8).
+      assert.deepStrictEqual([ errors.length, errors[0], errors[7], errors[8], errors[errors.length - 1] ], [
+        12,
+        'main_test_file 14:6 <expression> expected near \'w\'',
+        'main_test_file 28:6 <expression> expected near \'w\'',
+        'main_test_file 31:4 unexpected symbol \'=\' near \'3\'',
+        'main_test_file 37:4 unexpected symbol \'=\' near \'3\'',
+      ]);
     });
 
     it('parses unfinished statements nested in function values, as many as a cart holds, in under 50 ms', () => {
