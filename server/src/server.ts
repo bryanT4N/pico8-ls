@@ -12,7 +12,7 @@ import { isParseError } from './parser/errors';
 import { builtinInfo } from './parser/builtins';
 import ResolvedFile, { pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
-import { isScanned, isTrackedPath, isUnder, makeFileResolver, nearCart, ProjectDocument, ProjectIndex } from './projects';
+import { isScanned, isUnder, listCartFiles, makeFileResolver, nearCart, ProjectDocument, ProjectIndex, scansFolder } from './projects';
 import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -65,7 +65,7 @@ function hasCart(folder: string): boolean {
 // Reads the disk, for a file the scan has not seen yet, or one outside the workspace folders.
 function folderHasCart(folder: string): boolean {
   try {
-    return fs.readdirSync(folder).some(name => /\.p8$/i.test(name));
+    return fs.readdirSync(folder).some(name => /\.p8$/i.test(name) && !isFolder(path.join(folder, name)));
   } catch {
     return false;
   }
@@ -197,12 +197,16 @@ function scanWorkspace() {
   });
 }
 
-async function scanWorkspaceFolder(workspaceFolder: WorkspaceFolder) {
-  try {
-    const folderPath = url.fileURLToPath(workspaceFolder.uri);
+function scanWorkspaceFolder(workspaceFolder: WorkspaceFolder): Promise<void> {
+  return scanFolder(url.fileURLToPath(workspaceFolder.uri));
+}
 
-    // List all files in directory & subdirs
-    const allFiles = await getFilesRecursive(folderPath, folderPath);
+async function scanFolder(folderPath: string, onlyNew = false): Promise<void> {
+  try {
+    // A folder inside a workspace folder is listed as the scan of the outermost one that reaches it would list it.
+    const from = workspaceRoots.filter(root => scansFolder(folderPath, [ root ]))
+      .reduce((outer, root) => path.normalize(root).length < path.normalize(outer).length ? root : outer, folderPath);
+    const allFiles = await listCartFiles(folderPath, from);
 
     // The folder can have been removed while it was being listed.
     for (const filePath of allFiles) {
@@ -211,7 +215,7 @@ async function scanWorkspaceFolder(workspaceFolder: WorkspaceFolder) {
       }
     }
     // A .lua file that belongs to no cart is not read at all, so a folder of plain Lua costs only its listing.
-    const members = allFiles.map(filePath => pathToFileURL(filePath)).filter(isMember);
+    const members = allFiles.map(filePath => pathToFileURL(filePath)).filter(uri => isMember(uri) && !(onlyNew && index.document(uri)));
     await readFromDisk(members);
 
     // The folder can have been removed while its files were being read, when the index did not have them yet for the
@@ -229,16 +233,6 @@ async function scanWorkspaceFolder(workspaceFolder: WorkspaceFolder) {
   }
 }
 
-// A new cart brings in the .lua files of its folder, which the scan left out while no cart was near them.
-async function scanCartFolder(cartPath: string) {
-  const folder = path.dirname(cartPath);
-  const uris = (await getFilesRecursive(folder, folder)).map(filePath => pathToFileURL(filePath))
-    .filter(uri => isMember(uri) && !index.document(uri));
-  await readFromDisk(uris);
-  publish(index.scan(uris));
-  notifyCartFiles();
-}
-
 async function readFromDisk(uris: string[]) {
   await Promise.all(uris.map(async uri => {
     const filePath = url.fileURLToPath(uri);
@@ -248,29 +242,6 @@ async function readFromDisk(uris: string[]) {
       console.error('Error reading ' + filePath, e);
     }
   }));
-}
-
-async function getFilesRecursive(folderPath: string, root: string): Promise<string[]> {
-  const p8andLuaFiles: string[] = [];
-  try {
-    const files = await fs.promises.readdir(folderPath);
-
-    await Promise.all(files.map(async file => {
-      const filePath = path.join(folderPath, file);
-
-      const stat = await fs.promises.lstat(filePath);
-      if (stat.isDirectory() && !file.startsWith('.')) {
-        p8andLuaFiles.push(...(await getFilesRecursive(filePath, root)));
-      } else if (stat.isFile() && isTrackedPath(filePath, [ root ])) {
-        p8andLuaFiles.push(filePath);
-      }
-    }));
-
-  } catch (e) {
-    console.error('Error when scanning workspace folder ' + folderPath, e);
-  }
-
-  return p8andLuaFiles;
 }
 
 function parseFile(uri: string): ProjectDocument | undefined {
@@ -457,10 +428,39 @@ connection.onDidChangeWatchedFiles(change => {
   const joined = index.joins();
   const uris: string[] = [];
   const newCarts: string[] = [];
+  const newFolders: string[] = [];
   let cartDeleted = false;
   for (const { uri, type } of change.changes) {
     const filePath = pathOf(uri);
     if (filePath === undefined) {
+      continue;
+    }
+    if (type === FileChangeType.Deleted) {
+      // A folder that is deleted or renamed is reported alone, without the files under it. A tool that deletes a folder
+      // file by file sends an event for each, so the files the server keeps are matched as text, without converting or
+      // normalizing each: a cart by its path, spelled as filePath is, any other file by its URI, in VS Code's form as the
+      // event's is.
+      const gone = (other: string, folder: string, separator: string) => other === folder || other.startsWith(folder + separator);
+      for (const cart of [ ...carts ].filter(cart => gone(cart, filePath, path.sep))) {
+        deleteCart(cart);
+        cartDeleted = true;
+      }
+      for (const cached of [ ...diskText.keys() ].filter(cached => gone(cached, uri, '/'))) {
+        diskText.delete(cached);
+      }
+      const removed = index.uris().filter(indexed => !documents.get(indexed) && gone(indexed, uri, '/'));
+      if (removed.length > 0) {
+        uris.push(...index.removeAll(removed));
+      }
+      continue;
+    }
+    if (type === FileChangeType.Created && scansFolder(filePath, workspaceRoots) && !newFolders.some(folder => isUnder(filePath, folder))
+      && isFolder(filePath)) {
+      newFolders.push(filePath);
+      continue;
+    }
+    // A folder can have a name like a cart's or a .lua file's, such as json.lua.
+    if (!/\.(p8|lua)$/i.test(filePath) || (type === FileChangeType.Created && isFolder(filePath))) {
       continue;
     }
     // A file in a dot-folder is in the index when a file of the index #includes it, and an #include can wait for one
@@ -469,21 +469,9 @@ connection.onDidChangeWatchedFiles(change => {
     if (!known && !isScanned(filePath, workspaceRoots) && !index.isAwaited(uri)) {
       continue;
     }
-    if (/\.p8$/i.test(filePath) && isScanned(filePath, workspaceRoots)) {
-      if (type === FileChangeType.Created) {
-        addCart(filePath);
-        newCarts.push(filePath);
-      } else if (type === FileChangeType.Deleted) {
-        deleteCart(filePath);
-        cartDeleted = true;
-      }
-    }
-    if (type === FileChangeType.Deleted) {
-      diskText.delete(uri);
-      if (known && !documents.get(uri)) {
-        uris.push(...index.remove(uri));
-      }
-      continue;
+    if (type === FileChangeType.Created && /\.p8$/i.test(filePath) && isScanned(filePath, workspaceRoots)) {
+      addCart(filePath);
+      newCarts.push(filePath);
     }
     // A file that belongs to no cart is neither read nor parsed.
     if (!known && !isMember(uri) && !index.isAwaited(uri)) {
@@ -508,15 +496,30 @@ connection.onDidChangeWatchedFiles(change => {
     }
   }
   publish(uris);
+  // A new cart brings in the .lua files of its folder and the folders below, which the scan left out while no cart was
+  // near them.
   for (const cart of newCarts) {
-    void scanCartFolder(cart).catch(e => {
+    void scanFolder(path.dirname(cart), true).catch(e => {
       console.error('Error scanning the folder of ' + cart, e);
+    });
+  }
+  for (const folder of newFolders) {
+    void scanFolder(folder).catch(e => {
+      console.error('Error scanning ' + folder, e);
     });
   }
   if (index.joins() > joined) {
     notifyCartFiles();
   }
 });
+
+function isFolder(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 // The user symbols of the last completion list, which the items being resolved come from.
 let lastOffered: Offered = new Map();

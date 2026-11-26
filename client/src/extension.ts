@@ -108,7 +108,8 @@ function getClientOptions(filter: DiagnosticsFilter): LanguageClientOptions {
     // Register the server for PICO-8 documents
     documentSelector: picoDocuments,
     synchronize: {
-      fileEvents: workspace.createFileSystemWatcher('**/*.{p8,lua}'),
+      // Deleting or renaming a folder is reported for the folder alone, which the first pattern leaves out.
+      fileEvents: [ workspace.createFileSystemWatcher('**/*.{p8,lua}', true, false, true), workspace.createFileSystemWatcher('**/*', false, true, false) ],
     },
     middleware: {
       handleDiagnostics: filter.middleware,

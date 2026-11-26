@@ -11,7 +11,10 @@ import ResolvedFile, { FileResolver, fileURLToPath, pathToFileURL, RealFileResol
 import { NO_OUTLINE_OPTIONS } from '../parser/outline/model';
 import { outlineLines } from '../parser/test/outline-utils';
 import { ALL_OUTLINE_OPTIONS, deepEquals, formatError } from '../parser/test/test-utils';
-import { findProjects, isScanned, isTrackedPath, makeFileResolver, nearCart, ParsedDocumentsMap, ProjectDocument, ProjectIndex } from '../projects';
+import {
+  findProjects, FolderReader, isScanned, isTrackedPath, listCartFiles, makeFileResolver, nearCart, ParsedDocumentsMap, ProjectDocument, ProjectIndex,
+  scansFolder,
+} from '../projects';
 import { callContextAt } from '../signature-help';
 
 // Creates a mock ProjectDocument that just has the specified includes
@@ -95,6 +98,18 @@ describe('isScanned', () => {
   });
 });
 
+describe('scansFolder', () => {
+  it('goes into a folder that a workspace folder reaches with no dot-folder between, its own name included', () => {
+    const ws = path.resolve('/ws');
+    eq(scansFolder(ws, [ ws ]), true);
+    eq(scansFolder(path.join(ws, 'game', 'src'), [ ws ]), true);
+    eq(scansFolder(path.join(ws, '.history'), [ ws ]), false);
+    eq(scansFolder(path.join(ws, '.b', 'game'), [ ws ]), false);
+    eq(scansFolder(path.join(ws, '.b', 'game'), [ ws, path.join(ws, '.b') ]), true);
+    eq(scansFolder(path.resolve('/ws2/game'), [ ws ]), false);
+  });
+});
+
 describe('nearCart', () => {
   const ws = path.resolve('/ws');
   const carts = new Set([ path.join(ws, 'MoleMole'), path.join(ws, 'pico8-ls', 'testfiles') ]);
@@ -125,6 +140,45 @@ describe('nearCart', () => {
     const game = path.resolve('/elsewhere/game');
     eq(nearCart(path.join(game, 'x.lua'), [ ws ], folder => folder === game), true);
     eq(nearCart(path.join(game, 'src', 'x.lua'), [ ws ], folder => folder === game), false);
+  });
+});
+
+describe('listCartFiles', () => {
+  const sortedUnder = (dir: string, files: string[]) => files.map(file => path.relative(dir, file).split(path.sep).join('/')).sort();
+
+  it('follows a junction, but not one back to a folder it came through from the workspace folder or one whose name starts with a dot', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pico8-ls-scan-'));
+    try {
+      const ws = path.join(dir, 'ws');
+      const outside = path.join(dir, 'outside');
+      for (const [ file, text ] of [[ 'ws/main.p8', '' ], [ 'ws/notes.txt', '' ], [ 'ws/.history/old.lua', '' ], [ 'outside/lib.lua', '' ]]) {
+        fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        fs.writeFileSync(path.join(dir, file), text);
+      }
+      fs.symlinkSync(outside, path.join(ws, 'linked'), 'junction');
+      fs.symlinkSync(outside, path.join(ws, '.hidden'), 'junction');
+      fs.symlinkSync(ws, path.join(ws, 'loop'), 'junction');
+      fs.symlinkSync(ws, path.join(outside, 'back'), 'junction');
+      deepStrictEqual(sortedUnder(ws, await listCartFiles(ws)), [ 'linked/lib.lua', 'main.p8' ]);
+      // A junction made while the workspace is open, which the server lists as a new folder.
+      deepStrictEqual(sortedUnder(ws, await listCartFiles(path.join(ws, 'linked'), ws)), [ 'linked/lib.lua' ]);
+      deepStrictEqual(await listCartFiles(path.join(ws, 'loop'), ws), []);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('lists a linked file, and leaves out a link to nothing', async () => {
+    const ws = path.resolve('/ws');
+    const entry = (name: string, kind: 'file' | 'folder' | 'link') => ({
+      name, isFile: () => kind === 'file', isDirectory: () => kind === 'folder', isSymbolicLink: () => kind === 'link',
+    });
+    const reader: FolderReader = {
+      readdir: () => Promise.resolve([ entry('main.p8', 'file'), entry('lib.lua', 'link'), entry('gone.lua', 'link') ]),
+      stat: file => path.basename(file) === 'gone.lua' ? Promise.reject(new Error(`ENOENT: ${file}`)) : Promise.resolve(entry(path.basename(file), 'file')),
+      realpath: file => Promise.resolve(file),
+    };
+    deepStrictEqual(sortedUnder(ws, await listCartFiles(ws, ws, reader)), [ 'lib.lua', 'main.p8' ]);
   });
 });
 
@@ -713,6 +767,17 @@ describe('ProjectIndex', () => {
     index.scan([ uriOf('ws2/lib.lua') ]);
     deepStrictEqual(index.definitions(uriOf('ws1/main.p8'), offsetIn({ 'main.p8': onDisk.get('main.p8')! }, 'main.p8', 2, 0)).map(loc),
       [ 'lib.lua 3:9-3:15' ]);
+  });
+
+  it('resolves an #include of a file that a later scan finds, as when a folder is renamed to the name the #include writes', () => {
+    const onDisk = new Map([[ 'main.p8', '#include game2/lib.lua\nhelper()' ]]);
+    const index = indexOver({}, { disk: diskOf(onDisk) });
+    index.scan([ uriOf('main.p8') ]);
+    deepStrictEqual(index.document(uriOf('main.p8'))!.errors.map(formatError), [ 'main.p8 1:0 Can\'t #include game2/lib.lua from main.p8: File does not exist' ]);
+    onDisk.set('lib.lua', 'function helper() end');
+    index.scan([ uriOf('game2/lib.lua') ]);
+    deepStrictEqual(index.document(uriOf('main.p8'))!.errors.map(formatError), []);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(Object.fromEntries(onDisk), 'main.p8', 2, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
   });
 
   it('parses the includer again when a file it read before the editor had it is opened', () => {

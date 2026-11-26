@@ -2,6 +2,7 @@ import { Location, SignatureHelp, SymbolInformation } from 'vscode-languageserve
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Chunk } from './parser/statements';
 import * as url from 'url';
+import * as fs from 'fs';
 import * as path from 'path';
 import { ParseError, Warning } from './parser/errors';
 import ResolvedFile, { FileResolver, RealFileResolver } from './parser/file-resolver';
@@ -29,7 +30,11 @@ export function isTrackedPath(filePath: string, roots: string[]): boolean {
   const normalizedFile = path.normalize(filePath);
   const holding = roots.map(r => path.normalize(r))
     .filter(r => isUnder(normalizedFile, r) || normalizedFile === r);
-  return holding.length === 0 || holding.some(root => reaches(root, normalizedFile));
+  return holding.length === 0 || holding.some(root => reaches(root, path.dirname(normalizedFile)));
+}
+
+export function scansFolder(folder: string, roots: string[]): boolean {
+  return roots.some(root => (isUnder(folder, root) || path.relative(root, folder) === '') && reaches(root, folder));
 }
 
 // Whether the scan of the workspace folders lists the file: a .p8 or .lua file under one of them, with no folder whose
@@ -43,7 +48,7 @@ export function isScanned(filePath: string, roots: string[]): boolean {
 // looks in its own folder alone. hasCart gets folders as path.dirname gives them.
 export function nearCart(filePath: string, roots: string[], hasCart: (folder: string) => boolean): boolean {
   const holding = roots.filter(root => isUnder(filePath, root));
-  const tracking = holding.filter(root => reaches(root, filePath));
+  const tracking = holding.filter(root => reaches(root, path.dirname(filePath)));
   if (holding.length > 0 && tracking.length === 0) {
     return false;
   }
@@ -60,15 +65,74 @@ export function nearCart(filePath: string, roots: string[], hasCart: (folder: st
   }
 }
 
-// The scan of a workspace folder does not go into folders whose names start with a dot; filePath is under root.
-function reaches(root: string, filePath: string): boolean {
-  return path.relative(root, filePath).split(path.sep).slice(0, -1).every(part => !part.startsWith('.'));
+// The scan of a workspace folder does not go into folders whose names start with a dot; folder is root or under it.
+function reaches(root: string, folder: string): boolean {
+  return path.relative(root, folder).split(path.sep).every(part => !part.startsWith('.'));
 }
 
 // A drive or share root, such as c:\ or \\server\share\, already ends in a separator.
 export function isUnder(filePath: string, folder: string): boolean {
   const dir = path.normalize(folder);
   return path.normalize(filePath).startsWith(dir.endsWith(path.sep) ? dir : dir + path.sep);
+}
+
+type Kind = { isDirectory(): boolean, isFile(): boolean };
+type Entry = Kind & { name: string, isSymbolicLink(): boolean };
+
+export type FolderReader = {
+  readdir: (folder: string) => Promise<Entry[]>,
+  stat: (file: string) => Promise<Kind>,
+  realpath: (file: string) => Promise<string>,
+};
+
+const DISK: FolderReader = {
+  readdir: folder => fs.promises.readdir(folder, { withFileTypes: true }),
+  stat: file => fs.promises.stat(file),
+  realpath: file => new Promise((resolve, reject) => fs.realpath.native(file, (e, real) => e ? reject(e) : resolve(real))),
+};
+
+// The .p8 and .lua files under folder, outside folders whose names start with a dot. Links, junctions among them, are
+// followed, as VS Code's search does, but not a link back to a folder the listing came through from the workspace
+// folder `from`, which would never end.
+export async function listCartFiles(folder: string, from = folder, reader: FolderReader = DISK): Promise<string[]> {
+  const between = path.relative(from, folder).split(path.sep).filter(part => part !== '');
+  const above = between.map((_, i) => path.join(from, ...between.slice(0, i)));
+  const chain = await Promise.all([ ...above, folder ].map(dir => reader.realpath(dir).catch(() => dir)));
+  if (chain.slice(0, -1).includes(chain[chain.length - 1])) {
+    return [];
+  }
+  const found: string[] = [];
+  const list = async (dir: string, realDirs: string[]): Promise<void> => {
+    let entries: Entry[];
+    try {
+      entries = await reader.readdir(dir);
+    } catch (e) {
+      console.error('Error when scanning workspace folder ' + dir, e);
+      return;
+    }
+    await Promise.all(entries.map(async entry => {
+      const entryPath = path.join(dir, entry.name);
+      let kind: Kind = entry;
+      let real = path.join(realDirs[realDirs.length - 1], entry.name);
+      if (entry.isSymbolicLink()) {
+        try {
+          kind = await reader.stat(entryPath);
+          real = await reader.realpath(entryPath);
+        } catch {
+          return;
+        }
+      }
+      if (kind.isDirectory()) {
+        if (!entry.name.startsWith('.') && !realDirs.includes(real)) {
+          await list(entryPath, [ ...realDirs, real ]);
+        }
+      } else if (kind.isFile() && /\.(p8|lua)$/i.test(entry.name)) {
+        found.push(entryPath);
+      }
+    }));
+  };
+  await list(folder, chain);
+  return found;
 }
 
 export type ParsedDocumentsMap = Map<string, ProjectDocument>;
@@ -171,9 +235,9 @@ function findProjectsRecursive(current: string, visited: Map<string, ProjectDocu
 }
 
 // Reads a file through the URI form VS Code uses (ResolvedFile.fromPath(p).fileURL). Whether a file that is not open
-// exists is asked of the disk, whatever the cache holds, and one found missing leaves the cache: deleting or renaming a
-// folder is reported for the folder alone, which the file watcher does not pass on. The parser asks that before reading
-// an #include, and so does the server before reading a file, so a read takes the cached text as it is.
+// exists is asked of the disk, whatever the cache holds, and one found missing leaves the cache: the file watcher's
+// events come in batches after the change, and a parse in between would read a file that is gone. The parser asks that
+// before reading an #include, and so does the server before reading a file, so a read takes the cached text as it is.
 export function makeFileResolver(editorText: (uri: string) => string | undefined, cache: Map<string, string>,
   disk: FileResolver = new RealFileResolver()): FileResolver {
   return {
@@ -232,12 +296,16 @@ export class ProjectIndex {
     const { dropped } = this.reparse(uris);
     this.buildProjects();
     // An includer can have read one of these files before its folder was in the workspace, when no file watcher reported
-    // its changes: the other roots that contain one are parsed again, so that they take its current text.
+    // its changes, or before a folder was renamed to the name its #include writes: the other roots that contain one,
+    // and the files that wait for one, are parsed again.
     const scanned = new Set(uris);
-    const roots = this.projects.filter(project => !scanned.has(project.root) && project.files.some(uri => scanned.has(uri)))
-      .map(project => project.root);
-    if (roots.length > 0) {
-      dropped.push(...this.reparse(roots).dropped);
+    const again = unique([
+      ...this.projects.filter(project => project.files.some(uri => scanned.has(uri))).map(project => project.root),
+      ...[ ...this.documents ].filter(([ , document ]) => (document.chunk.unresolvedIncludes ?? []).some(file => scanned.has(file.fileURL)))
+        .map(([ uri ]) => uri),
+    ]).filter(uri => !scanned.has(uri));
+    if (again.length > 0) {
+      dropped.push(...this.reparse(again).dropped);
       this.buildProjects();
     }
     const left = this.settle();
