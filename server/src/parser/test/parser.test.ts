@@ -458,11 +458,10 @@ end`.trim();
     ]);
   });
 
-  it('parses PICO-8 one-line if statement with significant newline and multiline `else`', () => {
+  it('parses PICO-8 one-line if statement whose else ends the line with an empty else, as PICO-8 0.2.7 does', () => {
     const input = `
 if(v.x<-130) del(b,v) else
   v.x-=2
-end
 `.trim();
 
     const { errors, block: { body } } = parse(input);
@@ -480,9 +479,11 @@ end
         },
         {
           type: 'ElseClause',
-          block: {},
+          block: { body: [] },
         },
       ],
+    }, {
+      type: 'AssignmentStatement',
     }]);
   });
 
@@ -833,9 +834,11 @@ __music__
     eq(errors.length, 0, 'Unexpected errors: ' + errors.map(e => `[${e.bounds.start.line}:${e.bounds.end.column}] ${e.message}`).join(','));
   });
 
-  it('parses minified pico-8 code without errors - hop', () => {
+  // PICO-8 0.2.7 ends the one-line if of line 13 at its else, so the end of line 14 closes the for and the second end of
+  // line 15 closes nothing.
+  it('reports in minified pico-8 code - hop the end that PICO-8 rejects', () => {
     const { errors } = parse(getTestFileContents('tweettweetjam-hop.p8'));
-    eq(errors.length, 0, 'Unexpected errors: ' + errors.map(e => `[${e.bounds.start.line}:${e.bounds.end.column}] ${e.message}`).join(','));
+    deepEquals(errors.map(formatError), [ 'main_test_file 15:4 unexpected keyword \'end\' near \'function\'' ]);
   });
 
   it('parses minified pico-8 code without errors - xtris', () => {

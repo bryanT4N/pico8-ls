@@ -136,6 +136,14 @@ describe('#include', function () {
     assert.deepStrictEqual(statementsOf(chunk), [ 'IncludeStatement', 'IfStatement*', 'FunctionDeclaration' ]);
   });
 
+  it('reports a return that ends a cart from a file the cart includes, and code after a return in an included file', () => {
+    const files = { 'lib.lua': 'x=1\nreturn x' };
+    const cartErrors = (code: string) => parse(code, { filename: 'main.p8', includeFileResolver: new TestFilesResolver(files) }).errors.map(formatError);
+    assert.deepStrictEqual(cartErrors('printh("ok")\n#include lib.lua'), [ 'lib.lua 2:0 PICO-8 does not accept a return in the cart\'s outermost block' ]);
+    assert.deepStrictEqual(cartErrors('function f()\n#include lib.lua\nend'), []);
+    assert.deepStrictEqual(parseWith('#include lib.lua\nprinth(x)', { 'lib.lua': 'return 1\nx=2' }).errors.map(formatError), [ 'lib.lua 2:0 \'<eof>\' expected near \'x\'' ]);
+  });
+
   it('does not report a file included twice as circular', () => {
     const chunk = parseWith('#include a.lua\n#include b.lua\nprint(1)', {
       'a.lua': '#include c.lua\nx = 1',

@@ -226,12 +226,8 @@ describe('Parser recovery', () => {
     assert.strictEqual(((statement as AssignmentStatement).variables[0] as Identifier).name, 'i');
   });
 
-  it('keeps a one-line if whose multi-line else is missing its end', () => {
-    check(
-      lines('if (x) y() else', '  z()', 'function b()', 'end'),
-      [ 'main_test_file 4:0 \'end\' expected (to close \'if\' at line 1) near \'<eof>\'' ],
-      [ 'b() [Function]' ],
-    );
+  it('ends a one-line if at the end of its line, an else with nothing after it too, as PICO-8 does', () => {
+    check(lines('if (x) y() else', '  z()', 'function b()', 'end'), [], [ 'b() [Function]' ]);
   });
 
   describe('a value left to type at the end of a line', () => {
@@ -399,5 +395,55 @@ describe('values as PICO-8 reads them', () => {
     const a = symbolAt(analyzeCode(lines('local a=1', '(a)+=1')), 2, 1)!;
     assert.deepStrictEqual(a.definitions.map(d => d.nameLoc.start.line), [ 1 ]);
     assert.deepStrictEqual(a.references.map(r => [ r.loc.start.line, r.read, r.write ]), [[ 1, false, true ], [ 2, true, false ]]);
+  });
+});
+
+describe('statements as PICO-8 reads them', () => {
+  const cartErrors = (code: string) => parse(code, { filename: 'main.p8' }).errors.map(formatError);
+
+  it('reads if (c) and while (c) as one-line forms when what follows c is on their line and c ends in no ) of its own', () => {
+    assert.deepStrictEqual(errorsOf(lines('a=1', 'if (a)', 'x=1')), [ 'main_test_file 3:0 \'then\' expected near \'x\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('a=1', 'if (a and', 'a) x=1')), [ 'main_test_file 3:3 \'then\' expected near \'x\'' ]);
+    assert.deepStrictEqual(errorsOf('if (a) (f)() x=1'), [ 'main_test_file 1:13 \'then\' expected near \'x\'' ]);
+    assert.deepStrictEqual(errorsOf('if (a) or f() x=1'), [ 'main_test_file 1:14 \'then\' expected near \'x\'' ]);
+    assert.deepStrictEqual(errorsOf('if (t):m() y=1'), [ 'main_test_file 1:11 \'then\' expected near \'y\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('while (a)', 'x=1')), [ 'main_test_file 2:0 \'do\' expected near \'x\'' ]);
+    assert.deepStrictEqual(errorsOf('while (a) or f() x=1'), [ 'main_test_file 1:17 \'do\' expected near \'x\'' ]);
+    assert.deepStrictEqual(errorsOf('if (a)'), [ 'main_test_file 1:5 \'then\' expected near \'<eof>\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('if (btn(0)) x=1', 'if (f) "x" y=1', 'if (f) {} y=1', 'if (t) [1] y=1', 'if (t).x y=1', 'if (a) and b y=1',
+      'if ((f)()) y=1', 'a=1', 'if (a)', 'then x=1 end')), []);
+  });
+
+  it('reads an if (c) or while (c) inside a one-line if as needing its then or do when c ends the line, as PICO-8 does', () => {
+    assert.deepStrictEqual(errorsOf(lines('if (b) if (a)', 'x=1')), [ 'main_test_file 1:13 \'then\' expected near \'\\n\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('if (b) while (a)', 'x=1')), [ 'main_test_file 1:16 \'do\' expected near \'\\n\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('if (b) x=1 else if (a)', 'y=1')), [ 'main_test_file 1:22 \'then\' expected near \'\\n\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('if (b) if (a) else x=2', 'if (b) if (a);', 'if (b) if (a) x=1')), []);
+  });
+
+  it('takes an empty clause in a one-line if, also an else at the end of its line, and an elseif with its then', () => {
+    assert.deepStrictEqual(errorsOf(lines('if (a);', 'if (a) else x=2', 'if (a) x=1 else x=2', 'b=1', 'if (a) x=1 elseif (b) then x=2 else x=3')), []);
+    assert.deepStrictEqual(errorsOf(lines('if (a) x=1 else', 'x=2', 'end')), [ 'main_test_file 3:0 unexpected keyword \'end\' near \'<eof>\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('b=1', 'if (a) x=1 elseif (b) x=2')), [ 'main_test_file 2:22 \'then\' expected near \'x\'' ]);
+    assert.deepStrictEqual(errorsOf('if (a) end'), [ 'main_test_file 1:7 unexpected keyword \'end\' near \'<eof>\'' ]);
+  });
+
+  it('reports what follows a return in its block where reading stops', () => {
+    assert.deepStrictEqual(errorsOf(lines('return 1', 'x=2')), [ 'main_test_file 2:0 \'<eof>\' expected near \'x\'' ]);
+    assert.strictEqual(errorsOf(lines('function f()', 'return 1', 'x=2', 'end'))[0], 'main_test_file 3:0 \'end\' expected (to close \'function\' at line 1) near \'x\'');
+    assert.strictEqual(errorsOf(lines('repeat', 'return 1', 'x=2', 'until true'))[0], 'main_test_file 3:0 \'until\' expected (to close \'repeat\' at line 1) near \'x\'');
+    assert.deepStrictEqual(errorsOf(lines('function f(a)', 'if (a) return 1 x=2', 'end')), [ 'main_test_file 2:16 <end of line> expected near \'x\'' ]);
+    assert.deepStrictEqual(errorsOf(lines('function f()', '  if a then return end', '  return;', 'end', 'do return end', 'if (a) return', 'x=1')), []);
+  });
+
+  it('reports, in a cart, a return that ends its outermost block, and a goto there past a local to a label at its end', () => {
+    for (const last of [ 'return', 'return 1', 'return;', 'return -- bye' ]) {
+      assert.deepStrictEqual(cartErrors(lines('printh("ok")', last)), [ 'main.p8 2:0 PICO-8 does not accept a return in the cart\'s outermost block' ], last);
+    }
+    assert.deepStrictEqual(cartErrors(lines('return 1', 'x=2')), [ 'main.p8 2:0 \'<eof>\' expected near \'x\'' ]);
+    assert.deepStrictEqual(cartErrors(lines('goto l', 'local q', '::l::')), [ 'main.p8 1:0 <goto l> jumps into the scope of local \'q\'' ]);
+    assert.deepStrictEqual(cartErrors(lines('do return end', 'if (a) return', 'do', 'goto l', 'local q', '::l::', 'end', 'function f()', 'goto m', 'local r', '::m::', 'end')), []);
+    assert.deepStrictEqual(errorsOf(lines('printh("ok")', 'return')), []);
+    assert.deepStrictEqual(errorsOf(lines('goto l', 'local q', '::l::')), []);
   });
 });

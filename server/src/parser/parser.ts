@@ -111,6 +111,10 @@ export default class Parser {
     }];
   }
 
+  isCart(): boolean {
+    return /\.p8$/i.test(this.mainFile.path);
+  }
+
   isInIncludedFile(): boolean {
     return this.lexerStack.length > 1;
   }
@@ -239,11 +243,18 @@ export default class Parser {
     flowContext.allowVararg = true;
     flowContext.pushScope();
     const body = this.parseBlock(flowContext, isEndOfFile);
-    flowContext.endFunction(this.token);
-
     if (this.token.type !== TokenType.EOF) {
-      this.errors.push(this.getUnexpectedTokenErr(this.token));
+      this.errors.push(errors.createErrForToken(this.token, errMessages.expected, '<eof>', this.token.value));
+    } else if (this.isCart()) {
+      // PICO-8 rejects a return in a cart's outermost block, also as its last statement (4.return.end-bare), and a
+      // goto there past a local to a label at the end, which Lua allows at the end of a block (4.goto.end-of-chunk-local).
+      const last = body.body[body.body.length - 1];
+      if (last?.type === 'ReturnStatement') {
+        this.errors.push(errors.createErr(last.loc!, errMessages.returnInCart));
+      }
+      flowContext.raiseDeferredErrors(this.token);
     }
+    flowContext.endFunction(this.token);
 
     this.addLexerErrors(this.lexer);
     for (const error of this.gotoErrors) {
@@ -342,6 +353,10 @@ export default class Parser {
           // ignore some statements, such as EmptyStatement.
           if (statement) {
             block.push(statement);
+          }
+          // A return is the last statement of its block: what follows it is for the block's closer to report.
+          if (statement?.type === 'ReturnStatement' && !endingFunction(this.token)) {
+            break;
           }
         }
       } catch (e) {
@@ -442,7 +457,11 @@ export default class Parser {
 
     try {
       newLexer.next();
-      return this.parseBlock(flowContext, isEndOfFile).body;
+      const body = this.parseBlock(flowContext, isEndOfFile).body;
+      if (this.token.type !== TokenType.EOF) {
+        this.errors.push(errors.createErrForToken(this.token, errMessages.expected, '<eof>', this.token.value));
+      }
+      return body;
     } finally {
       this.lexerStack.pop();
       this.locations.length = locationDepth;
@@ -588,7 +607,7 @@ export default class Parser {
     let body: Block | undefined;
     let closed = true;
 
-    const canBeOneLiner = this.lexer.token?.value === '(';
+    const startsWithParen = this.token.value === '(';
     const condition = this.parseExpectedExpression(flowContext);
 
     if (this.lexer.consume('do')) {
@@ -596,17 +615,35 @@ export default class Parser {
       // (we already consumed the `do`)
       body = this.parseWhileStatementBody(flowContext);
       closed = this.expectBlockEnd('end', opener, 'while');
-    } else if (canBeOneLiner) {
+    } else if (startsWithParen && this.isOneLineBody(condition, opener)) {
       // Handle special one-line while statement
       // (the body is every statement until the end of the line)
       this.lexer.withSignificantNewline(() => {
         body = this.parseWhileStatementBody(flowContext, isEndOfLine);
+        this.expectEndOfLine();
       });
     } else {
       errors.raiseErrForToken(this.token, errMessages.expected, 'do', this.token.value);
     }
 
     return this.finishNode(AST.whileStatement(condition, body!), !closed);
+  }
+
+  // PICO-8 reads if (c) and while (c) as one-line forms when what follows the condition starts on the line of the if or
+  // while, unless the condition ends with a ) that is not the one after c: (a)(f)() and (a) or f() need their then
+  // (4.if.paren-body, 4.if.paren-or-call), (a).x and (f)"s" do not (4.if.paren-field, 4.if.paren-string-call).
+  private isOneLineBody(condition: Expression, opener: Bounds): boolean {
+    const endsWithParen = this.previousToken.type === TokenType.Punctuator && this.previousToken.value === ')';
+    return this.token.type !== TokenType.EOF && this.token.type !== TokenType.Newline
+      && this.token.bounds.start.line === opener.start.line && (!endsWithParen || !!condition.parens);
+  }
+
+  // A one-line body stops at the end of its line or at a word that ends a block; a return that is not last stops it
+  // anywhere.
+  private expectEndOfLine(): void {
+    if (!isEndOfLine(this.token)) {
+      errors.raiseErrForToken(this.token, errMessages.endOfLineExpected, this.token.value);
+    }
   }
 
   parseWhileStatementBody(flowContext: FlowContext, endingFunction?: (token: Token) => boolean) {
@@ -656,8 +693,9 @@ export default class Parser {
   //     if ::= 'if' exp 'then' block {elif} ['else' block] 'end'
   //     elif ::= 'elseif' exp 'then' block
   //
-  // PICO-8 one-line if statement:
-  //     if ::= 'if' '(' exp ')' statement ['else' statement] '\n'
+  // PICO-8 one-line if statement (see isOneLineBody), whose blocks end at the end of the line or at a word that ends a
+  // block:
+  //     if ::= 'if' exp block {elif} ['else' block]
 
   parseIfStatement(flowContext: FlowContext): IfStatement {
     const opener = this.locations[this.locations.length - 1].loc;
@@ -670,60 +708,52 @@ export default class Parser {
     let marker = this.locations[this.locations.length - 1];
     this.pushLocation(marker);
 
-    const canBeOneLiner = this.lexer.token?.value === '(';
+    const startsWithParen = this.token.value === '(';
 
     condition = this.parseExpectedExpression(flowContext);
 
     if (!this.lexer.consume('then') && !this.lexer.consume('do')) {
-      if (canBeOneLiner) {
+      if (startsWithParen && this.isOneLineBody(condition, opener)) {
 
         // Tell formatter not to use outer parens on the condition expression, since they'll
         // be added anyway for a one-line if statement
         condition.parens = false;
 
-        // Handle special PICO-8 one-line if statement. Each clause contains
-        // every statement up to the end of the line (or the `else`).
-        let elseClosed = true;
-        this.lexer.withSignificantNewline((cancelSignificantNewline) => {
+        // Handle special PICO-8 one-line if statement. Each clause contains every statement up to the end of the line
+        // or the next clause; any of them can be empty, an else at the end of the line too.
+        this.lexer.withSignificantNewline(() => {
           flowContext.pushScope();
           const block = this.parseBlock(flowContext, isEndOfLine);
-          if (block.body.length === 0) {
-            errors.raiseUnexpectedToken('statement', this.token);
-          }
           flowContext.popScope();
           clauses.push(this.finishNode(AST.ifClause(condition, block)));
+          this.expectEndOfLine();
+
+          while (this.token.value === 'elseif') {
+            this.pushLocation(this.createLocationMarker());
+            this.lexerNext();
+            const elseifCondition = this.parseExpectedExpression(flowContext);
+            if (!this.lexer.consume('then') && !this.lexer.consume('do')) {
+              errors.raiseErrForToken(this.token, errMessages.expected, 'then', this.token.value);
+            }
+            flowContext.pushScope();
+            const elseifBlock = this.parseBlock(flowContext, isEndOfLine);
+            flowContext.popScope();
+            clauses.push(this.finishNode(AST.elseifClause(elseifCondition, elseifBlock), true));
+            this.expectEndOfLine();
+          }
 
           if (this.lexer.consume('else')) {
             // Include the `else` in the location of ElseClause.
             this.pushLocation(new Marker(this.previousToken));
-
-            let multilineElse = false;
-            if (this.lexer.consumeTokenType(TokenType.Newline)) {
-              // Weird escape hatch here into multi-line `else` block.
-              // Example:
-              //
-              //   if(v.x<-130) del(b,v) else
-              //     v.x-=2
-              //   end
-              cancelSignificantNewline();
-              multilineElse = true;
-            }
-
             flowContext.pushScope();
-            // For a multi-line `else`, it's a regular block ending with an `end`.
-            // Otherwise it ends at the end of the line.
-            const elseBlock = this.parseBlock(flowContext, multilineElse ? isBlockFollow : isEndOfLine);
-            if (multilineElse) {
-              elseClosed = this.expectBlockEnd('end', opener, 'if');
-            } else if (elseBlock.body.length === 0) {
-              errors.raiseUnexpectedToken('statement', this.token);
-            }
+            const elseBlock = this.parseBlock(flowContext, isEndOfLine);
             flowContext.popScope();
             clauses.push(this.finishNode(AST.elseClause(elseBlock), true));
+            this.expectEndOfLine();
           }
         });
 
-        return this.finishNode(AST.ifStatement(clauses, true), !elseClosed);
+        return this.finishNode(AST.ifStatement(clauses, true));
       } else {
         errors.raiseErrForToken(this.token, errMessages.expected, 'then', this.token.value);
       }
