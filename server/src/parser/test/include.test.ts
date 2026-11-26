@@ -286,4 +286,11 @@ describe('#include', function () {
     const header = parseWith('function g()\n  #include lib.lua\nend', { 'lib.lua': 'while f(\n  x = 1\nend' });
     assert.deepStrictEqual(header.errors.map(formatError), [ 'lib.lua 1:7 \')\' expected (to close \'(\' at line 1) near \'x\'' ]);
   });
+
+  it('gives a file included twice the errors it gives when included once', () => {
+    assert.deepStrictEqual(parseWith('#include lib.lua\n#include lib.lua', { 'lib.lua': 'x = f(a +\nplayer.x = 3' }).errors.map(formatError),
+      [ 'lib.lua 1:9 <expression> expected near \'player\'' ]);
+    assert.deepStrictEqual(parseWith('#include lib.lua\n#include lib.lua', { 'lib.lua': 'while a +\n  local y = 1\nend' }).errors.map(formatError),
+      [ 'lib.lua 1:9 <expression> expected near \'local\'' ]);
+  });
 });

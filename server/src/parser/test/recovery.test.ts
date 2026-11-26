@@ -427,26 +427,38 @@ describe('Parser recovery', () => {
       check(lines('for i = 1, n +', 'player.x = 3', 'end'), [ 'main_test_file 1:14 <expression> expected near \'player\'' ], [ 'player [Table]', '  x [Field]' ]);
       check(lines('repeat', '  y = 1', 'until a +', 'player.x = 3'), [ 'main_test_file 3:9 <expression> expected near \'player\'' ],
         [ 'y [Variable]', 'player [Table]', '  x [Field]' ]);
-      check(lines('if a and', '  local y = 1', 'end'), [ 'main_test_file 1:8 <expression> expected near \'local\'' ], [ 'y [Variable]' ]);
-      check(lines('while a +', '  if c then x = 1 end', 'end'), [ 'main_test_file 1:9 <expression> expected near \'if\'' ], [ 'x [Variable]' ]);
-      check(lines('for i = 1, n +', '  for j = 1, 2 do x = 1 end', 'end'), [ 'main_test_file 1:14 <expression> expected near \'for\'' ], [ 'x [Variable]' ]);
-      check(lines('while a +', '  return', 'end'), [ 'main_test_file 1:9 <expression> expected near \'return\'' ], []);
+      check(lines('if a and', 'local y = 1', 'end'), [ 'main_test_file 1:8 <expression> expected near \'local\'' ], [ 'y [Variable]' ]);
+      check(lines('while a +', 'if c then x = 1 end', 'end'), [ 'main_test_file 1:9 <expression> expected near \'if\'' ], [ 'x [Variable]' ]);
+      check(lines('for i = 1, n +', 'for j = 1, 2 do x = 1 end', 'end'), [ 'main_test_file 1:14 <expression> expected near \'for\'' ], [ 'x [Variable]' ]);
+      check(lines('while a +', 'return', 'end'), [ 'main_test_file 1:9 <expression> expected near \'return\'' ], []);
+      check(lines('function f()', 'if a and', 'return 1', 'else', 'y = 2', 'end', 'end'),
+        [ 'main_test_file 2:8 <expression> expected near \'return\'' ], [ 'f() [Function]', 'y [Variable]' ]);
+      check(lines('function f()', 'if a and', 'local z = 1', 'else', 'y = 2', 'end', 'end'),
+        [ 'main_test_file 2:8 <expression> expected near \'local\'' ], [ 'f() [Function]', '  z [Variable]', 'y [Variable]' ]);
+      check(lines('while f(a +', '  (b).c = 1', 'end'), [ 'main_test_file 1:11 <expression> expected near \'(\'' ], [ 'b [Table]', '  c [Field]' ]);
     });
 
-    it('reports only the header of a block missing its end when the header stopped at the line below', () => {
+    it('reports only the header that stopped at the line below when its block, or one around it, is missing its end', () => {
       check(lines('if a and', 'b = 1'), [ 'main_test_file 1:8 <expression> expected near \'b\'' ], [ 'b [Variable]' ]);
       check(lines('while f(', '  x = 1'), [ 'main_test_file 1:7 \')\' expected (to close \'(\' at line 1) near \'x\'' ], [ 'x [Variable]' ]);
       check(lines('for i = 1, n +', '  x = 1'), [ 'main_test_file 1:14 <expression> expected near \'x\'' ], [ 'x [Variable]' ]);
+      check(lines('for k in pairs(', '  x = 1'), [ 'main_test_file 1:14 \')\' expected (to close \'(\' at line 1) near \'x\'' ], [ 'x [Variable]' ]);
       check(lines('if a then', '  y = 1', 'elseif h(a,', '  x = 1'),
         [ 'main_test_file 3:8 \')\' expected (to close \'(\' at line 3) near \'x\'' ], [ 'y [Variable]', 'x [Variable]' ]);
       check(lines('function _update()', '  if btn(0,', '  x -= 1', 'end'),
         [ 'main_test_file 2:8 \')\' expected (to close \'(\' at line 2) near \'x\'' ], [ '_update() [Function]' ]);
+      check(lines('do', 'while a +', 'x = 1', 'end'), [ 'main_test_file 2:9 <expression> expected near \'x\'' ], [ 'x [Variable]' ]);
+      check(lines('for j = 1, 4 do', 'if (j ==', 'if (l > 63) c(8)', 'rect(j)', 'end'), [ 'main_test_file 2:8 <expression> expected near \'if\'' ], []);
       check(lines('if a then', '  b = 1'), [ 'main_test_file 1:0 \'end\' expected (to close \'if\' at line 1) near \'<eof>\'' ], [ 'b [Variable]' ]);
     });
 
-    it('takes the line below as the statement of a one-line if or while whose condition stopped there', () => {
-      check(lines('if (a and', 'b = 1'), [ 'main_test_file 1:9 <expression> expected near \'b\'' ], [ 'b [Variable]' ]);
-      check(lines('while (a +', 'b = 1'), [ 'main_test_file 1:10 <expression> expected near \'b\'' ], [ 'b [Variable]' ]);
+    it('reads the line below as the block of an if or a while whose condition in parentheses stopped there', () => {
+      check(lines('if (a and', '  x = 1', 'end'), [ 'main_test_file 1:9 <expression> expected near \'x\'' ], [ 'x [Variable]' ]);
+      check(lines('while (a +', '  x = 1', 'end'), [ 'main_test_file 1:10 <expression> expected near \'x\'' ], [ 'x [Variable]' ]);
+      check(lines('function f()', '  if (a and', '    x = 1', '  elseif b then', '    y = 2', '  end', 'end'),
+        [ 'main_test_file 2:11 <expression> expected near \'x\'' ], [ 'f() [Function]', 'x [Variable]', 'y [Variable]' ]);
+      check(lines('function f()', '  if (f(a,', '    local x = 1', '  else', '    y = 2', '  end', 'end'),
+        [ 'main_test_file 2:7 \')\' expected (to close \'(\' at line 2) near \'local\'' ], [ 'f() [Function]', '  x [Variable]', 'y [Variable]' ]);
     });
 
     it('reports as the first error a do or then missing above a block that starts with a statement keyword', () => {
@@ -471,6 +483,8 @@ describe('Parser recovery', () => {
       check(lines('x = a[', 'b.c = 1'), [ 'main_test_file 1:5 \']\' expected (to close \'[\' at line 1) near \'b\'' ], [ 'x [Variable]', 'b [Table]', '  c [Field]' ]);
       const printed = check(lines('x = f(j *', 'line(w)?"x"'), [ 'main_test_file 1:9 <expression> expected near \'line\'' ], [ 'x [Variable]' ]);
       assert.deepStrictEqual(printed.block.body.map(s => s.type), [ 'AssignmentStatement', 'CallStatement', 'CallStatement' ]);
+      check(lines('x = f(a +', '(b).c = 1'), [ 'main_test_file 1:9 <expression> expected near \'(\'' ], [ 'x [Variable]', 'b [Table]', '  c [Field]' ]);
+      check(lines('foo(', '(b).c = 1'), [ 'main_test_file 1:3 \')\' expected (to close \'(\' at line 1) near \'(\'' ], [ 'b [Table]', '  c [Field]' ]);
     });
 
     it('reports a mistake on the line below at the mistake alone when that line is no new statement', () => {
@@ -566,6 +580,8 @@ describe('Parser recovery', () => {
         [ 'main_test_file 2:6 \')\' expected (to close \'(\' at line 2) near \'for\'' ], [ 'g() [Function]', 'x [Variable]' ]);
       check(lines('if a then', '  y = 1', 'elseif h(a,', '  return', 'end'),
         [ 'main_test_file 3:8 \')\' expected (to close \'(\' at line 3) near \'return\'' ], [ 'y [Variable]' ]);
+      check(lines('function f()', 'if f(a,', 'local z = 1', 'else', 'y = 2', 'end', 'end'),
+        [ 'main_test_file 2:4 \')\' expected (to close \'(\' at line 2) near \'local\'' ], [ 'f() [Function]', '  z [Variable]', 'y [Variable]' ]);
     });
 
     it('closes an index left open before its key', () => {

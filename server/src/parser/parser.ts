@@ -112,7 +112,9 @@ export default class Parser {
   // Blocks closed by an `end` (or `until`) less indented than the line they
   // start on. Such a closer most likely belongs to a block around them that
   // takes the same closer, so when one of those turns out to have none, the
-  // inner block is the one reported.
+  // inner block is the one reported. A block whose header stopped early is kept
+  // whatever the indentation: where its block ends is a guess, so the closer it
+  // took may be one of a block around it.
   private underIndentedCloses: UnderIndentedClose[] = [];
 
   // Where the block that handed back the statements in `hoisted` now ends.
@@ -549,9 +551,9 @@ export default class Parser {
 
   // The expression before the do or then of a compound statement, or after its until. stopped: it ended early, at a
   // line that starts the block, with its error there; a whole header that ends there is missing its do or then. A token
-  // that only starts a statement, first on a line below the keyword and more indented than it, ends it whatever the
-  // indentation of the brackets still open: a block is more indented than its header, and its first line often starts
-  // with local, if or return. A first line that starts with a call still reads as part of the header, as f(b() is valid.
+  // that only starts a statement, first on a line below the keyword, ends it whatever the indentation: a block is more
+  // indented than its header, and its first line often starts with local, if or return. A first line that starts with
+  // a call still reads as part of the header, as f(b() is valid.
   private parseHeaderExpression(flowContext: FlowContext, keyword: Token): { expression: Expression, stopped: boolean } {
     const outerKeyword = this.headerKeyword;
     this.headerKeyword = keyword;
@@ -570,8 +572,7 @@ export default class Parser {
     return keyword !== null && this.onlyStartsStatement(token)
       && token.bounds.start.filename.equals(keyword.bounds.start.filename)
       && token.bounds.start.line > keyword.bounds.start.line
-      && this.isFirstOnLine(token.bounds.start)
-      && this.indentOf(token.bounds.start) > this.indentOf(keyword.bounds.start);
+      && this.isFirstOnLine(token.bounds.start);
   }
 
   private parseAgainIfNeeded<T>(flowContext: FlowContext, parse: () => T): T {
@@ -731,16 +732,19 @@ export default class Parser {
   }
 
   // One error for each place: none when near already has a missing value's, bracket's or block closer's error, or when
-  // the last error starts where this one does.
+  // the last error starts where this one does. That last error is near's too, as when a file included twice gives the
+  // same error again, so near is marked either way.
   private report(error: errors.ParseError, near?: Token) {
-    const last = this.errors[this.errors.length - 1];
-    const at = error.bounds.start;
-    if ((near && near === this.reportedNear)
-        || (last && last.bounds.start.index === at.index && last.bounds.start.filename.equals(at.filename))) {
+    if (near && near === this.reportedNear) {
       return;
     }
     if (near) {
       this.reportedNear = near;
+    }
+    const last = this.errors[this.errors.length - 1];
+    const at = error.bounds.start;
+    if (last && last.bounds.start.index === at.index && last.bounds.start.filename.equals(at.filename)) {
+      return;
     }
     this.errors.push(error);
   }
@@ -763,8 +767,9 @@ export default class Parser {
   // A block without its `end` (or `until`) has taken in all the code after it. It's kept, the error goes at its
   // first token, at the inner block that most likely took its closer (underIndentedCloses), or where its closer
   // is missing (see below), and the statements from the first one no more indented than its opener's line are
-  // handed back to the enclosing block. A block whose header stopped early gets no error (see below). Returns null
-  // when the closer is there, and otherwise where the block's node should now end.
+  // handed back to the enclosing block. A block whose header stopped early gets no error, nor does one around such
+  // a block that took a closer (see below). Returns null when the closer is there, and otherwise where the block's
+  // node should now end.
   private expectBlockEnd(closer: 'end' | 'until', opener: Bounds, word: string, body: Block, headerEnd: CodeLocation,
     headerStopped = false): CodeLocation | null {
     const file = opener.start.filename;
@@ -778,7 +783,7 @@ export default class Parser {
 
     if (this.token.type === TokenType.Keyword && this.token.value === closer) {
       const closedAt = this.token.bounds.start;
-      if (this.isFirstOnLine(closedAt) && this.indentOf(closedAt) < openerIndent) {
+      if (headerStopped || (this.isFirstOnLine(closedAt) && this.indentOf(closedAt) < openerIndent)) {
         this.underIndentedCloses.push({ opener, word, closer, closedAt: closedAt.index, missingAt: missingAt(cutAt()), headerStopped });
       }
       this.lexerNext();
@@ -789,10 +794,11 @@ export default class Parser {
       && close.opener.start.filename.equals(file) && close.opener.start.index > opener.start.index);
     this.underIndentedCloses = this.underIndentedCloses.filter(close => !inside.includes(close));
     const cut = cutAt();
-    const blamed = inside.sort((a, b) => a.closedAt - b.closedAt)[0] ?? { opener, word, missingAt: missingAt(cut), headerStopped };
-    // A block whose header stopped early has the error there, the one to fix first; its closer is reported once the
-    // header is whole, so that no error at its opener comes before that one.
-    if (!headerStopped && !blamed.headerStopped) {
+    const blamed = inside.sort((a, b) => a.closedAt - b.closedAt)[0] ?? { opener, word, missingAt: missingAt(cut) };
+    // A block whose header stopped early has the error there, the one to fix first; its closer, or the closer of a
+    // block around it that it may have taken, is reported once the header is whole, so that no error at an opener
+    // comes before that one.
+    if (!headerStopped && !inside.some(close => close.headerStopped)) {
       // Going by indentation, a block statement no more indented than the opener's line, after other code in the block,
       // comes after the block, so the closer is missing just before it. When the two are as indented as each other, that
       // is also the line being typed, or the one after it, whichever of the two openers is new. When an error is already
@@ -996,9 +1002,7 @@ export default class Parser {
     const canBeOneLiner = this.lexer.token?.value === '(';
     const { expression: condition, stopped } = this.parseHeaderExpression(flowContext, keyword);
 
-    // PICO-8 code mostly puts a condition in parentheses before a one-line while, so one that stopped at a line below
-    // takes that line as its statement.
-    if (this.lexer.consume('do') || (stopped && !canBeOneLiner)) {
+    if (this.lexer.consume('do') || stopped) {
       // regular while statement with `do` ... `end`
       // (we already consumed the `do`)
       const headerEnd = this.previousToken.bounds.end;
@@ -1086,9 +1090,7 @@ export default class Parser {
     const header = this.parseHeaderExpression(flowContext, keyword);
     condition = header.expression;
 
-    // PICO-8 code mostly puts a condition in parentheses before a one-line if, so one that stopped at a line below
-    // takes that line as its statement.
-    if (!(header.stopped && !canBeOneLiner) && !this.lexer.consume('then') && !this.lexer.consume('do')) {
+    if (!header.stopped && !this.lexer.consume('then') && !this.lexer.consume('do')) {
       if (canBeOneLiner) {
 
         // Tell formatter not to use outer parens on the condition expression, since they'll
@@ -1129,7 +1131,7 @@ export default class Parser {
             // Otherwise it ends at the end of the line.
             const elseBlock = this.parseBlock(flowContext, multilineElse ? isBlockFollow : isEndOfLine);
             if (multilineElse) {
-              truncatedEnd = this.expectBlockEnd('end', opener, 'if', elseBlock, headerEnd, header.stopped);
+              truncatedEnd = this.expectBlockEnd('end', opener, 'if', elseBlock, headerEnd);
             } else if (elseBlock.body.length === 0) {
               errors.raiseUnexpectedToken('statement', this.token);
             }
@@ -1344,6 +1346,9 @@ export default class Parser {
       }
 
       both: while (true) {
+        if (this.isStop(this.token)) {
+          break;
+        }
         switch (this.token.type === TokenType.StringLiteral ? '"' : this.token.value) {
         case '.':
         case '[':
@@ -1883,8 +1888,11 @@ export default class Parser {
       return null;
     }
 
-    // The suffix
+    // The suffix. The `(` of a stop starts a statement of its own, and no arguments.
     for (;;) {
+      if (this.isStop(this.token)) {
+        break;
+      }
       const newBase = this.parsePrefixExpressionPart(base, marker, flowContext);
       if (newBase === null) {
         break;
