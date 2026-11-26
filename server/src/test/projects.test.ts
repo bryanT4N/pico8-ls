@@ -392,12 +392,12 @@ describe('ProjectIndex', () => {
 
   it('takes whole the name the scan gave a file an #include finds in another case, and keeps the includer\'s folder for a name only the disk gives', () => {
     const disk: FileResolver = { ...NO_DISK, onDiskName: p => p.toUpperCase() };
-    const scanned = [ '/proj/b/lib.lua', '/proj/é/lib.lua' ].map(p => path.resolve(p));
-    const resolver = makeFileResolver(() => undefined, new Map(scanned.map(p => [ ResolvedFile.fromPath(p).fileURL, '' ])), disk);
+    const cached = [ '/proj/b/lib.lua', '/proj/é/lib.lua', '/proj/Ü/lib.lua', '/proj/游戏/lib.lua' ].map(p => path.resolve(p));
+    const resolver = makeFileResolver(() => undefined, new Map(cached.map(p => [ ResolvedFile.fromPath(p).fileURL, '' ])), disk);
     // Two workspace folders spell the folder above them otherwise in case.
     const from = ResolvedFile.fromPath(path.resolve('/Proj/ws1/main.p8'));
-    deepStrictEqual([ '../b/lib.lua', '../É/lib.lua', '../b/util.lua' ].map(name => resolveIncludeFile(from, name, resolver).path),
-      [ ...scanned, path.resolve('/Proj/B/UTIL.LUA') ]);
+    deepStrictEqual([ '../b/lib.lua', '../É/lib.lua', '../ü/lib.lua', '../游戏/Lib.lua', '../b/util.lua' ].map(name => resolveIncludeFile(from, name, resolver).path),
+      [ ...cached, path.resolve('/Proj/B/UTIL.LUA') ]);
   });
 
   it('knows an included file by the URI the editor gives it when its name has parentheses', () => {

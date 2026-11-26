@@ -274,8 +274,8 @@ export function makeFileResolver(editorText: (uri: string) => string | undefined
       const uri = ResolvedFile.fromPath(filepath).fileURL;
       return editorText(uri) ?? cache.get(uri) ?? disk.loadFileContents(filepath);
     },
-    // The name the editor or the scan gave a file is the one its #includes take. The scan spells a workspace folder as
-    // its URI does, which can differ in case from the disk, so a file the scan read is also looked for in another case.
+    // The name the editor or the cache has for a file is the one its #includes take. The scan spells a workspace folder
+    // as its URI does, which can differ in case from the disk, so a cached file is also looked for in another case.
     onDiskName: filepath => {
       const uri = ResolvedFile.fromPath(filepath).fileURL;
       if (named(uri)) {
@@ -285,11 +285,12 @@ export function makeFileResolver(editorText: (uri: string) => string | undefined
       if (real === undefined) {
         return undefined;
       }
-      // URIs in lower case compare much faster than paths, but a letter outside ASCII is escaped, which hides its case.
+      // Comparing URIs spares turning every cached URI into a path. A letter outside ASCII that has a case is escaped,
+      // and its escape changes with its case, so a path with one is compared as a path.
       const lower = filepath.toLowerCase();
       const lowerUri = uri.toLowerCase();
-      const ascii = [ ...filepath ].every(char => char.charCodeAt(0) < 128);
-      return [ ...cache.keys() ].filter(other => ascii ? other.toLowerCase() === lowerUri : url.fileURLToPath(other).toLowerCase() === lower)
+      const byUri = [ ...filepath ].every(char => char.charCodeAt(0) < 128 || char.toLowerCase() === char && char.toUpperCase() === char);
+      return [ ...cache.keys() ].filter(other => byUri ? other.toLowerCase() === lowerUri : url.fileURLToPath(other).toLowerCase() === lower)
         .map(other => url.fileURLToPath(other)).find(other => disk.onDiskName?.(other) === real) ?? real;
     },
     isNamed: filepath => named(ResolvedFile.fromPath(filepath).fileURL),
