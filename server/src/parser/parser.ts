@@ -87,6 +87,11 @@ export default class Parser {
   // Keep track of all errors that occurred while parsing.
   errors: errors.ParseError[] = [];
 
+  // The errors of gotos and labels, reported only when the parse has no other error. Lua stops at the first error, and
+  // finds that a goto has no label, or jumps into the scope of a local, only at the end of its function or at the
+  // label, while ours stands at the goto. A statement with an error is also dropped together with its labels.
+  private gotoErrors: errors.ParseError[] = [];
+
   includes: Include[] = [];
 
   private includedComments: Comment_[] = [];
@@ -232,7 +237,7 @@ export default class Parser {
   parseChunk(): Chunk {
     this.lexerNext();
     this.markLocation();
-    const flowContext = new FlowContext(this.errors);
+    const flowContext = new FlowContext(this.gotoErrors);
     flowContext.allowVararg = true;
     flowContext.pushScope();
     const body = this.parseBlock(flowContext, isEndOfFile);
@@ -243,6 +248,11 @@ export default class Parser {
     }
 
     this.addLexerErrors(this.lexer);
+    if (this.errors.length === 0) {
+      for (const error of this.gotoErrors) {
+        this.errors.push(error);
+      }
+    }
     this.sortErrors();
 
     const chunk = this.finishNode(AST.chunk(body, this.errors));
@@ -331,9 +341,7 @@ export default class Parser {
           // A statement that throws part-way through leaves its location
           // markers, nesting levels and flow scopes behind: the nodes around it
           // would get the wrong start, later statements would count as nested
-          // in it, and later breaks and labels would count as inside it.
-          // Its flow scopes are popped, not dropped, so the gotos in them are
-          // still checked.
+          // in it, and later breaks would count as inside it.
           this.locations.length = locationDepth;
           this.levels = levels;
           while (flowContext.scopes.length > flowDepth) {
@@ -1027,7 +1035,7 @@ export default class Parser {
 
   parseFunctionDeclaration(name: Identifier | MemberExpression | null, isLocal: boolean): FunctionDeclaration {
     const opener = this.locations[this.locations.length - 1].loc;
-    const flowContext = new FlowContext(this.errors);
+    const flowContext = new FlowContext(this.gotoErrors);
     flowContext.pushScope();
 
     const parameters = [];

@@ -114,12 +114,11 @@ describe('Parser recovery', () => {
     );
   });
 
-  it('reports a goto without its label inside a statement that failed', () => {
-    check(
-      lines('repeat', '  goto nowhere', 'until'),
-      [ 'main_test_file 2:2 no visible label \'nowhere\' for <goto>', 'main_test_file 3:0 <expression> expected near \'<eof>\'' ],
-      [],
-    );
+  it('reports no goto or label error while the code has another error', () => {
+    check(lines('goto nowhere', 'x = = 1'), [ 'main_test_file 2:4 <expression> expected near \'=\'' ], []);
+    check(lines('repeat', '  goto nowhere', 'until'), [ 'main_test_file 3:0 <expression> expected near \'<eof>\'' ], []);
+    check(lines('goto l', 'local q', 'x = = 1', '::l::', 'print(q)'), [ 'main_test_file 3:4 <expression> expected near \'=\'' ], [ 'q [Variable]', 'l [Label]' ]);
+    check(lines('::a::', '::a::', 'x = = 1'), [ 'main_test_file 3:4 <expression> expected near \'=\'' ], [ 'a [Label]', 'a [Label]' ]);
   });
 
   it('reports elseif without then', () => {
