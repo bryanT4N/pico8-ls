@@ -5,6 +5,13 @@ import { HandleDiagnosticsSignature, LanguageClient, State } from 'vscode-langua
 // would be undone when the extension starts again.
 const KEY = 'pico-8-ls.keptLanguage';
 
+// A change of files.associations resets the language of the open files, the active one too, so a reset looks like
+// Change Language Mode. VS Code tells of the change of configuration right after the resets, with no timer between
+// them but not always in the same task of the extension host, and VS Code 1.63 may reset a file just after telling. A
+// file that leaves a PICO-8 language within this many milliseconds of a change of files.associations was reset by it;
+// the margin is for an extension host kept busy by other work.
+const RESET_WINDOW = 1000;
+
 // PICO-8, the language of .p8 files, is as much PICO-8 as PICO-8 Lua.
 function isPico(languageId: string): boolean {
   return languageId === 'pico-8' || languageId === 'pico-8-lua';
@@ -102,6 +109,11 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
     lastClosed = { document, languageId: document.languageId };
   }));
 
+  let associationsChangedAt = -Infinity;
+  // Kept from the start, so that the file is not switched back and its warnings stay hidden, and forgotten if a change
+  // of files.associations follows within the window.
+  let choice: { uri: string, at: number } | undefined;
+
   context.subscriptions.push(workspace.onDidOpenTextDocument(document => {
     const oldLanguage = lastClosed?.document === document ? lastClosed.languageId : undefined;
     lastClosed = undefined;
@@ -111,10 +123,11 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
         saveKept();
         filter.refresh(client);
       }
-    } else if (oldLanguage !== undefined && isPico(oldLanguage) && document.uri.scheme === 'file' && window.activeTextEditor?.document === document) {
-      // Change Language Mode acts on the active editor only. A change of files.associations resets every open file
-      // while the settings are the active editor, so those files go on to be checked.
+    } else if (oldLanguage !== undefined && isPico(oldLanguage) && document.uri.scheme === 'file' && window.activeTextEditor?.document === document
+      && Date.now() - associationsChangedAt > RESET_WINDOW) {
+      // Change Language Mode acts on the active editor only; the other files were reset and go on to be checked.
       kept.add(uri);
+      choice = { uri, at: Date.now() };
       saveKept();
       // The middleware hides the warnings the server sends from now on; those it sent before are hidden now.
       filter.refresh(client);
@@ -127,6 +140,11 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
     // Removing an association turns a file from the lua it gave into the default lua, which VS Code does not report
     // as a change of language.
     if (event.affectsConfiguration('files.associations')) {
+      associationsChangedAt = Date.now();
+      if (choice !== undefined && associationsChangedAt - choice.at <= RESET_WINDOW && kept.delete(choice.uri)) {
+        saveKept();
+      }
+      choice = undefined;
       filter.refresh(client);
       checkAll();
     }
