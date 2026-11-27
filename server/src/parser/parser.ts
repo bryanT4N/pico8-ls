@@ -16,7 +16,8 @@ import {
   VarargLiteral,
 } from './expressions';
 import ResolvedFile, { FileResolver, RealFileResolver, resolveIncludeFile } from './file-resolver';
-import Lexer, { isP8EndOfCodeSection, OpenBracket } from './lexer';
+import { Code, joined, readCode, tabsOf } from './code';
+import Lexer, { onOneLine, OpenBracket } from './lexer';
 import Marker from './marker';
 import {
   AssignmentStatement,
@@ -118,7 +119,7 @@ export default class Parser {
 
     this.lexer = new Lexer(input, filename);
     this.lexer.read = () => this.pull();
-    this.lexer.includeLines = includeLinesOf(input, this.lexer.index);
+    this.lexer.includeLines = includeLinesOf(this.lexer.input);
     this.lexerStack = [ this.lexer ];
   }
 
@@ -376,8 +377,8 @@ export default class Parser {
           this.takeComments(lexer);
           continue;
         }
-      } else if (token.type === TokenType.Punctuator && token.value === '#' && lexer.includeLines?.has(token.bounds.start.index)) {
-        this.paste(lexer.readIncludeLine(token.bounds.start.index));
+      } else if (token.type === TokenType.Punctuator && token.value === '#' && lexer.includeLines?.has(lexer.tokenStart)) {
+        this.paste(lexer.readIncludeLine(lexer.tokenStart));
         continue;
       }
       for (let i = this.unplaced.length - 1; i >= 0 && !this.unplaced[i].next; i--) {
@@ -403,9 +404,9 @@ export default class Parser {
     const name = colon < 0 ? filename : filename.slice(0, colon);
     const resolvedInclude = resolveIncludeFile(this.mainFile, name, this.includeFileResolver);
     statement.resolvedFile = resolvedInclude;
-    const text = this.includedText(statement, written, name, resolvedInclude, colon < 0 ? undefined : filename.slice(colon + 1));
-    if (text !== undefined) {
-      const lexer = new Lexer(text, resolvedInclude);
+    const code = this.codeToPaste(statement, written, name, resolvedInclude, colon < 0 ? undefined : filename.slice(colon + 1));
+    if (code !== undefined) {
+      const lexer = new Lexer(code, resolvedInclude);
       lexer.pasted = true;
       this.lexerStack.push(lexer);
       this.pasted.set(resolvedInclude, { lexer, line: line.bounds, start: lexer.getCurrentBounds().end });
@@ -593,8 +594,8 @@ export default class Parser {
     return this.finishNode(AST.block(block), true);
   }
 
-  // The text that an #include pastes in, or undefined when there is none, with the error saying why.
-  private includedText(statement: IncludeStatement, written: string, name: string, resolvedInclude: ResolvedFile, tabSuffix?: string): string | undefined {
+  // The code that an #include pastes in, or undefined when there is none, with the error saying why.
+  private codeToPaste(statement: IncludeStatement, written: string, name: string, resolvedInclude: ResolvedFile, tabSuffix?: string): Code | undefined {
     if (this.includeParses >= MAX_INCLUDE_PARSES) {
       if (!this.reportedTooManyIncludeParses) {
         this.reportedTooManyIncludeParses = true;
@@ -631,23 +632,13 @@ export default class Parser {
     }
 
     this.includes.push({ stmt: statement, resolvedFile: resolvedInclude });
-    // PICO-8 takes a tab of a cart or of a .lua file, and includes any other file whole (3.colon-txt,
-    // 3.colon-txt-cart).
-    const tabbed = fileContents.startsWith('pico-8 cartridge') || /\.lua$/i.test(resolvedInclude.path);
-    const tab = tabSuffix !== undefined && tabbed ? tabIndex(tabSuffix) : undefined;
-    if (tab !== undefined) {
-      // PICO-8 includes nothing for a number that is not one of the 16 tabs a cart can have (3.p8-tab-11,
-      // 3.p8-tab-minus-2).
-      const tabText = tab >= 0 && tab < 16 ? tabOf(fileContents, tab) : '';
-      if (tabText === undefined) {
-        this.errors.push(this.getIncludeStatementError(statement, written, `${path.basename(resolvedInclude.path)} has no tab ${tab}`));
-        return undefined;
-      }
-      fileContents = tabText;
+    const code = includedCode(readCode(fileContents), resolvedInclude.path, tabSuffix);
+    if (typeof code === 'number') {
+      this.errors.push(this.getIncludeStatementError(statement, written, `${path.basename(resolvedInclude.path)} has no tab ${code}`));
+      return undefined;
     }
-
     this.includeParses++;
-    return fileContents;
+    return code;
   }
 
   private unresolvedInclude(statement: IncludeStatement, written: string, resolvedInclude: ResolvedFile, reason: string): undefined {
@@ -785,6 +776,7 @@ export default class Parser {
 
   parseWhileStatement(flowContext: FlowContext): WhileStatement {
     const opener = this.locations[this.locations.length - 1].loc;
+    const keyword = this.previousToken;
     let body: Block | undefined;
     let closed = true;
 
@@ -796,7 +788,7 @@ export default class Parser {
       // (we already consumed the `do`)
       body = this.parseWhileStatementBody(flowContext);
       closed = this.expectBlockEnd('end', opener, 'while');
-    } else if (startsWithParen && this.isOneLineBody(condition, opener)) {
+    } else if (startsWithParen && this.isOneLineBody(condition, keyword)) {
       // Handle special one-line while statement
       // (the body is every statement until the end of the line)
       this.lexer.withSignificantNewline(() => {
@@ -813,10 +805,9 @@ export default class Parser {
   // PICO-8 reads if (c) and while (c) as one-line forms when what follows the condition starts on the line of the if or
   // while, unless the condition ends with a ) that is not the one after c: (a)(f)() and (a) or f() need their then
   // (4.if.paren-body, 4.if.paren-or-call), (a).x and (f)"s" do not (4.if.paren-field, 4.if.paren-string-call).
-  private isOneLineBody(condition: Expression, opener: Bounds): boolean {
+  private isOneLineBody(condition: Expression, keyword: Token): boolean {
     const endsWithParen = this.previousToken.type === TokenType.Punctuator && this.previousToken.value === ')';
-    return this.token.type !== TokenType.EOF && this.token.type !== TokenType.Newline
-      && this.token.bounds.start.filename === opener.start.filename && this.token.bounds.start.line === opener.start.line
+    return this.token.type !== TokenType.EOF && this.token.type !== TokenType.Newline && onOneLine(keyword, this.token)
       && (!endsWithParen || !!condition.parens);
   }
 
@@ -881,6 +872,7 @@ export default class Parser {
 
   parseIfStatement(flowContext: FlowContext): IfStatement {
     const opener = this.locations[this.locations.length - 1].loc;
+    const keyword = this.previousToken;
     const clauses: GeneralIfClause[] = [];
     let condition: Expression;
     let body;
@@ -895,7 +887,7 @@ export default class Parser {
     condition = this.parseExpectedExpression(flowContext);
 
     if (!this.lexer.consume('then') && !this.lexer.consume('do')) {
-      if (startsWithParen && this.isOneLineBody(condition, opener)) {
+      if (startsWithParen && this.isOneLineBody(condition, keyword)) {
 
         // Tell formatter not to use outer parens on the condition expression, since they'll
         // be added anyway for a one-line if statement
@@ -1220,9 +1212,7 @@ export default class Parser {
 
   // Whether nothing comes after the ? just read on its line; the token read after it can be on a later line.
   private printsNothing(): boolean {
-    const question = this.previousToken.bounds.start;
-    const { type, bounds: { start } } = this.token;
-    return type === TokenType.Newline || type === TokenType.EOF || start.filename !== question.filename || start.line !== question.line;
+    return this.token.type === TokenType.Newline || this.token.type === TokenType.EOF || !onOneLine(this.previousToken, this.token);
   }
 
   getIncludeStatementError(statement: IncludeStatement, written: string, errorMessage: string) {
@@ -1626,7 +1616,7 @@ export default class Parser {
       this.pushLocation(marker);
       // A long string that a pasted file leaves open ends in another file: its text is the part in its own file.
       const { start, end } = this.token.bounds;
-      const raw = this.lexerOf(start.filename).input.slice(start.index, end.filename === start.filename ? end.index : undefined);
+      const raw = this.lexerOf(start.filename).text.slice(start.index, end.filename === start.filename ? end.index : undefined);
       this.lexerNext();
       return this.finishNode(AST.literal(type, value, raw));
     } else if (type === TokenType.Keyword && 'function' === value) {
@@ -1717,7 +1707,7 @@ function isEndOfFile(token: Token) {
   return token.type === TokenType.EOF;
 }
 
-// Where the # of each #include line that PICO-8 reads is, from the start of the code on, or undefined for none.
+// Where the # of each #include line that PICO-8 reads is in the code, or undefined for none.
 // PICO-8 finds them in the cart's own text before Lua reads the code: at the start of a line, in lower case and followed
 // by a space (3.after-code, 3.upper, 3.tab-after-include, 3.nested), and only outside a long string or comment of that
 // text, whatever a pasted file leaves open (3.alone-str-cart-comment-level, 3.alone-code-real-comment). Its scan is not
@@ -1725,13 +1715,13 @@ function isEndOfFile(token: Token) {
 // line comments, //[[ too (3.scan-dq-string, 3.dq-cont-include, 3.scan-line-comment-space, 3.scan-slash-long), but a
 // \z does not take a string past a line break (3.z-include), and it skips the rest of an #include line
 // (3.scan-name-brackets). Elsewhere the # is the length operator. The scan stops at the last #include line.
-function includeLinesOf(input: string, start: number): Set<number> | undefined {
-  let hash = input.indexOf('#include ', start);
+function includeLinesOf(input: string): Set<number> | undefined {
+  let hash = input.indexOf('#include ');
   if (hash < 0) {
     return undefined;
   }
   const lines = new Set<number>();
-  let at = start;
+  let at = 0;
   for (; hash >= 0; hash = input.indexOf('#include ', Math.max(at, hash + 1))) {
     let lineStart = hash;
     while (lineStart > 0 && (input.charCodeAt(lineStart - 1) === 32 || input.charCodeAt(lineStart - 1) === 9)) {
@@ -1843,25 +1833,22 @@ function tabIndex(suffix: string): number | undefined {
   return tab === -1 ? undefined : tab;
 }
 
-// One tab of a cart, with the code of the other tabs blanked out by spaces, so that every position stays where it is in
-// the file. A tab starts at a line that begins with -->8.
-function tabOf(text: string, tab: number): string | undefined {
-  const parts = text.split(/(\r\n|\r|\n)/);
-  let inCode = !text.startsWith('pico-8 cartridge');
-  let inHeader = !inCode;
-  let current = 0;
-  for (let i = 0; i < parts.length; i += 2) {
-    const line = parts[i];
-    if (inHeader) {
-      inHeader = line !== '__lua__';
-      inCode = !inHeader;
-      continue;
-    }
-    inCode &&= !isP8EndOfCodeSection(line);
-    if (inCode) {
-      current += line.startsWith('-->8') ? 1 : 0;
-      parts[i] = current === tab ? line : ' '.repeat(line.length);
-    }
+// What an #include pastes from a file, or the number of the tab that the file does not have. PICO-8 takes tabs of a
+// cart, and of a file whose path has .lua in it in any case, and any other file whole (3.colon-txt, si.t28.ext-folder,
+// si.t28.ext-alua). Whole, a file of tabs is its first 16 tabs with nothing between them (si.tab.t18.whole,
+// si.t28.join.tabs-fuse); a number that is not one of the 16 tabs a cart can have gives nothing (3.p8-tab-11,
+// 3.p8-tab-minus-2).
+function includedCode(code: Code, filePath: string, tabSuffix: string | undefined): Code | number {
+  if (!code.cart && !/\.lua/i.test(filePath)) {
+    return code;
   }
-  return tab <= current ? parts.join('') : undefined;
+  const tabs = tabsOf(code);
+  const tab = tabSuffix !== undefined ? tabIndex(tabSuffix) : undefined;
+  if (tab === undefined) {
+    return joined(tabs.slice(0, 16));
+  }
+  if (tab < 0 || tab >= 16) {
+    return readCode('');
+  }
+  return tab < tabs.length ? tabs[tab] : tab;
 }

@@ -1,4 +1,5 @@
 import AST from './ast';
+import { Code, readCode, Run } from './code';
 import { EncodingMode, encodingModes, EncodingModeType } from './encoding-modes';
 import * as errors from './errors';
 import { errMessages } from './errors';
@@ -52,11 +53,17 @@ export default class Lexer {
   lookahead: Token | undefined;
   previousToken: Token | undefined;
   token: Token | undefined;
-  fullP8File: boolean = false;
-  reachedEnd: boolean = false;
 
+  // The code being read, and the text of the file it is read from (Code).
   input: string = '';
   length: number = 0;
+  readonly text: string;
+  // Where a place in the code is in the text: by an offset, when the code is one run of the text from the start of a
+  // line, else by the runs.
+  private shift = { index: 0, line: 0 };
+  private runs?: Run[];
+  private lineStarts?: number[];
+  private readonly end?: Code['end'];
   encodingMode: EncodingMode = encodingModes[EncodingModeType.XUserDefined];
 
   // Special flag that indicates we shouldn't skip over a newline, instead
@@ -77,50 +84,59 @@ export default class Lexer {
 
   filename: ResolvedFile;
 
-  constructor(input: string, filename: ResolvedFile) {
-    this.input = input;
+  // A file's text, of which the code PICO-8 reads is taken (readCode), or that code.
+  constructor(input: string | Code, filename: ResolvedFile) {
+    const code = typeof input === 'string' ? readCode(input) : input;
+    this.text = code.text;
+    this.input = code.code;
     this.length = this.input.length;
     this.filename = filename;
-
-    // prime the pump
-    this.skipHeader();
-  }
-
-  skipHeader() {
-    if (this.input.startsWith('pico-8 cartridge')) {
-      this.fullP8File = true;
-
-      // skip lines until we get to __lua__
-      while (this.index < this.length && this.currentLine() !== '__lua__') {
-        this.skipLine();
-      }
-
-      // Skip the __lua__ line
-      this.skipLine();
-    }
-  }
-
-  currentLine(): string {
-    let i = this.lineStart;
-    // look for \r and \n
-    while (i < this.length && this.input.charCodeAt(i) != 10 && this.input.charCodeAt(i) != 13) {
-      i++;
-    }
-
-    return this.input.substring(this.lineStart, i);
-  }
-
-  skipLine() {
-    while (this.index < this.length) {
-      const charCode = this.input.charCodeAt(this.index);
-      if (isLineTerminator(charCode)) {
-        // skip the newline character(s)
-        this.consumeEOL();
-        break;
+    this.end = code.end;
+    const from = code.runs[0].from;
+    if (code.runs.length > 1) {
+      this.runs = code.runs;
+    } else if (from > 0) {
+      const { breaks, lineStart } = lineBreaks(this.text, 0, from);
+      if (lineStart === from) {
+        this.shift = { index: from, line: breaks };
       } else {
-        this.index++;
+        this.runs = code.runs;
       }
     }
+  }
+
+  // Where the code at index is in the text; at its end, or as the end of a range, it is where the character before it
+  // ends, as the code can go on elsewhere in the text after a run.
+  private placeOf(index: number, end: boolean): CodeLocation {
+    const runs = this.runs!;
+    const after = index > 0 && (end || index >= this.length);
+    const at = after ? index - 1 : index;
+    let low = 0;
+    let high = runs.length - 1;
+    while (low < high) {
+      const middle = (low + high + 1) >> 1;
+      if (runs[middle].at <= at) {
+        low = middle;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return this.textPlace(runs[low].from + at - runs[low].at + (after ? 1 : 0));
+  }
+
+  private textPlace(index: number): CodeLocation {
+    const starts = this.lineStarts ??= lineStartsOf(this.text);
+    let low = 0;
+    let high = starts.length - 1;
+    while (low < high) {
+      const middle = (low + high + 1) >> 1;
+      if (starts[middle] <= index) {
+        low = middle;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return { index, line: low + 1, column: index - starts[low], filename: this.filename };
   }
 
   withSignificantNewline(func: () => void) {
@@ -154,44 +170,65 @@ export default class Lexer {
   }
 
   getLocation(): CodeLocation {
+    if (this.runs) {
+      const place = this.placeOf(this.index, false);
+      return { ...place, column: place.column + 1 };
+    }
     return {
-      index: this.index,
-      line: this.line,
+      index: this.index + this.shift.index,
+      line: this.line + this.shift.line,
       column: this.index - this.lineStart + 1,
       filename: this.filename,
     };
   }
 
   getCurrentBounds(): Bounds {
+    if (this.runs) {
+      return { start: this.placeOf(this.tokenStart, false), end: this.placeOf(this.index, true) };
+    }
     return {
       start: {
-        index: this.tokenStart,
-        line: this.tokenStartLine,
+        index: this.tokenStart + this.shift.index,
+        line: this.tokenStartLine + this.shift.line,
         column: this.tokenStart - this.tokenStartLineIdx,
         filename: this.filename,
       },
       end: {
-        index: this.index,
-        line: this.line,
+        index: this.index + this.shift.index,
+        line: this.line + this.shift.line,
         column: this.index - this.lineStart,
         filename: this.filename,
       },
     };
   }
 
+  // A cart's code that stops at another section ends at the start of that section's line, as the token there.
+  private endOfCode(): Token {
+    const token = this.makeToken(TokenType.EOF, '<eof>');
+    if (this.end) {
+      // The section's line comes after the line break that ends the last line of the code.
+      const start = this.runs ? this.textPlace(this.end.index) : {
+        index: this.end.index, line: this.line + this.shift.line + lineBreaks(this.text, this.length + this.shift.index, this.end.index).breaks,
+        column: 0, filename: this.filename,
+      };
+      token.bounds = { start, end: { ...start, index: start.index + this.end.length, column: start.column + this.end.length } };
+    }
+    return token;
+  }
+
   makeToken(type: TokenType, value: TokenValue): Token {
-    return {
+    const token: Token = {
       type: type,
       value: value,
       bounds: this.getCurrentBounds(),
     };
+    if (this.runs) {
+      token.line = this.tokenStartLine;
+    }
+    return token;
   }
 
   lex(): Token {
-    if (this.reachedEnd) {
-      return this.makeToken(TokenType.EOF, '<eof>');
-    }
-
     for (;;) {
       this.skipWhiteSpace();
 
@@ -202,7 +239,7 @@ export default class Lexer {
       }
 
       if (this.index >= this.length) {
-        return this.makeToken(TokenType.EOF, '<eof>');
+        return this.endOfCode();
       }
 
       const charCode = this.input.charCodeAt(this.index);
@@ -422,12 +459,6 @@ export default class Lexer {
     } else if ('nil' === value) {
       type = TokenType.NilLiteral;
       value = null;
-    } else if (isP8EndOfCodeSection(value)
-        && this.lineStart === this.tokenStart // has to be the only thing on the line
-        && isLineTerminator(this.input.charCodeAt(this.index))) {
-      this.reachedEnd = true;
-      type = TokenType.EOF;
-      value = '<eof>';
     } else {
       type = TokenType.Identifier;
     }
@@ -832,7 +863,7 @@ export default class Lexer {
 
   readLongString(isComment: boolean): string | false {
     let level = 0;
-    const firstLine = this.line;
+    const firstLine = this.getCurrentBounds().start.line;
 
     ++this.index; // [
 
@@ -848,7 +879,7 @@ export default class Lexer {
     this.index += level + 1;
 
     // If the first character is a newline, ignore it and begin on next line.
-    if (isLineTerminator(this.input.charCodeAt(this.index)) && !this.isBeforeNextSection()) {
+    if (isLineTerminator(this.input.charCodeAt(this.index))) {
       this.consumeEOL();
     }
 
@@ -872,9 +903,7 @@ export default class Lexer {
   // Reads on to the close of a long bracket of the level, ]] or ]=] and so on, and past it; or to the end of the code;
   // or to the # of an #include line of includeLines.
   closeLongBracket(level: number): 'close' | 'end' | 'include' {
-    // PICO-8 ends a cart's code at the next section even inside a long string
-    // or comment. The line break is left for lex(), which ends the code there.
-    while (this.index < this.length && !this.isBeforeNextSection()) {
+    while (this.index < this.length) {
       if (this.includeLines && this.index === this.lineStart) {
         let hash = this.index;
         while (this.input.charCodeAt(hash) === 32 || this.input.charCodeAt(hash) === 9) {
@@ -894,22 +923,6 @@ export default class Lexer {
       }
     }
     return 'end';
-  }
-
-  // Whether the line break at this.index is followed by a line that
-  // scanIdentifierOrKeyword takes as the end of a .p8 file's code.
-  isBeforeNextSection(): boolean {
-    const charCode = this.input.charCodeAt(this.index);
-    if (!this.fullP8File || !isLineTerminator(charCode)) {
-      return false;
-    }
-    const next = this.input.charCodeAt(this.index + 1);
-    const lineStart = this.index + (isLineTerminator(next) && next !== charCode ? 2 : 1);
-    let wordEnd = lineStart;
-    while (isIdentifierPart(this.input.charCodeAt(wordEnd))) {
-      wordEnd++;
-    }
-    return isP8EndOfCodeSection(this.input.slice(lineStart, wordEnd)) && isLineTerminator(this.input.charCodeAt(wordEnd));
   }
 
   // ## Lex functions and helpers.
@@ -985,8 +998,8 @@ export default class Lexer {
 
 // Each lexer has a ResolvedFile of its own. A file the parser pastes in shares no line with the code around it: a line
 // break comes before an #include line and after the file.
-function onOneLine(a: Token | undefined, b: Token): boolean {
-  return a !== undefined && a.bounds.start.filename === b.bounds.start.filename && a.bounds.start.line === b.bounds.start.line;
+export function onOneLine(a: Token | undefined, b: Token): boolean {
+  return a !== undefined && a.bounds.start.filename === b.bounds.start.filename && (a.line ?? a.bounds.start.line) === (b.line ?? b.bounds.start.line);
 }
 
 // ### Validation functions
@@ -997,6 +1010,36 @@ function isWhiteSpace(charCode: number): boolean {
 
 function isLineTerminator(charCode: number): boolean {
   return 10 === charCode || 13 === charCode;
+}
+
+// The line breaks in the text from from to to, read as consumeEOL reads them, and where the line after the last starts.
+function lineBreaks(text: string, from: number, to: number): { breaks: number, lineStart: number } {
+  let breaks = 0;
+  let lineStart = from;
+  for (let i = from; i < to; i++) {
+    const charCode = text.charCodeAt(i);
+    if (isLineTerminator(charCode)) {
+      const next = text.charCodeAt(i + 1);
+      i += isLineTerminator(next) && next !== charCode ? 1 : 0;
+      breaks++;
+      lineStart = i + 1;
+    }
+  }
+  return { breaks, lineStart };
+}
+
+// Where each line of the text starts, its line breaks read as consumeEOL reads them.
+function lineStartsOf(text: string): number[] {
+  const starts = [ 0 ];
+  for (let i = 0; i < text.length; i++) {
+    const charCode = text.charCodeAt(i);
+    if (isLineTerminator(charCode)) {
+      const next = text.charCodeAt(i + 1);
+      i += isLineTerminator(next) && next !== charCode ? 1 : 0;
+      starts.push(i + 1);
+    }
+  }
+  return starts;
 }
 
 function isDecDigit(charCode: number): boolean {

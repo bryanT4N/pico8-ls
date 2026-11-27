@@ -5,7 +5,7 @@ import * as path from 'path';
 import { analyze } from '../analysis/binder';
 import { Identifier, StringLiteral } from '../expressions';
 import ResolvedFile, { FileResolver, RealFileResolver, resolveIncludeFile } from '../file-resolver';
-import { AssignmentStatement, FunctionDeclaration, Statement } from '../statements';
+import { AssignmentStatement, FunctionDeclaration, IfStatement, Statement } from '../statements';
 import { formatError, parse, parseInChild, TestFilesResolver } from './test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
@@ -433,7 +433,7 @@ describe('#include', function () {
     assert.deepStrictEqual(errorsFor('  #include lib.lua\nfunction f()\n\t#include lib.lua\nend'), []);
   });
 
-  it('includes one tab of another cart as PICO-8 reads its number, hexadecimal from 0, with the lines of the others blank', () => {
+  it('includes one tab of another cart as PICO-8 reads its number, hexadecimal from 0, and else the whole cart as its tabs with nothing between them', () => {
     const tabs = Array.from({ length: 11 }, (_, k) => `function t${k}() end`).join('\n-->8\n');
     const other = 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\n' + tabs + '\n-->8\nx = = 1\n__gfx__\n0000\n';
     const included = (name: string) => {
@@ -455,7 +455,11 @@ describe('#include', function () {
       'other.p8:fffffff1', 'other.p8:fffffffe', 'other.p8:ffffffff1' ]) {
       assert.deepStrictEqual(included(name), [[], []], name);
     }
-    const whole = [[ 'other.p8 26:4 <expression> expected near \'=\'' ], Array.from({ length: 11 }, (_, k) => 't' + k) ];
+    // The end of each tab and the function of the next are one name, endfunction, as for PICO-8 (si.t28.join.functions.colon).
+    const whole = [[
+      'main_test_file 1:0 \'end\' expected (to close \'function\' at line 4 in other.p8) near \'<eof>\'',
+      'other.p8 6:9 assignment operator expected near \'t1\'',
+    ], [ 't0' ]];
     for (const name of [ 'other.p8:', 'other.p8:g', 'other.p8:x1', 'other.p8:0x', 'other.p8:0xg', 'other.p8:-1', 'other.p8:-0x1', 'other.p8:ffffffff',
       'other.p8:fffffffff', 'other.p8:1ffffffff', 'other.p8:ffffffffffffffff' ]) {
       assert.deepStrictEqual(included(name), whole, name);
@@ -481,5 +485,121 @@ describe('#include', function () {
       [[[], [ 't0', 't1', 't2' ]], [[], [ 't0', 't1', 't2' ]], [[], [ 'p0', 'p1', 'p2' ]]]);
     assert.deepStrictEqual(included('lib.lua:1'), [[ 'main_test_file 1:0 Can\'t #include "lib.lua:1" from main_test_file: lib.lua has no tab 1' ], []]);
     assert.deepStrictEqual(included('x:tabs.lua:1'), [[ 'main_test_file 1:0 Can\'t #include "x:tabs.lua:1" from main_test_file: File does not exist' ], []]);
+  });
+
+  describe('reads a file as PICO-8 does', () => {
+    const H = 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\n';
+    const tabs = (...code: string[]) => code.join('\n-->8\n');
+    const functions = (code: string, files: Record<string, string>) => {
+      const chunk = parseWith(code, files);
+      return [ chunk.errors.map(formatError), chunk.block.body.filter(s => s.type === 'FunctionDeclaration').map(s => ((s as FunctionDeclaration).identifier as Identifier).name) ];
+    };
+
+    it('takes a file as a cart, whatever its name, when its first line has pico-8 cartridge from its first p on', () => {
+      const code = tabs('function t0() end', 'function t1() end');
+      const files = { 'a.txt': ' ' + H + code, 'b.txt': 'xx ' + H + code, 'c.lua': 'a=1 -- ' + H + code, 'd.p8': '\t' + H + code,
+        'e.txt': 'printh() -- ' + H + code, 'f.txt': '\n' + H + code, 'g.txt': 'PICO-8 cartridge' + H.slice(16) + code };
+      for (const name of [ 'a.txt', 'b.txt', 'c.lua', 'd.p8' ]) {
+        assert.deepStrictEqual(functions(`#include ${name}:1`, files), [[], [ 't1' ]], name);
+      }
+      // Read as Lua, the header is a syntax error.
+      assert.deepStrictEqual([ 'e.txt', 'f.txt', 'g.txt' ].map(name => functions(`#include ${name}:1`, files)[0][0]), [
+        'e.txt 2:8 assignment operator expected near \'42\'',
+        'f.txt 2:4 assignment operator expected near \'-\'',
+        'g.txt 1:4 assignment operator expected near \'-\'',
+      ]);
+      assert.deepStrictEqual(functions('xx ' + H + 'function m() end', {}), [[], [ 'm' ]]);
+    });
+
+    it('drops one BOM at the start of a file', () => {
+      const files = { 'a.lua': '\ufeff-- c\nfunction f() end', 'b.lua': '\ufeff', 'c.txt': '\ufeff' + H + tabs('function t0() end', 'function t1() end'),
+        'd.lua': '\ufeff\ufeffx = 1' };
+      assert.deepStrictEqual([ functions('#include a.lua', files), functions('#include b.lua', files), functions('#include c.txt:1', files) ],
+        [[[], [ 'f' ]], [[], []], [[], [ 't1' ]]]);
+      assert.deepStrictEqual(assignedNames(parseWith('#include d.lua', files).block.body), [ '\ufeffx' ]);
+      const { block: { body } } = parseWith('\ufeffx = 1', {});
+      assert.deepStrictEqual([ assignedNames(body), body[0].loc!.start ], [[ 'x' ], { index: 1, line: 1, column: 1, filename: body[0].loc!.start.filename }]);
+    });
+
+    it('reads a lone CR in a cart as a line break that takes the character after it, and a CR at the end of a cart as taking the character before it', () => {
+      const files = { 'other.p8': H + 'function a() end\rXfunction b() end\n', 'plain.lua': 'function a() end\rXfunction b() end', 'lib.lu': 'function l() end',
+        'sep.p8': H + 'function t0() end\r-->8\rfunction t1() end\r' };
+      assert.deepStrictEqual(functions('#include other.p8', files), [[], [ 'a', 'b' ]]);
+      assert.deepStrictEqual(functions('#include plain.lua', files)[0], [ 'plain.lua 2:10 assignment operator expected near \'b\'' ]);
+      assert.deepStrictEqual(functions(H + 'function m() end\n#include lib.lua\r', files), [[], [ 'm', 'l' ]]);
+      assert.deepStrictEqual(functions(H + 'x = 1\r', files)[0], [ 'main_test_file 4:2 <expression> expected near \'<eof>\'' ]);
+      assert.deepStrictEqual(functions('#include sep.p8:1', files)[0], [ 'main_test_file 1:0 Can\'t #include "sep.p8:1" from main_test_file: sep.p8 has no tab 1' ]);
+      const { block: { body } } = parseWith(H + 'x = 1\rXy = 2', {});
+      assert.deepStrictEqual([ assignedNames(body), [ body[1].loc!.start.line, body[1].loc!.start.column ]], [[ 'x', 'y' ], [ 5, 1 ]]);
+    });
+
+    it('reads the second line of a cart as its version, whatever it holds', () => {
+      const noVersion = 'pico-8 cartridge // http://www.pico-8.com\n__lua__\n' + tabs('function t0() end', 'function t1() end');
+      const files = { 'other.p8': noVersion, 'hello.p8': H.replace('version 42', 'hello') + 'function h() end' };
+      assert.deepStrictEqual([ functions('#include other.p8', files), functions('#include hello.p8', files), functions(noVersion, {}) ],
+        [[[], []], [[], [ 'h' ]], [[], []]]);
+      assert.deepStrictEqual(functions('#include other.p8:1', files)[0],
+        [ 'main_test_file 1:0 Can\'t #include "other.p8:1" from main_test_file: other.p8 has no tab 1' ]);
+    });
+
+    it('takes the code of every __lua__ section of a cart, up to a line that starts as another section does, and its tabs across them', () => {
+      const cart = H + tabs('function t0() end', 'function t1() end') + '\n__gfx__\n0000\n__lua__\n' + tabs('function u0() end', 'function u1() end') + '\n';
+      const files = { 'other.p8': cart };
+      assert.deepStrictEqual([ functions('#include other.p8:1', files), functions('#include other.p8:2', files), functions(cart, {}) ],
+        [[[], [ 't1', 'u0' ]], [[], [ 'u1' ]], [[], [ 't0', 't1', 'u0', 'u1' ]]]);
+      for (const section of [ '__gfx__x', '__meta:title__', '__gfx__', '__label__' ]) {
+        assert.deepStrictEqual(functions(H + 'function a() end\n' + section + '\nb c', {}), [[], [ 'a' ]], section);
+      }
+      for (const line of [ '__GFX__', '__meta__', ' __gfx__' ]) {
+        assert.strictEqual(functions(H + 'function a() end\n' + line + '\nb c', {})[0].length, 1, line);
+      }
+      assert.deepStrictEqual(functions(H + 'function a() end\n__lua__x\nfunction b() end', {}), [[], [ 'a', 'b' ]]);
+      assert.deepStrictEqual(functions('#include a.lua', { 'a.lua': 'x = 1\n__gfx__\ny = 2' })[0], [ 'a.lua 3:0 assignment operator expected near \'y\'' ]);
+    });
+
+    it('splits a file into tabs at each line -->8 between two line breaks, the first first', () => {
+      const files = {
+        'note.p8': H + 'function t0() end\n-->8 note\nfunction t1() end\n',
+        'first.p8': H + '-->8\nfunction t1() end\n',
+        'last.p8': H + 'function t0() end\n-->8\n',
+        'last.lua': 'function t0() end\n-->8',
+        'two.p8': H + tabs('function t0() end', '-->8\nfunction t1() end'),
+        'three.p8': H + tabs('function t0() end', '-->8', 'function t2() end'),
+        'crlf.lua': 'function t0() end\r\n-->8\r\nfunction t1() end\r\n',
+      };
+      const noTab = (name: string) => [[ `main_test_file 1:0 Can't #include "${name}" from main_test_file: ${name.replace(/:.*/, '')} has no tab ${name.replace(/.*:/, '')}` ], []];
+      assert.deepStrictEqual([ functions('#include note.p8:1', files), functions('#include note.p8:0', files) ], [ noTab('note.p8:1'), [[], [ 't0', 't1' ]]]);
+      assert.deepStrictEqual([ functions('#include first.p8:1', files), functions('#include last.p8:1', files), functions('#include last.lua:1', files) ],
+        [ noTab('first.p8:1'), noTab('last.p8:1'), [[], []]]);
+      assert.deepStrictEqual([ functions('#include two.p8:1', files), functions('#include two.p8:2', files), functions('#include three.p8:2', files) ],
+        [[[], [ 't1' ]], noTab('two.p8:2'), [[], [ 't2' ]]]);
+      assert.deepStrictEqual(functions('#include crlf.lua:1', files), [[], [ 't1' ]]);
+    });
+
+    it('takes tabs of a file whose path has .lua in it in any case, and else the whole file', () => {
+      const code = tabs('function t0() end', 'function t1() end');
+      const files = { 'a.lua.txt': code, 'sub.lua/a.txt': code, 'b.LuA': code, 'alua.txt': code, 'c.lu.txt': code };
+      for (const name of [ 'a.lua.txt', 'sub.lua/a.txt', 'b.LuA' ]) {
+        assert.deepStrictEqual(functions(`#include ${name}:1`, files), [[], [ 't1' ]], name);
+      }
+      for (const name of [ 'alua.txt', 'c.lu.txt' ]) {
+        assert.deepStrictEqual(functions(`#include ${name}:1`, files), [[], [ 't0', 't1' ]], name);
+      }
+    });
+
+    it('pastes the first 16 tabs of a file of tabs that is included whole, with nothing between them', () => {
+      const code = Array.from({ length: 18 }, (_, k) => `function t${k}() end\n`).join('\n-->8\n');
+      const first16 = Array.from({ length: 16 }, (_, k) => 't' + k);
+      const files = { 'other.p8': H + code, 'a.lua': code, 'a.txt': code, 'join.lua': 'a\n-->8\nb = 1', 'comment.p8': H + 'x = 1 --c\n-->8\ny = 2' };
+      assert.deepStrictEqual([ functions('#include other.p8', files), functions('#include other.p8:', files), functions('#include a.lua', files) ],
+        [[[], first16 ], [[], first16 ], [[], first16 ]]);
+      assert.deepStrictEqual(functions('#include a.txt', files), [[], Array.from({ length: 18 }, (_, k) => 't' + k) ]);
+      assert.deepStrictEqual(assignedNames(parseWith('#include join.lua', files).block.body), [ 'ab' ]);
+      assert.deepStrictEqual(assignedNames(parseWith('#include comment.p8', files).block.body), [ 'x' ]);
+      // The line of a one-line if goes on into the next tab (si.t28.join.one-line-if).
+      const oneLine = parseWith('#include if.lua\nz = 3', { 'if.lua': 'if (c) x = 1\n-->8\ny = 2' });
+      assert.deepStrictEqual([ oneLine.errors, statementsOf(oneLine), assignedNames((oneLine.block.body[1] as IfStatement).clauses[0].block.body) ],
+        [[], [ 'IncludeStatement', 'IfStatement*', 'AssignmentStatement' ], [ 'x', 'y' ]]);
+    });
   });
 });

@@ -20,4 +20,7 @@ export type Token = {
   type: TokenType,
   value: TokenValue,
   bounds: Bounds,
+  // The line of the code that the token starts on, when the code is not one run of the text of its file (Code): the
+  // code joins the tabs of a file with nothing between them, so its lines can be other than the text's.
+  line?: number,
 };
