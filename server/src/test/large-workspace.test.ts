@@ -31,7 +31,8 @@ class Session {
   readonly messages: string[] = [];
   exclude: Record<string, unknown> = {};
   private readonly open = new Set<string>();
-  private scans = 0;
+  // The didChangeCartFiles notifications.
+  scans = 0;
   private heard = 0;
   private readonly connection: MessageConnection;
   private readonly child: cp.ChildProcess;
@@ -415,6 +416,56 @@ describe('a workspace past the budget', function () {
       hovers.push(await session.hover(at('zz/f.lua'), 0, 7));
     });
     deepStrictEqual([ looks, answers, hovers.map(hover => hover?.includes('bar = 1')) ], [[[]], [ true, true ], [ true, true ]]);
+  });
+
+  // Back within the budget the read of the listed files takes a while; these come during it.
+  const backWithin = async (steps: (session: Session, at: (file: string) => string) => Promise<void>) => {
+    const files: Files = {
+      'a/x.p8': CART + 'print(nope)\n',
+      'proj/main.p8': CART + '#include lib.lua\n',
+      'proj/lib.lua': 'print(1)\n',
+    };
+    for (let i = 0; i < 3000; i++) {
+      files[`keep/c${i}/m.p8`] = CART + 'print(1)\n';
+    }
+    const dir = workspace(files, 'big/huge.p8');
+    const at = (file: string) => path.join(dir, ...file.split('/'));
+    const session = new Session([ dir ]);
+    try {
+      await session.start();
+      await session.openFile(at('proj/lib.lua'));
+      fs.unlinkSync(at('big/huge.p8'));
+      session.sendWatch([[ 3, at('big/huge.p8') ]]);
+      await steps(session, at);
+    } finally {
+      session.stop();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('back within the budget, an unopened cart changed on the disk while the listed files are read ends with its new problems', async () => {
+    await backWithin(async (session, at) => {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      fs.writeFileSync(at('a/x.p8'), CART + 'print(1)\n');
+      session.sendWatch([[ 2, at('a/x.p8') ]]);
+      // The change back ends with a notification.
+      await session.scanned(1);
+      eq(session.log.some(({ uri }) => uri === pathToFileURL(at('a/x.p8'))), true);
+      deepStrictEqual(session.problems(at('a/x.p8')), []);
+    });
+  });
+
+  it('back within the budget, changes over once while watcher batches come during the read', async () => {
+    await backWithin(async (session, at) => {
+      const before = session.scans;
+      for (let i = 0; i < 5; i++) {
+        fs.writeFileSync(at('keep/c1/m.p8'), CART + `print(${i})\n`);
+        session.sendWatch([[ 2, at('keep/c1/m.p8') ]]);
+      }
+      await session.scanned(1);
+      eq(session.scans - before, 1);
+      deepStrictEqual(session.problems(at('a/x.p8')), [ '4:6 undefined variable: nope' ]);
+    });
   });
 
   it('crosses the budget both ways in one session, with no publish at any moment that a full read does not give', async () => {

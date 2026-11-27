@@ -262,17 +262,18 @@ connection.onInitialized(() => {
 function scanWorkspace() {
   connection.workspace.getWorkspaceFolders().then(async (workspaceFolders: WorkspaceFolder[] | null) => {
     workspaceRoots = (workspaceFolders ?? []).map(wf => url.fileURLToPath(wf.uri));
+    const roots = [ ...workspaceRoots ];
     void fetchExcludes();
     scansRunning++;
     let read: string[] = [];
     try {
-      read = (await Promise.all(workspaceRoots.map(root => listAndRead(root, false).catch(e => {
+      read = (await Promise.all(roots.map(root => listAndRead(root, false).catch(e => {
         console.log('Error scanning ' + root, e);
         return [];
       })))).flat();
     } finally {
       started = true;
-      endScan(read, index.uris(), workspaceRoots.length);
+      endScan(read, index.uris(), roots.length);
     }
   }).catch(reason => {
     console.log('Failed to get workspace folder(s):', reason);
@@ -326,8 +327,8 @@ async function listAndRead(folderPath: string, onlyNew: boolean): Promise<string
   return readFiles(members);
 }
 
-// The files a scan read go to the index, with one notification for each folder it scanned. Also after a scan that
-// failed, so that whatever waits for the end of the scan is not left waiting.
+// The files a scan read go to the index, with one notification for each folder it set out to scan. Also after a scan
+// that failed, so that whatever waits for the end of the scan is not left waiting.
 function endScan(read: string[], alsoPublish: string[], folders: number): void {
   try {
     take(read, alsoPublish);
@@ -374,7 +375,7 @@ function tellBudgetReached(): void {
 // of any other file would go stale, and textOf reads it again when it is parsed. Returns the files read.
 async function readFiles(uris: string[]): Promise<string[]> {
   const read: string[] = [];
-  const kept: string[] = [];
+  let keeping = true;
   let next = 0;
   const readNext = async (): Promise<void> => {
     while (next < uris.length) {
@@ -391,15 +392,14 @@ async function readFiles(uris: string[]): Promise<string[]> {
         listed.note(uri, text);
       }
       if (listed.total > SCAN_BUDGET) {
-        // The texts kept go as soon as the budget is passed, so that only the reads under way are held.
-        for (const keptUri of kept.splice(0)) {
-          if (!index.document(keptUri)) {
-            diskText.delete(keptUri);
-          }
+        // The texts kept, by this read and any other, go as soon as the budget is passed, so that only the reads under way
+        // are held.
+        if (keeping) {
+          keeping = false;
+          dropTextsNotIndexed();
         }
       } else if (isWatched(filePath, workspaceRoots)) {
         diskText.set(uri, text);
-        kept.push(uri);
       }
       read.push(uri);
     }
@@ -429,6 +429,8 @@ async function readBack(): Promise<void> {
     pastBudget = false;
     const read = [ ...tried ].filter(uri => listed.has(uri));
     publish([ ...index.prune(), ...read.length > 0 ? index.scan(read) : [], ...index.uris() ]);
+    // Such as the texts of files that files.exclude hid during the read.
+    dropTextsNotIndexed();
     notifyMembershipChanged();
   } finally {
     readingBack = false;
@@ -794,6 +796,8 @@ connection.onDidChangeWatchedFiles(change => {
       }
     }
     if (!known && !isMember(uri) && !index.isAwaited(uri)) {
+      // A text read before, as readBack reads them, would be stale.
+      diskText.delete(uri);
       continue;
     }
     if (text !== undefined && isWatched(filePath, workspaceRoots)) {
@@ -815,9 +819,12 @@ connection.onDidChangeWatchedFiles(change => {
   }
   uris.push(...checkBudget());
   // The scan of a new .p8 file's folder or of a new folder sends the problems of every file when it parses any, so this
-  // batch's go with the first, not before: a folder renamed would show the files that include its files missing.
+  // batch's go with the first, not before: after a folder is renamed, the files that its files include would show as if
+  // no file included them. The files that left get their empty lists at once.
   if (newP8Files.length === 0 && newFolders.length === 0) {
     publish(uris);
+  } else {
+    publish(uris.filter(uri => !index.document(uri)));
   }
   // A new .p8 file brings in the .lua files of its folder and the folders below, which the scan left out while no .p8
   // file was near them.
