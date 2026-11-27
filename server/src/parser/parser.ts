@@ -390,16 +390,20 @@ export default class Parser {
   // An #include line: the tokens of its file are read next. Wherever the line is, the file is listed in includes, and
   // where a statement can start, the line is a statement too (placeIncludes).
   private paste(line: Token): void {
-    // PICO-8 finds the file with the spaces and tabs around the name left out (3.trailing-spaces, 3.two-spaces-before).
-    const filename = (line.value as string).slice('#include '.length).replace(/^[ \t]+|[ \t]+$/g, '');
+    // PICO-8 finds the file with every byte up to a space, and every byte of a character that is not ASCII, left out at
+    // both ends of the name (3.trailing-spaces, si.line.form.none.sp.vt, si.pin.trim.lead-e-acute), and names it in its
+    // error as it is written (si.line.missing.none.sp2.none).
+    const written = (line.value as string).slice('#include '.length);
+    const filename = written.replace(/^[\0-\x20\x80-\uffff]+|[\0-\x20\x80-\uffff]+$/g, '');
     const statement: IncludeStatement = { type: 'IncludeStatement', filename, loc: boundsClone(line.bounds), included: false };
     this.unplaced.push({ statement });
     // PICO-8 takes the name up to its first colon as the file's, whatever the file is, and the rest as a tab
     // (3.colon-two-p8, 3.colon-before, 3.colon-lua-p8).
     const colon = filename.indexOf(':');
-    const resolvedInclude = resolveIncludeFile(this.mainFile, colon < 0 ? filename : filename.slice(0, colon), this.includeFileResolver);
+    const name = colon < 0 ? filename : filename.slice(0, colon);
+    const resolvedInclude = resolveIncludeFile(this.mainFile, name, this.includeFileResolver);
     statement.resolvedFile = resolvedInclude;
-    const text = this.includedText(statement, resolvedInclude, colon < 0 ? undefined : filename.slice(colon + 1));
+    const text = this.includedText(statement, written, name, resolvedInclude, colon < 0 ? undefined : filename.slice(colon + 1));
     if (text !== undefined) {
       const lexer = new Lexer(text, resolvedInclude);
       lexer.pasted = true;
@@ -590,7 +594,7 @@ export default class Parser {
   }
 
   // The text that an #include pastes in, or undefined when there is none, with the error saying why.
-  private includedText(statement: IncludeStatement, resolvedInclude: ResolvedFile, tabSuffix?: string): string | undefined {
+  private includedText(statement: IncludeStatement, written: string, name: string, resolvedInclude: ResolvedFile, tabSuffix?: string): string | undefined {
     if (this.includeParses >= MAX_INCLUDE_PARSES) {
       if (!this.reportedTooManyIncludeParses) {
         this.reportedTooManyIncludeParses = true;
@@ -599,21 +603,31 @@ export default class Parser {
       return undefined;
     }
 
+    // PICO-8 does not open these names, whatever is on the disk (si.line.name.leading-slash, si.line.name.trailing-slash,
+    // si.line.name.char.e-acute).
+    const unopened = name.startsWith('/') ? 'PICO-8 does not open a name that starts with / from the cart\'s folder'
+      : /[\\/]$/.test(name) ? 'PICO-8 does not open a name that ends with / or \\'
+        : /[^\0-\x7f]/.test(name) ? 'PICO-8 does not open a name with a character that is not ASCII' : undefined;
+    if (unopened !== undefined) {
+      this.errors.push(this.getIncludeStatementError(statement, written, unopened));
+      return undefined;
+    }
+
     if (!this.includeFileResolver.doesFileExist(resolvedInclude.path)) {
-      return this.unresolvedInclude(statement, resolvedInclude, 'File does not exist');
+      return this.unresolvedInclude(statement, written, resolvedInclude, 'File does not exist');
     }
 
     let fileContents: string;
     try {
       if (!this.includeFileResolver.isFile(resolvedInclude.path)) {
-        return this.unresolvedInclude(statement, resolvedInclude, 'File cannot be read (is it a directory?)');
+        return this.unresolvedInclude(statement, written, resolvedInclude, 'File cannot be read (is it a directory?)');
       }
       fileContents = this.includeFileResolver.loadFileContents(resolvedInclude.path);
     } catch (e) {
       // The file can be locked, lose its permissions or go away after it was
       // found; that is an error in this file, not a reason to lose the parse.
       const reason = (e as NodeJS.ErrnoException | null)?.code ?? (e instanceof Error ? e.message : String(e));
-      return this.unresolvedInclude(statement, resolvedInclude, `File cannot be read (${reason})`);
+      return this.unresolvedInclude(statement, written, resolvedInclude, `File cannot be read (${reason})`);
     }
 
     this.includes.push({ stmt: statement, resolvedFile: resolvedInclude });
@@ -626,7 +640,7 @@ export default class Parser {
       // 3.p8-tab-minus-2).
       const tabText = tab >= 0 && tab < 16 ? tabOf(fileContents, tab) : '';
       if (tabText === undefined) {
-        this.errors.push(this.getIncludeStatementError(statement, `${path.basename(resolvedInclude.path)} has no tab ${tab}`));
+        this.errors.push(this.getIncludeStatementError(statement, written, `${path.basename(resolvedInclude.path)} has no tab ${tab}`));
         return undefined;
       }
       fileContents = tabText;
@@ -636,8 +650,8 @@ export default class Parser {
     return fileContents;
   }
 
-  private unresolvedInclude(statement: IncludeStatement, resolvedInclude: ResolvedFile, reason: string): undefined {
-    this.errors.push(this.getIncludeStatementError(statement, reason));
+  private unresolvedInclude(statement: IncludeStatement, written: string, resolvedInclude: ResolvedFile, reason: string): undefined {
+    this.errors.push(this.getIncludeStatementError(statement, written, reason));
     this.unresolvedIncludes.push(resolvedInclude);
     return undefined;
   }
@@ -1211,8 +1225,8 @@ export default class Parser {
     return type === TokenType.Newline || type === TokenType.EOF || start.filename !== question.filename || start.line !== question.line;
   }
 
-  getIncludeStatementError(statement: IncludeStatement, errorMessage: string) {
-    return new errors.ParseError(`Can't #include "${statement.filename}" from ${path.basename(this.mainFile.path)}: ${errorMessage}`, statement.loc!);
+  getIncludeStatementError(statement: IncludeStatement, written: string, errorMessage: string) {
+    return new errors.ParseError(`Can't #include "${written}" from ${path.basename(this.mainFile.path)}: ${errorMessage}`, statement.loc!);
   }
 
   // ### Non-statements

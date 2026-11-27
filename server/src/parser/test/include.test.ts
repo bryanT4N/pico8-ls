@@ -391,18 +391,33 @@ describe('#include', function () {
     assert.strictEqual(analyze(chunk).includeStarts.has(path.normalize('lib.lua')), true);
   });
 
-  it('takes the rest of the line after #include as the name, less the spaces and tabs around it, and quotes it in an error', () => {
+  it('takes the rest of the line after #include as the name, less the bytes up to a space and those of other characters than ASCII around it, and quotes it as written in an error', () => {
     const files = { 'lib.lua': 'function helper() end' };
     assert.deepStrictEqual(parseWith('#include lib.lua -- helpers\nhelper()', files).errors.map(formatError), [
       'main_test_file 1:0 Can\'t #include "lib.lua -- helpers" from main_test_file: File does not exist',
     ]);
-    assert.deepStrictEqual(parseWith('#include missing.lua  ', files).errors.map(formatError), [
-      'main_test_file 1:0 Can\'t #include "missing.lua" from main_test_file: File does not exist',
+    assert.deepStrictEqual(parseWith('#include  missing.lua\v ', files).errors.map(formatError), [
+      'main_test_file 1:0 Can\'t #include " missing.lua\v " from main_test_file: File does not exist',
     ]);
-    for (const line of [ '#include lib.lua ', '#include lib.lua  ', '#include lib.lua\t', '#include  lib.lua' ]) {
+    for (const line of [ '#include lib.lua ', '#include lib.lua  ', '#include lib.lua\t', '#include  lib.lua', '#include lib.lua\v', '#include \flib.lua',
+      '#include lib.lua\x01', '#include \x1flib.lua', '#include lib.lua\u00a0', '#include \u00e9lib.lua\u2605', '#include lib.lua\u00e9' ]) {
       const chunk = parseWith(line + '\nhelper()', files);
       assert.deepStrictEqual([ chunk.errors, statementsOf(chunk) ], [[], [ 'IncludeStatement', 'FunctionDeclaration*', 'CallStatement' ]], JSON.stringify(line));
     }
+  });
+
+  it('does not open a name that starts with /, ends with / or \\, or has a character that is not ASCII, as PICO-8 does not, wherever the file is', () => {
+    const files = { 'lib.lua': 'function l() end', 'aé.lua': 'function a() end', 'sub/lib.lua': 'function s() end' };
+    const message = (name: string, why: string) => `main_test_file 1:0 Can't #include "${name}" from main_test_file: PICO-8 does not open a name ${why}`;
+    const fromFolder = 'that starts with / from the cart\'s folder';
+    const endsWith = 'that ends with / or \\';
+    for (const [ name, why ] of [[ '/lib.lua', fromFolder ], [ '/sub/lib.lua', fromFolder ], [ 'lib.lua/', endsWith ], [ 'lib.lua\\', endsWith ],
+      [ 'aé.lua', 'with a character that is not ASCII' ], [ 'ü/lib.lua', fromFolder ]]) {
+      const chunk = parseWith(`#include ${name}`, files);
+      assert.deepStrictEqual([ chunk.errors.map(formatError), chunk.unresolvedIncludes!.length ], [[ message(name, why) ], 0 ], name);
+    }
+    const chunk = parseWith('#include \\lib.lua', files);
+    assert.deepStrictEqual([ chunk.errors, statementsOf(chunk) ], [[], [ 'IncludeStatement', 'FunctionDeclaration*' ]]);
   });
 
   it('reads #include only at the start of a line of the cart, in lower case and followed by a space', () => {
