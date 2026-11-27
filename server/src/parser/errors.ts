@@ -1,7 +1,7 @@
 // As this parser is a bit different from luas own, the error messages
 // will be different in some situations.
 
-import { Token } from './tokens';
+import { Token, tokenText } from './tokens';
 import { Bounds } from './types';
 import { sprintf } from './util';
 
@@ -95,5 +95,5 @@ export function raiseErrForToken(token: Token, fmtMessage: string, ...rest: any[
 }
 
 export function raiseUnexpectedToken(type: string, token: Token): never {
-  raiseErrForToken(token, errMessages.expectedToken, type, token.value);
+  raiseErrForToken(token, errMessages.expectedToken, type, tokenText(token));
 }

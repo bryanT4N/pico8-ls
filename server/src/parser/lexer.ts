@@ -5,7 +5,7 @@ import * as errors from './errors';
 import { errMessages } from './errors';
 import { Comment_ } from './expressions';
 import ResolvedFile from './file-resolver';
-import { Token, TokenType, TokenValue } from './tokens';
+import { Token, tokenText, TokenType, TokenValue } from './tokens';
 import { Bounds, CodeLocation } from './types';
 
 // Lexer
@@ -568,12 +568,6 @@ export default class Lexer {
     );
   }
 
-  // Numeric literals will be returned as floating-point numbers instead of
-  // strings. The raw value should be retrieved from slicing the input string
-  // later on in the process.
-  //
-  // If a hexadecimal number is encountered, it will be converted.
-
   scanNumericLiteral(): Token {
     const character = this.input.charAt(this.index);
     const next = this.input.charAt(this.index + 1);
@@ -592,7 +586,9 @@ export default class Lexer {
       literal = this.readDecLiteral();
     }
 
-    return this.makeToken(TokenType.NumericLiteral, literal.value);
+    const token = this.makeToken(TokenType.NumericLiteral, literal.value);
+    token.raw = this.input.slice(this.tokenStart, this.index);
+    return token;
   }
 
   // PICO-8 hexadecimals have an optional fraction part and, unlike Lua's, no p
@@ -980,7 +976,7 @@ export default class Lexer {
     if (value === this.token?.value) {
       this.next();
     } else {
-      errors.raiseErrForToken(this.token!, errMessages.expected, value, this.token!.value);
+      errors.raiseErrForToken(this.token!, errMessages.expected, value, tokenText(this.token!));
     }
   }
 }

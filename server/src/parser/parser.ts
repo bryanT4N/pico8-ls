@@ -41,7 +41,7 @@ import {
   Statement,
   WhileStatement,
 } from './statements';
-import { Token, TokenType } from './tokens';
+import { Token, tokenText, TokenType } from './tokens';
 import * as path from 'path';
 import { ASTNode, Bounds, boundsClone, CodeLocation } from './types';
 import Operators from './operators';
@@ -201,24 +201,22 @@ export default class Parser {
   }
 
   getUnexpectedTokenErr(found: Token): errors.ParseError {
-    const near = this.lexer.lookahead!.value;
-
     let type;
     switch (found.type) {
     case TokenType.StringLiteral:   type = 'string';      break;
     case TokenType.Keyword:         type = 'keyword';     break;
     case TokenType.Identifier:      type = 'identifier';  break;
     case TokenType.NumericLiteral:  type = 'number';      break;
-    case TokenType.Punctuator:      type = 'symbol';      break;
+    case TokenType.Punctuator:
+    case TokenType.NilLiteral:
+    case TokenType.VarargLiteral:   type = 'symbol';      break;
     case TokenType.BooleanLiteral:  type = 'boolean';     break;
     case TokenType.Newline:         type = 'newline';     break;
-    case TokenType.NilLiteral:
-      return errors.createErrForToken(found, errMessages.unexpected, 'symbol', 'nil', near);
     case TokenType.EOF:
       return errors.createErrForToken(found, errMessages.unexpectedEOF);
     }
 
-    return errors.createErrForToken(found, errMessages.unexpected, type, found.value, near);
+    return errors.createErrForToken(found, errMessages.unexpected, type, tokenText(found), tokenText(this.lexer.lookahead!));
   }
 
   unexpectedToken(found: Token): never {
@@ -267,7 +265,7 @@ export default class Parser {
     }
     const body = this.parseBlock(flowContext, isEndOfFile);
     if (this.token.type !== TokenType.EOF) {
-      this.errors.push(errors.createErrForToken(this.token, errMessages.expected, '<eof>', this.token.value));
+      this.errors.push(errors.createErrForToken(this.token, errMessages.expected, '<eof>', tokenText(this.token)));
     } else if (this.isCart()) {
       // PICO-8 rejects a return in a cart's outermost block, also as its last statement (4.return.end-bare), and a
       // goto there past a local to a label at the end, which Lua allows at the end of a block
@@ -700,8 +698,8 @@ export default class Parser {
   private blockEndError(closer: 'end' | 'until', opener: Bounds, word: string): errors.ParseError {
     const { line, filename } = opener.start;
     return filename.equals(this.token.bounds.start.filename)
-      ? errors.createErrForToken(this.token, errMessages.expectedToClose, closer, word, line, this.token.value)
-      : errors.createErrForToken(this.token, errMessages.expectedToCloseInFile, closer, word, line, path.basename(filename.path), this.token.value);
+      ? errors.createErrForToken(this.token, errMessages.expectedToClose, closer, word, line, tokenText(this.token))
+      : errors.createErrForToken(this.token, errMessages.expectedToCloseInFile, closer, word, line, path.basename(filename.path), tokenText(this.token));
   }
 
   // There are two types of statements, simple and compound.
@@ -828,7 +826,7 @@ export default class Parser {
         this.expectEndOfLine();
       });
     } else {
-      errors.raiseErrForToken(this.token, errMessages.expected, 'do', this.token.value);
+      errors.raiseErrForToken(this.token, errMessages.expected, 'do', tokenText(this.token));
     }
 
     return this.finishNode(AST.whileStatement(condition, body!), !closed);
@@ -847,7 +845,7 @@ export default class Parser {
   // anywhere.
   private expectEndOfLine(): void {
     if (!isEndOfLine(this.token)) {
-      errors.raiseErrForToken(this.token, errMessages.endOfLineExpected, this.token.value);
+      errors.raiseErrForToken(this.token, errMessages.endOfLineExpected, tokenText(this.token));
     }
   }
 
@@ -936,7 +934,7 @@ export default class Parser {
             this.lexerNext();
             const elseifCondition = this.parseExpectedExpression(flowContext);
             if (!this.lexer.consume('then') && !this.lexer.consume('do')) {
-              errors.raiseErrForToken(this.token, errMessages.expected, 'then', this.token.value);
+              errors.raiseErrForToken(this.token, errMessages.expected, 'then', tokenText(this.token));
             }
             flowContext.pushScope();
             const elseifBlock = this.parseBlock(flowContext, isEndOfLine);
@@ -958,7 +956,7 @@ export default class Parser {
 
         return this.finishNode(AST.ifStatement(clauses, true));
       } else {
-        errors.raiseErrForToken(this.token, errMessages.expected, 'then', this.token.value);
+        errors.raiseErrForToken(this.token, errMessages.expected, 'then', tokenText(this.token));
       }
     }
 
@@ -973,7 +971,7 @@ export default class Parser {
       condition = this.parseExpectedExpression(flowContext);
 
       if (!this.lexer.consume('then') && !this.lexer.consume('do')) {
-        errors.raiseErrForToken(this.token, errMessages.expected, 'then', this.token.value);
+        errors.raiseErrForToken(this.token, errMessages.expected, 'then', tokenText(this.token));
       }
 
       flowContext.pushScope();
@@ -1200,7 +1198,7 @@ export default class Parser {
     } else if (!lvalue) {
       this.unexpectedToken(this.token);
     } else if (compound) {
-      errors.raiseErrForToken(this.token, errMessages.expected, '=', this.token.value);
+      errors.raiseErrForToken(this.token, errMessages.expected, '=', tokenText(this.token));
     }
 
     if (!isAssignmentOperator(this.token)) {
@@ -1244,7 +1242,7 @@ export default class Parser {
         args.push(this.parseExpectedExpression(flowContext));
       } while (this.lexer.consume(','));
       if (this.token.type !== TokenType.Newline && this.token.type !== TokenType.EOF) {
-        errors.raiseErrForToken(this.token, errMessages.endOfLineExpected, this.token.value);
+        errors.raiseErrForToken(this.token, errMessages.endOfLineExpected, tokenText(this.token));
       }
     });
     return args;
@@ -1313,7 +1311,7 @@ export default class Parser {
           // Reported as a missing ')' below.
           break;
         } else {
-          this.errors.push(errors.createErrForToken(this.token, errMessages.expectedToken, '<name> or \'...\'', this.token.value));
+          this.errors.push(errors.createErrForToken(this.token, errMessages.expectedToken, '<name> or \'...\'', tokenText(this.token)));
 
           // Discard tokens until we get a ')' or ','
           while (this.token.value !== ')' && this.token.value !== ',' && !endsParameterList(this.token)) {
@@ -1324,7 +1322,7 @@ export default class Parser {
       } while (this.lexer.consume(','));
 
       if (!this.lexer.consume(')')) {
-        this.errors.push(errors.createErrForToken(this.token, errMessages.expected, ')', this.token.value));
+        this.errors.push(errors.createErrForToken(this.token, errMessages.expected, ')', tokenText(this.token)));
 
         // Discard tokens until we get a ')'
         while (this.token.value !== ')' && !endsParameterList(this.token)) {
@@ -1464,7 +1462,7 @@ export default class Parser {
   private checkVariables(flowContext: FlowContext, declared: number, at = this.previousToken): void {
     if (!flowContext.reportedTooManyVariables && flowContext.activeVariables() + declared > MAX_VARIABLES) {
       flowContext.reportedTooManyVariables = true;
-      this.errors.push(errors.createErrForToken(at, errMessages.tooManyVariables, MAX_VARIABLES, functionNamed(flowContext, at), this.token.value));
+      this.errors.push(errors.createErrForToken(at, errMessages.tooManyVariables, MAX_VARIABLES, functionNamed(flowContext, at), tokenText(this.token)));
     }
   }
 
@@ -1501,7 +1499,7 @@ export default class Parser {
         if (!reported) {
           reported = true;
           this.errors.push(errors.createErrForToken(this.previousToken, errMessages.tooManyUpvalues, MAX_UPVALUES, functionNamed(context, this.previousToken),
-            this.token.value));
+            tokenText(this.token)));
         }
       }
     }
@@ -1612,7 +1610,7 @@ export default class Parser {
   }
 
   private tooManyLevels(): never {
-    errors.raiseErrForToken(this.token, errMessages.tooManyLevels, MAX_LEVELS, this.token.value);
+    errors.raiseErrForToken(this.token, errMessages.tooManyLevels, MAX_LEVELS, tokenText(this.token));
   }
 
   // Implement an operator-precedence parser to handle binary operator
@@ -1805,7 +1803,7 @@ export default class Parser {
     const marker = this.createLocationMarker();
 
     if (type === TokenType.VarargLiteral && !flowContext.allowVararg) {
-      raiseErrForToken(this.token, errMessages.cannotUseVararg, this.token.value);
+      raiseErrForToken(this.token, errMessages.cannotUseVararg, tokenText(this.token));
     }
 
     if (literals.includes(type)) {
