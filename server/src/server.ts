@@ -413,7 +413,7 @@ connection.onWorkspaceSymbol(guarded('give workspace symbols', () => [], (params
   return index.workspaceSymbols(params.query, globalSettings.outline);
 }));
 
-// The client asks for a lua document, uri in VS Code's form, to give it the PICO-8 Lua language. True when a file of
+// The client asks for a lua document, uri in VS Code's form, to give it the PICO-8 Lua language. True when a member of
 // the index #includes it, whatever its name, as PICO-8 does; or when it is a .lua file and a cart is in its folder or a
 // folder above it, so that a file such as notes.txt that the user shows as Lua keeps that language. Only the search for
 // a cart reads the disk, so that the answer does not wait for the scan to find the carts.
@@ -487,7 +487,7 @@ connection.onDidChangeWatchedFiles(change => {
     if (!named) {
       continue;
     }
-    // A file in a dot-folder is in the index when a file of the index #includes it, and an #include can wait for one
+    // A file in a dot-folder is in the index when a member of the index #includes it, and an #include can wait for one
     // to appear.
     const known = index.document(uri) !== undefined;
     if (!known && !isScanned(filePath, workspaceRoots) && !index.isAwaited(uri)) {

@@ -179,17 +179,6 @@ end
       }
     });
 
-    it('doesn\'t inline the last statement of a nested #include', () => {
-      const fileResolver = new TestFilesResolver({
-        'a.lua': 'local x = 1\n#include b.lua',
-        'b.lua': 'local y = 2',
-      });
-
-      const input = '#include a.lua';
-      const formatted = formatLua(input, { includeFileResolver: fileResolver });
-      eq(formatted, input);
-    });
-
     it('handles local statements even without initializer', () => {
       const input = 'local a';
       const formatted = formatLua(input);

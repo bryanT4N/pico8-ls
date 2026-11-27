@@ -1008,7 +1008,7 @@ __music__
       const { block: { body }, comments, errors } = parse([ 'x = 1', '#', '-->8', 'function f()', 'end', 'y = 2' ].join('\n'));
       deepEquals(comments!.map(c => c.loc!.start.line), [ 3 ]);
       deepEquals(body.map(s => s.loc!.start.line), [ 1, 4, 6 ]);
-      deepEquals(errors.map(formatError), [ 'main_test_file 2:0 #include <filename> expected near \'#\'' ]);
+      deepEquals(errors.map(formatError), [ 'main_test_file 2:0 unexpected symbol \'#\' near \'function\'' ]);
     });
 
     it('keeps a comment between a lone # and the end of a cart\'s code', () => {
@@ -1020,7 +1020,7 @@ __music__
     it('reports a lexical error on the line after a lone # once', () => {
       const { block: { body }, errors } = parse('#\n` x = 1');
       deepEquals(errors.map(formatError), [
-        'main_test_file 1:0 #include <filename> expected near \'#\'',
+        'main_test_file 1:0 unexpected symbol \'#\' near \'x\'',
         'main_test_file 2:0 unexpected symbol \'`\'',
       ]);
       deepEquals(body.map(s => `${s.type} ${s.loc!.start.line}`), [ 'AssignmentStatement 2' ]);

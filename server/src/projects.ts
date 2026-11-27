@@ -171,20 +171,15 @@ export function getProjectFiles(project: Project) {
   return allFiles;
 }
 
+// The root and the files it includes: PICO-8 follows no #include in an included file. A file can be included twice.
 export function iterateProject(project: Project, fun: (arg0: ProjectDocumentNode) => void) {
-  // A file can be included twice, and files that include each other make a cycle.
   const visited = new Set<ProjectDocumentNode>();
-  const iterate = (node: ProjectDocumentNode) => {
-    if (visited.has(node)) {
-      return;
+  for (const node of [ project.root, ...project.root.included ]) {
+    if (!visited.has(node)) {
+      visited.add(node);
+      fun(node);
     }
-    visited.add(node);
-    fun(node);
-    for (const child of node.included) {
-      iterate(child);
-    }
-  };
-  iterate(project.root);
+  }
 }
 
 // A single node of the project tree, representing a single document and any
@@ -204,9 +199,10 @@ export function findProjects(parsedDocuments: ParsedDocumentsMap): Project[] {
     findProjectsRecursive(documentUrl, visited, parsedDocuments);
   }
 
-  // Now return all the non-child nodes as project roots
+  // Now return all the non-child nodes as project roots. PICO-8 runs a cart on its own, also one that another cart
+  // includes, whole or one tab of it.
   return Array.from(visited.values())
-    .filter(node => !node.isChild)
+    .filter(node => !node.isChild || isCartUri(node.document.textDocument.uri))
     .map(node => {
       return { root: node };
     });
@@ -308,8 +304,8 @@ type IndexedProject = { root: string, files: string[], analysis: Analysis, warni
 // its outline, lookups and warnings from the projects that contain it. Every change is analysed before the call
 // returns, so a request that comes after it sees the new text.
 //
-// The index holds the members, which the server names, and the files they #include, directly or through other files,
-// wherever those are, as PICO-8 reads them. A file that is neither leaves the index, and its diagnostics are cleared.
+// The index holds the members, which the server names, and the files they #include, wherever those are, as PICO-8 reads
+// them. A file that is neither leaves the index, and its diagnostics are cleared.
 export class ProjectIndex {
   // Each file's own parse, by URI.
   private readonly documents: ParsedDocumentsMap = new Map();
@@ -399,10 +395,10 @@ export class ProjectIndex {
     return this.joined;
   }
 
-  // Whether a file of the index #includes uri.
+  // Whether a member #includes uri, as only a member's #include brings a file into the index.
   isIncluded(uri: string): boolean {
     return [ ...this.documents ].some(([ other, document ]) =>
-      other !== uri && (document.chunk.includes ?? []).some(include => include.resolvedFile.fileURL === uri));
+      other !== uri && this.isMember(other) && (document.chunk.includes ?? []).some(include => include.resolvedFile.fileURL === uri));
   }
 
   // Whether a file of the index has an #include of uri that it could not find, so that the file joins when it appears
@@ -444,7 +440,7 @@ export class ProjectIndex {
     return this.lookUp(uri, index, (_analysis, reference) => referencesOf(reference.symbol, includeDeclaration));
   }
 
-  // From the first project by root URI that has one.
+  // From the first project that has one: the file's own, then the others by root URI.
   hover(uri: string, index: number): string | undefined {
     const file = ResolvedFile.fromFileURL(uri);
     for (const { analysis } of this.projectsOf(uri)) {
@@ -457,22 +453,25 @@ export class ProjectIndex {
     return undefined;
   }
 
-  // From the first project by root URI that finds the function, or else from the builtins. The caller finds the call, so
-  // that it can still give a builtin's help when this throws.
+  // From the first project that finds the function, the file's own and then the others by root URI, or else from the
+  // builtins. The caller finds the call, so that it can still give a builtin's help when this throws.
   signatureHelp(uri: string, index: number, call: CallContext): SignatureHelp | undefined {
     return signatureHelpFor(this.analyses(uri), ResolvedFile.fromFileURL(uri), index, call);
   }
 
-  // One per project containing uri, by root URI.
+  // One per project containing uri: the file's own first, then the others by root URI.
   analyses(uri: string): Analysis[] {
     return this.projectsOf(uri).map(project => project.analysis);
   }
 
-  // Only the warnings every project containing uri gives: in a file that several carts include, a warning that one
-  // cart's code proves wrong is not shown. A project whose analysis failed gives an empty list; intersecting with it
-  // removes all warnings from other projects, so failed projects are skipped, as outline and workspace symbols do.
+  // The warnings of the file's own project when it is a root, as PICO-8 runs a cart on its own; otherwise only the
+  // warnings every project containing uri gives: in a file that several carts include, a warning that one cart's code
+  // proves wrong is not shown. A project whose analysis failed gives an empty list; intersecting with it removes all
+  // warnings from other projects, so failed projects are skipped, as outline and workspace symbols do.
   warnings(uri: string): Warning[] {
-    const [ first, ...others ] = this.projectsOf(uri).filter(project => !project.failed).map(project => project.warnings.filter(warning => inThisFile(uri, warning)));
+    const containing = this.projectsOf(uri).filter(project => !project.failed);
+    const own = containing.filter(project => project.root === uri);
+    const [ first, ...others ] = (own.length > 0 ? own : containing).map(project => project.warnings.filter(warning => inThisFile(uri, warning)));
     if (!first) {
       return [];
     }
@@ -504,8 +503,10 @@ export class ProjectIndex {
     return searchSymbols(this.symbolItemsOfEachFile(options), query).map(toSymbolInformation);
   }
 
+  // The project whose root the file is comes first: its outline, hover and signature help come from there.
   private projectsOf(uri: string): IndexedProject[] {
-    return this.projects.filter(project => project.files.includes(uri));
+    const containing = this.projects.filter(project => project.files.includes(uri));
+    return [ ...containing.filter(project => project.root === uri), ...containing.filter(project => project.root !== uri) ];
   }
 
   // Also under another spelling in case, which an #include takes from the disk before the scan or the editor gives the
@@ -557,15 +558,16 @@ export class ProjectIndex {
     return rebuilt ? unique([ ...this.documents.keys(), ...dropped ]) : unique([ uri, ...containing.flatMap(project => project.files) ]);
   }
 
-  // Each file once: an indexed file from the first project that contains it, as its outline comes; a file that only an
-  // #include reads, like one in a dot-folder, from the first project whose analysis has it.
+  // Each file once: an indexed cart from its own project, as PICO-8 runs a cart on its own; another indexed file from
+  // the first project that contains it, as its outline comes; a file that only an #include reads, like one in a
+  // dot-folder, from the first project whose analysis has it.
   private symbolItemsOfEachFile(options: OutlineOptions): SymbolItem[] {
     const taken = new Set<string>();
     const lists: SymbolItem[][] = [];
     for (const project of this.projects) {
       const files = new Set(project.files);
       for (const [ uri, items ] of symbolItems(project.analysis, options)) {
-        if (taken.has(uri) || (this.documents.has(uri) && !files.has(uri))) {
+        if (taken.has(uri) || (this.documents.has(uri) && (!files.has(uri) || (isCartUri(uri) && uri !== project.root)))) {
           continue;
         }
         taken.add(uri);
@@ -624,16 +626,18 @@ export class ProjectIndex {
     return { dropped, changed };
   }
 
-  // Adds the files that the index's files #include and it does not have yet, then lets go of the files that no member
-  // reaches through #includes, and builds the projects again when a file joined or left. Returns the files that left and
-  // whether a file joined. A file that leaves can have been the only includer of a member, which is then the root of its
-  // own project.
+  // Adds the files that members #include and the index does not have yet, then lets go of the files that are neither
+  // members nor included by one, and builds the projects again when a file joined or left. Returns the files that left
+  // and whether a file joined. A file that leaves can have been the only includer of a member, which is then the root of
+  // its own project.
   private settle(): { left: string[], joined: boolean } {
     let joined = false;
     const tried = new Set<string>();
+    const includedByMembers = () => [ ...this.documents ]
+      .filter(([ uri ]) => this.isMember(uri))
+      .flatMap(([ , document ]) => [ ...includedUris(document) ]);
     for (;;) {
-      const missing = unique([ ...this.documents.values() ].flatMap(document => [ ...includedUris(document) ]))
-        .filter(uri => !this.documents.has(uri) && !tried.has(uri));
+      const missing = unique(includedByMembers()).filter(uri => !this.documents.has(uri) && !tried.has(uri));
       if (missing.length === 0) {
         break;
       }
@@ -645,15 +649,8 @@ export class ProjectIndex {
         }
       }
     }
-    const reached = new Set<string>();
-    const stack = [ ...this.documents.keys() ].filter(uri => this.isMember(uri));
-    for (let uri = stack.pop(); uri !== undefined; uri = stack.pop()) {
-      if (!reached.has(uri)) {
-        reached.add(uri);
-        stack.push(...[ ...includedUris(this.documents.get(uri)) ].filter(included => this.documents.has(included)));
-      }
-    }
-    const left = [ ...this.documents.keys() ].filter(uri => !reached.has(uri));
+    const kept = new Set([ ...[ ...this.documents.keys() ].filter(uri => this.isMember(uri)), ...includedByMembers() ]);
+    const left = [ ...this.documents.keys() ].filter(uri => !kept.has(uri));
     for (const uri of left) {
       this.drop(uri);
     }
@@ -722,6 +719,10 @@ export class ProjectIndex {
     }
     return [ ...places.values() ].sort(byPlace).map(toLocation);
   }
+}
+
+function isCartUri(uri: string): boolean {
+  return /\.p8$/i.test(uri);
 }
 
 function includedUris(document: ProjectDocument | undefined): Set<string> {

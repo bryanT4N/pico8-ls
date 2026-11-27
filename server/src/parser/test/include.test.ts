@@ -30,66 +30,64 @@ describe('#include', function () {
 
   const LOOPS: [string, Record<string, string>, string, string[]][] = [
     [
-      'ends when an included file includes itself on its last line',
+      'does not include again a file whose last line includes it, which is a plain # there',
       { 'a.lua': 'x = 1\n#include a.lua' },
-      'a.lua, which is #included from main_test_file',
+      'a.lua 2:0',
       [ 'IncludeStatement', 'AssignmentStatement*', 'CallStatement' ],
     ],
     [
-      'ends when an included file includes itself on its last line with a newline after it',
+      'does not include again a file whose last line includes it with a newline after it',
       { 'a.lua': 'x = 1\n#include a.lua\n' },
-      'a.lua, which is #included from main_test_file',
+      'a.lua 2:0',
       [ 'IncludeStatement', 'AssignmentStatement*', 'CallStatement' ],
     ],
     [
-      'ends when an included file includes itself on its last line with a comment after it',
+      'does not include again a file whose last line includes it with a comment after it',
       { 'a.lua': 'x = 1\n#include a.lua\n-- bye' },
-      'a.lua, which is #included from main_test_file',
+      'a.lua 2:0',
       [ 'IncludeStatement', 'AssignmentStatement*', 'CallStatement' ],
     ],
     [
-      'ends when an included file is only a self-include',
+      'does not include again a file that is only an #include of itself',
       { 'a.lua': '#include a.lua' },
-      'a.lua, which is #included from main_test_file',
+      'a.lua 1:0',
       [ 'IncludeStatement', 'CallStatement' ],
     ],
     [
-      'ends when two files include each other on their last lines',
+      'does not include a file that an included file includes on its last line',
       { 'a.lua': 'x = 1\n#include b.lua', 'b.lua': 'y = 2\n#include a.lua' },
-      'b.lua, which is #included from a.lua, which is #included from main_test_file',
-      [ 'IncludeStatement', 'AssignmentStatement*', 'IncludeStatement*', 'AssignmentStatement*', 'CallStatement' ],
-    ],
-    [
-      'ends when three files loop on their last lines',
-      { 'a.lua': 'x = 1\n#include b.lua', 'b.lua': '#include c.lua', 'c.lua': 'c = 3\n#include a.lua' },
-      'c.lua, which is #included from b.lua, which is #included from a.lua, which is #included from main_test_file',
-      [ 'IncludeStatement', 'AssignmentStatement*', 'IncludeStatement*', 'IncludeStatement*', 'AssignmentStatement*', 'CallStatement' ],
+      'a.lua 2:0',
+      [ 'IncludeStatement', 'AssignmentStatement*', 'CallStatement' ],
     ],
   ];
-  for (const [ name, files, chain, statements ] of LOOPS) {
+  for (const [ name, files, place, statements ] of LOOPS) {
     it(name, () => {
       const result = parseInChild('#include a.lua\nprint(1)', files);
       assert.strictEqual(result.threw, null);
-      assert.deepStrictEqual(result.errors, [ `main_test_file 1:0 Can't #include a.lua from ${chain}: Circular #includes detected!` ]);
+      assert.deepStrictEqual(result.errors, [ `${place} unexpected symbol '#' near 'include'` ]);
       assert.deepStrictEqual(result.statements, statements);
     });
   }
 
-  it('resolves an #include on the last line of an included file next to that file', () => {
-    const { errors, block } = parseWith('#include sub/a.lua\nprint(1)', {
-      'sub/a.lua': 'x = 1\n#include b.lua',
-      'sub/b.lua': 'y = 2',
-      'b.lua': 'wrong = 1',
+  it('resolves an #include after an included file next to the cart', () => {
+    const { errors, block } = parseWith('#include sub/a.lua\n#include b.lua\nprint(1)', {
+      'sub/a.lua': 'x = 1',
+      'sub/b.lua': 'wrong = 1',
+      'b.lua': 'y = 2',
     });
     assert.deepStrictEqual(errors.map(formatError), []);
     assert.deepStrictEqual(assignedNames(block.body), [ 'x', 'y' ]);
   });
 
-  it('reports a missing file on the last line of an included file on the main file\'s #include', () => {
+  it('reports an #include of a missing file in an included file as a plain # there', () => {
     const { errors } = parseWith('#include a.lua\nprint(1)', { 'a.lua': 'x = 1\n#include nope.lua' });
-    assert.deepStrictEqual(errors.map(formatError), [
-      'main_test_file 1:0 Can\'t #include nope.lua from a.lua, which is #included from main_test_file: File does not exist',
-    ]);
+    assert.deepStrictEqual(errors.map(formatError), [ 'a.lua 2:0 unexpected symbol \'#\' near \'include\'' ]);
+  });
+
+  it('keeps a label at the end of its block when an #include of a file with no code follows it', () => {
+    const code = 'do\n  goto l\n  local q\n  ::l::\n#include empty.lua\nend';
+    assert.deepStrictEqual(parseWith(code, { 'empty.lua': '-- nothing' }).errors.map(formatError), []);
+    assert.deepStrictEqual(parseWith(code, { 'empty.lua': 'x = 1' }).errors.map(formatError), [ 'main_test_file 2:2 <goto l> jumps into the scope of local \'q\'' ]);
   });
 
   it('lists only the main file\'s own #includes', () => {
@@ -97,9 +95,9 @@ describe('#include', function () {
     assert.deepStrictEqual(includes!.map(i => i.stmt.filename), [ 'a.lua' ]);
   });
 
-  it('lists the files that #includes could not find, nested ones too, but not a circular one', () => {
+  it('lists the files that the cart\'s #includes could not find', () => {
     const { unresolvedIncludes } = parseWith('#include a.lua\n#include gone.lua', { 'a.lua': '#include sub/nope.lua\n#include a.lua' });
-    assert.deepStrictEqual(unresolvedIncludes!.map(file => file.path), [ path.normalize('sub/nope.lua'), 'gone.lua' ]);
+    assert.deepStrictEqual(unresolvedIncludes!.map(file => file.path), [ 'gone.lua' ]);
   });
 
   it('ends the last statement of an included file in that file', () => {
@@ -144,37 +142,10 @@ describe('#include', function () {
     assert.deepStrictEqual(parseWith('#include lib.lua\nprinth(x)', { 'lib.lua': 'return 1\nx=2' }).errors.map(formatError), [ 'lib.lua 2:0 \'<eof>\' expected near \'x\'' ]);
   });
 
-  it('does not report a file included twice as circular', () => {
-    const chunk = parseWith('#include a.lua\n#include b.lua\nprint(1)', {
-      'a.lua': '#include c.lua\nx = 1',
-      'b.lua': '#include c.lua\ny = 2',
-      'c.lua': 'c = 3',
-    });
-    assert.deepStrictEqual(chunk.errors.map(formatError), []);
-    assert.deepStrictEqual(statementsOf(chunk), [
-      'IncludeStatement', 'IncludeStatement*', 'AssignmentStatement*', 'AssignmentStatement*',
-      'IncludeStatement', 'IncludeStatement*', 'AssignmentStatement*', 'AssignmentStatement*',
-      'CallStatement',
-    ]);
-  });
-
   it('splices an #include inside a function body into the function', () => {
     const { errors, block } = parseWith('function f()\n#include body.lua\nend', { 'body.lua': 'x = 1\ny = 2' });
     assert.deepStrictEqual(errors.map(formatError), []);
     assert.deepStrictEqual(statementsOf(block.body[0] as FunctionDeclaration), [ 'IncludeStatement', 'AssignmentStatement*', 'AssignmentStatement*' ]);
-  });
-
-  it('stops at 32 levels of nested #include', () => {
-    const files: Record<string, string> = { 'f33.lua': 'v33 = 33' };
-    for (let i = 1; i <= 32; i++) {
-      files[`f${i}.lua`] = `v${i} = ${i}\n#include f${i + 1}.lua`;
-    }
-    const { errors, block } = parseWith('#include f1.lua', files);
-    const messages = errors.map(formatError);
-    assert.strictEqual(messages.length, 1, messages.join('\n'));
-    assert.ok(messages[0].startsWith('main_test_file 1:0 Can\'t #include f33.lua from f32.lua, which is #included from'), messages[0]);
-    assert.ok(messages[0].endsWith(': #includes are nested more than 32 levels deep'), messages[0]);
-    assert.strictEqual(assignedNames(block.body).pop(), 'v32');
   });
 
   const UNREADABLE: [string, Partial<FileResolver>, string][] = [
@@ -186,7 +157,7 @@ describe('#include', function () {
     it(`reports an #included file when ${how}`, () => {
       const resolver = Object.assign(new TestFilesResolver({ 'inc.lua': 'x = 1' }), failing);
       const chunk = parse('#include inc.lua\nfunction f() end', { includeFileResolver: resolver });
-      assert.deepStrictEqual(chunk.errors.map(formatError), [ `main_test_file 1:0 Can't #include inc.lua from main_test_file: File cannot be read (${reason})` ]);
+      assert.deepStrictEqual(chunk.errors.map(formatError), [ `main_test_file 1:0 Can't #include "inc.lua" from main_test_file: File cannot be read (${reason})` ]);
       assert.deepStrictEqual(statementsOf(chunk), [ 'IncludeStatement', 'FunctionDeclaration' ]);
       assert.deepStrictEqual(chunk.unresolvedIncludes!.map(file => file.path), [ 'inc.lua' ]);
     });
@@ -195,7 +166,7 @@ describe('#include', function () {
   it('parses 256 #included files and reports the next one', () => {
     const errorsFor = (includes: number) => parseWith('#include a.lua\n'.repeat(includes), { 'a.lua': 'x = 1' }).errors.map(formatError);
     assert.deepStrictEqual(errorsFor(256), []);
-    assert.deepStrictEqual(errorsFor(257), [ 'main_test_file 257:0 Can\'t #include a.lua from main_test_file: Too many #include parses (more than 256)' ]);
+    assert.deepStrictEqual(errorsFor(257), [ 'main_test_file 257:0 Can\'t #include "a.lua" from main_test_file: Too many #include parses (more than 256)' ]);
   });
 
   it('stops a tree of #includes that doubles at every level', () => {
@@ -205,9 +176,7 @@ describe('#include', function () {
     }
     const result = parseInChild('#include f1.lua\nprint(x)', files);
     assert.strictEqual(result.threw, null);
-    assert.strictEqual(result.errors.length, 1, result.errors.join('\n'));
-    assert.ok(result.errors[0].startsWith('main_test_file 1:0 Can\'t #include f'), result.errors[0]);
-    assert.ok(result.errors[0].endsWith(': Too many #include parses (more than 256)'), result.errors[0]);
+    assert.deepStrictEqual(result.errors, [ 'f1.lua 1:0 unexpected symbol \'#\' near \'include\'', 'f1.lua 2:0 unexpected symbol \'#\' near \'include\'' ]);
   });
 
   it('accepts an empty included file', () => {
@@ -277,17 +246,50 @@ describe('#include', function () {
     assert.strictEqual(analyze(chunk).includeScopes.has(path.normalize('lib.lua')), true);
   });
 
-  it('says the rest of the line is the file name when an #include with a comment after it finds no file', () => {
+  it('takes the rest of the line after #include as the name, less the spaces and tabs around it, and quotes it in an error', () => {
     const files = { 'lib.lua': 'function helper() end' };
     assert.deepStrictEqual(parseWith('#include lib.lua -- helpers\nhelper()', files).errors.map(formatError), [
-      'main_test_file 1:0 Can\'t #include lib.lua -- helpers from main_test_file: File does not exist (the rest of the line is the file name: put a comment on the line above)',
+      'main_test_file 1:0 Can\'t #include "lib.lua -- helpers" from main_test_file: File does not exist',
     ]);
-    assert.deepStrictEqual(parseWith('#include lib.lua // helpers', files).errors.map(formatError), [
-      'main_test_file 1:0 Can\'t #include lib.lua // helpers from main_test_file: File does not exist (the rest of the line is the file name: put a comment on the line above)',
+    assert.deepStrictEqual(parseWith('#include missing.lua  ', files).errors.map(formatError), [
+      'main_test_file 1:0 Can\'t #include "missing.lua" from main_test_file: File does not exist',
     ]);
-    assert.deepStrictEqual(parseWith('#include missing.lua', files).errors.map(formatError), [
-      'main_test_file 1:0 Can\'t #include missing.lua from main_test_file: File does not exist',
-    ]);
-    assert.deepStrictEqual(parseWith('#include lib.lua', files).errors, []);
+    for (const line of [ '#include lib.lua ', '#include lib.lua  ', '#include lib.lua\t', '#include  lib.lua' ]) {
+      const chunk = parseWith(line + '\nhelper()', files);
+      assert.deepStrictEqual([ chunk.errors, statementsOf(chunk) ], [[], [ 'IncludeStatement', 'FunctionDeclaration*', 'CallStatement' ]], JSON.stringify(line));
+    }
+  });
+
+  it('reads #include only at the start of a line of the cart, in lower case and followed by a space', () => {
+    const files = { 'lib.lua': 'printh("lib")', 'a.lua': 'printh("a")\n#include lib.lua\n' };
+    const errorsFor = (code: string) => parseWith(code, files).errors.map(formatError);
+    assert.deepStrictEqual(errorsFor('#include a.lua\nprinth("ok")'), [ 'a.lua 2:0 unexpected symbol \'#\' near \'include\'' ]);
+    assert.deepStrictEqual(errorsFor('x=1 #include lib.lua'), [ 'main_test_file 1:4 unexpected symbol \'#\' near \'include\'' ]);
+    assert.deepStrictEqual(errorsFor('#INCLUDE lib.lua'), [ 'main_test_file 1:0 unexpected symbol \'#\' near \'INCLUDE\'' ]);
+    assert.deepStrictEqual(errorsFor('#include'), [ 'main_test_file 1:0 unexpected symbol \'#\' near \'include\'' ]);
+    assert.deepStrictEqual(errorsFor('#includelib.lua'), [ 'main_test_file 1:0 unexpected symbol \'#\' near \'includelib\'' ]);
+    assert.deepStrictEqual(errorsFor('# include lib.lua'), [ 'main_test_file 1:0 unexpected symbol \'#\' near \'include\'' ]);
+    assert.deepStrictEqual(errorsFor('#include\tlib.lua'), [ 'main_test_file 1:0 unexpected symbol \'#\' near \'include\'' ]);
+    assert.deepStrictEqual(errorsFor('  #include lib.lua\nfunction f()\n\t#include lib.lua\nend'), []);
+  });
+
+  it('includes one tab of another cart as PICO-8 reads its number, hexadecimal from 0, with the lines of the others blank', () => {
+    const tabs = Array.from({ length: 11 }, (_, k) => `function t${k}() end`).join('\n-->8\n');
+    const other = 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\n' + tabs + '\n-->8\nx = = 1\n__gfx__\n0000\n';
+    const included = (name: string) => {
+      const chunk = parseWith('#include ' + name, { 'other.p8': other });
+      return [ chunk.errors.map(formatError), chunk.block.body.filter(s => s.included).map(s => (s as FunctionDeclaration).identifier && ((s as FunctionDeclaration).identifier as Identifier).name) ];
+    };
+    assert.deepStrictEqual(included('other.p8:0'), [[], [ 't0' ]]);
+    assert.deepStrictEqual(included('other.p8:a'), [[], [ 't10' ]]);
+    assert.deepStrictEqual(included('other.p8:A'), [[], [ 't10' ]]);
+    assert.deepStrictEqual(included('other.p8:b'), [[ 'other.p8 26:4 <expression> expected near \'=\'' ], []]);
+    assert.deepStrictEqual(included('other.p8:c'), [[ 'main_test_file 1:0 Can\'t #include "other.p8:c" from main_test_file: other.p8 has no tab 12' ], []]);
+    for (const name of [ 'other.p8:01', 'other.p8:1x', 'other.p8:0x1' ]) {
+      assert.deepStrictEqual(included(name), [[], [ 't1' ]], name);
+    }
+    assert.deepStrictEqual([ included('other.p8:11'), included('other.p8:12') ], [[[], []], [[], []]]);
+    const whole = [[ 'other.p8 26:4 <expression> expected near \'=\'' ], Array.from({ length: 11 }, (_, k) => 't' + k) ];
+    assert.deepStrictEqual([ included('other.p8:'), included('other.p8:g') ], [ whole, whole ]);
   });
 });

@@ -41,7 +41,7 @@ Full support for `#include` statements:
 A `.lua` file opens as PICO-8 Lua when it belongs to a cart:
 
 - a `.p8` file is in its folder, or in a folder above it inside the workspace folder (a folder whose name starts with a dot does not count; folders reached through links, such as Windows junctions, do), or
-- a cart `#include`s it, directly or through other files, wherever it is.
+- a cart `#include`s it, wherever it is (PICO-8 does not follow an `#include` in an included file).
 
 Other `.lua` files open as plain Lua, and the language server leaves them alone. A file you switch to PICO-8 Lua yourself, with Change Language Mode, is PICO-8 Lua while it is open.
 

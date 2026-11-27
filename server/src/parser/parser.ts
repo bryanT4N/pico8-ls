@@ -16,7 +16,7 @@ import {
   VarargLiteral,
 } from './expressions';
 import ResolvedFile, { FileResolver, RealFileResolver, resolveIncludeFile } from './file-resolver';
-import Lexer from './lexer';
+import Lexer, { isP8EndOfCodeSection } from './lexer';
 import Marker from './marker';
 import {
   AssignmentStatement,
@@ -45,12 +45,7 @@ import * as path from 'path';
 import { ASTNode, Bounds } from './types';
 import Operators from './operators';
 
-// The circular #include check compares paths, and a link to a parent
-// directory gives the same file an ever longer one (sub/a.lua, sub/sub/a.lua).
-const MAX_INCLUDE_DEPTH = 32;
-
-// A file included twice is parsed twice, so files that each include the next
-// one twice take 2^depth parses, even within MAX_INCLUDE_DEPTH.
+// A file included twice is parsed twice, and each #include line of a cart is parsed.
 const MAX_INCLUDE_PARSES = 256;
 
 // PICO-8's Lua, as Lua 5.2 (LUAI_MAXCCALLS), counts a level for each statement
@@ -332,20 +327,16 @@ export default class Parser {
         this.levels--;
 
         if (statement?.type === 'IncludeStatement') {
-          const resolvedInclude = resolveIncludeFile(this.filename, statement.filename, this.includeFileResolver);
+          const tab = /^(.*\.p8):(.*)$/i.exec(statement.filename);
+          const resolvedInclude = resolveIncludeFile(this.filename, tab ? tab[1] : statement.filename, this.includeFileResolver);
           statement.resolvedFile = resolvedInclude;
 
-          // Check for circular dependencies
-          if (this.lexerStack.some(l => l.lexer.filename.equals(resolvedInclude))) {
-            this.errors.push(this.getIncludeStatementError(statement, 'Circular #includes detected!'));
-          } else {
-            // Pushed on its own so the #include stays when its file throws, and
-            // the file's statements one by one, since spreading a huge file's
-            // statements as arguments overflows the stack.
-            block.push(statement);
-            for (const includedStatement of this.parseIncludedFile(statement, resolvedInclude, flowContext)) {
-              block.push(includedStatement);
-            }
+          // Pushed on its own so the #include stays when its file throws, and
+          // the file's statements one by one, since spreading a huge file's
+          // statements as arguments overflows the stack.
+          block.push(statement);
+          for (const includedStatement of this.parseIncludedFile(statement, resolvedInclude, flowContext, tab ? tabIndex(tab[2]) : undefined)) {
+            block.push(includedStatement);
           }
         } else {
           // Statements are only added if they are returned, this allows us to
@@ -409,7 +400,7 @@ export default class Parser {
 
   // An #included file is parsed to its own end of file, so a statement or
   // block left open in it can't run on into the file that includes it.
-  parseIncludedFile(statement: IncludeStatement, resolvedInclude: ResolvedFile, flowContext: FlowContext): Statement[] {
+  parseIncludedFile(statement: IncludeStatement, resolvedInclude: ResolvedFile, flowContext: FlowContext, tab?: number): Statement[] {
     if (this.includeParses >= MAX_INCLUDE_PARSES) {
       if (!this.reportedTooManyIncludeParses) {
         this.reportedTooManyIncludeParses = true;
@@ -418,18 +409,8 @@ export default class Parser {
       return [];
     }
 
-    if (this.lexerStack.length > MAX_INCLUDE_DEPTH) {
-      this.errors.push(this.getIncludeStatementError(statement, `#includes are nested more than ${MAX_INCLUDE_DEPTH} levels deep`));
-      return [];
-    }
-
     if (!this.includeFileResolver.doesFileExist(resolvedInclude.path)) {
-      // PICO-8's handling of a comment on an #include line is not documented and the tools that copy it disagree,
-      // so when the filename looks like it has a comment in it, say why the lookup may have failed.
-      const reason = /--|\/\//.test(statement.filename)
-        ? 'File does not exist (the rest of the line is the file name: put a comment on the line above)'
-        : 'File does not exist';
-      return this.unresolvedInclude(statement, resolvedInclude, reason);
+      return this.unresolvedInclude(statement, resolvedInclude, 'File does not exist');
     }
 
     let fileContents: string;
@@ -445,8 +426,15 @@ export default class Parser {
       return this.unresolvedInclude(statement, resolvedInclude, `File cannot be read (${reason})`);
     }
 
-    if (!this.isInIncludedFile()) {
-      this.includes.push({ stmt: statement, resolvedFile: resolvedInclude });
+    this.includes.push({ stmt: statement, resolvedFile: resolvedInclude });
+    if (tab !== undefined) {
+      // PICO-8 includes nothing from a tab past the 16 a cart can have (3.p8-tab-11).
+      const tabText = tab < 16 ? tabOf(fileContents, tab) : '';
+      if (tabText === undefined) {
+        this.errors.push(this.getIncludeStatementError(statement, `${path.basename(resolvedInclude.path)} has no tab ${tab}`));
+        return [];
+      }
+      fileContents = tabText;
     }
 
     this.includeParses++;
@@ -518,7 +506,11 @@ export default class Parser {
       return null;
     }
 
-    flowContext.raiseDeferredErrors(this.token);
+    // An #include line is no statement to Lua, which reads the file's code in its place: a label before it can still be
+    // at the end of its block (j1).
+    if (!(this.token.type === TokenType.Punctuator && this.token.value === '#' && this.isIncludeLine())) {
+      flowContext.raiseDeferredErrors(this.token);
+    }
 
     if (this.token.type === TokenType.Keyword) {
       switch (this.token.value) {
@@ -549,9 +541,12 @@ export default class Parser {
 
         // #include filename.lua
       case '#':
-        const currTokenIdx = this.token.bounds.start.index;
-        this.lexer.consumeRestOfLine(currTokenIdx);
-        return this.parseIncludeStatement();
+        if (this.isIncludeLine()) {
+          const currTokenIdx = this.token.bounds.start.index;
+          this.lexer.consumeRestOfLine(currTokenIdx);
+          return this.parseIncludeStatement();
+        }
+        break;
       }
     }
 
@@ -1037,31 +1032,30 @@ export default class Parser {
     return args;
   }
 
-  // Special PICO-8 include statement: '#include' filename
-  parseIncludeStatement(): IncludeStatement {
-    const line = this.token.value as string;
+  // PICO-8 reads #include only at the start of a line of the cart's own code, in lower case and followed by a space
+  // (3.after-code, 3.upper, 3.tab-after-include, 3.nested): elsewhere the # is the length operator.
+  private isIncludeLine(): boolean {
+    const { index, column } = this.token.bounds.start;
+    const input = this.lexer.input;
+    return !this.isInIncludedFile() && /^[ \t]*$/.test(input.slice(index - column, index)) && input.startsWith('#include ', index);
+  }
 
-    const includeRegexp = /#include\s+(.*)$/;
-    const match = includeRegexp.exec(line);
-    if (!match) {
-      errors.raiseUnexpectedToken('#include <filename>', this.token);
-    }
+  // Special PICO-8 include statement: '#include' filename. The name is the rest of the line, and PICO-8 finds the file
+  // with the spaces and tabs around the name left out (3.trailing-spaces, 3.two-spaces-before).
+  parseIncludeStatement(): IncludeStatement {
+    const filename = (this.token.value as string).slice('#include '.length).replace(/^[ \t]+|[ \t]+$/g, '');
 
     // skip over the rest of the line for the next statement to be parsed
     this.lexerNext();
 
     return this.finishNode({
       type: 'IncludeStatement',
-      filename: match[1],
+      filename,
     });
   }
 
   getIncludeStatementError(statement: IncludeStatement, errorMessage: string) {
-    const baseIncludeStatement = this.lexerStack.length >= 2 ? this.lexerStack[1].includeStatement! : statement;
-
-    const fromPath: string = [ ...this.lexerStack ].reverse().map(l => path.basename(l.lexer.filename.path)).join(', which is #included from ');
-
-    return new errors.ParseError(`Can't #include ${statement.filename} from ${fromPath}: ${errorMessage}`, baseIncludeStatement.loc!);
+    return new errors.ParseError(`Can't #include "${statement.filename}" from ${path.basename(this.filename.path)}: ${errorMessage}`, statement.loc!);
   }
 
   // ### Non-statements
@@ -1548,4 +1542,34 @@ function isBlockFollow(token: Token) {
 
 function isEndOfFile(token: Token) {
   return token.type === TokenType.EOF;
+}
+
+// PICO-8 reads the tab after .p8: as C's strtol does in hexadecimal, the digits it starts with after an optional 0x, and
+// includes the whole cart when there are none (3.p8-tab-01, 3.p8-tab-1x, 3.p8-tab-g).
+function tabIndex(suffix: string): number | undefined {
+  const digits = /^(?:0x)?([0-9a-f]+)/i.exec(suffix);
+  return digits ? parseInt(digits[1], 16) : undefined;
+}
+
+// One tab of a cart, with the code of the other tabs blanked out by spaces, so that every position stays where it is in
+// the file. A tab starts at a line that begins with -->8.
+function tabOf(text: string, tab: number): string | undefined {
+  const parts = text.split(/(\r\n|\r|\n)/);
+  let inCode = !text.startsWith('pico-8 cartridge');
+  let inHeader = !inCode;
+  let current = 0;
+  for (let i = 0; i < parts.length; i += 2) {
+    const line = parts[i];
+    if (inHeader) {
+      inHeader = line !== '__lua__';
+      inCode = !inHeader;
+      continue;
+    }
+    inCode &&= !isP8EndOfCodeSection(line);
+    if (inCode) {
+      current += line.startsWith('-->8') ? 1 : 0;
+      parts[i] = current === tab ? line : ' '.repeat(line.length);
+    }
+  }
+  return tab <= current ? parts.join('') : undefined;
 }
