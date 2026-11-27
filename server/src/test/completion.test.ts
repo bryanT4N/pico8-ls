@@ -208,6 +208,19 @@ describe('completionItems', () => {
     }
   });
 
+  it('offers in an included file the blocks around the place as the file is pasted in: not one the file closes above it, and one it opens after that', () => {
+    const rows: [string, Record<string, string>, number, number, string | undefined, string[]][] = [
+      [ lines('local k = 1', 'do', '#include a.lua', 'end'), { 'a.lua': lines('local x = 1', 'end', 'do', '  local y = 1', '  ', '') }, 5, 2, 'a.lua', [ 'k', 'y' ]],
+      [ lines('local k = 1', 'do', '#include a.lua', '  ', 'end'), { 'a.lua': lines('local x = 1', 'end', 'do', '  local y = 1', '') }, 4, 2, undefined, [ 'k', 'y' ]],
+      [ lines('local k = 1', 'do', '#include a.lua', ''), { 'a.lua': lines('local x = 1', 'end', '  ', '') }, 3, 2, 'a.lua', [ 'k' ]],
+      [ lines('local k = 1', 'function f(p)', '#include a.lua', ''), { 'a.lua': lines('end', 'local g = 1', '  ', '') }, 3, 2, 'a.lua', [ 'f', 'g', 'k' ]],
+      [ lines('local k = 1', 'for i = 1, 2 do', '#include a.lua', ''), { 'a.lua': lines('  local z = 1', 'end', '  ', '') }, 3, 2, 'a.lua', [ 'k' ]],
+    ];
+    for (const [ code, files, line, column, file, offered ] of rows) {
+      deepStrictEqual(names(itemsAt(code, line, column, files, file)), offered, `${code} ${JSON.stringify(files)}`);
+    }
+  });
+
   it('sees the locals of the function an #include sits in', () => {
     const main = lines('function _init()', '  local speed = 1', '  #include lib.lua', 'end');
     const lib = { 'lib.lua': lines('local gravity = 2', 'function move()', '  ', 'end') };

@@ -71,7 +71,6 @@ class Binder extends ASTVisitor<BinderScope> {
   readonly globals = new Map<string, LuaSymbol>();
   readonly references: Reference[] = [];
   readonly fileScope: Scope = { kind: 'file', children: [], declarations: [] };
-  readonly includeScopes = new Map<string, Scope>();
   readonly includeStarts = new Map<string, number>();
   readonly includeCheckpoints = new Map<string, Array<{ index: number, order: number }>>();
   readonly codeStarts = new Map<string, number>();
@@ -253,8 +252,7 @@ class Binder extends ASTVisitor<BinderScope> {
     const file = node.loc!.start.filename;
     this.closeIncludes(file.path);
     const included = node.resolvedFile!.path;
-    if (!this.includeScopes.has(included)) {
-      this.includeScopes.set(included, this.topScope().analysisScope);
+    if (!this.includeStarts.has(included)) {
       this.includeStarts.set(included, this.order);
     }
     this.includesOfFiles.delete(included);
@@ -1075,8 +1073,8 @@ function blockHeader(node: VisitableASTNode): BlockHeader | undefined {
 export function emptyAnalysis(): Analysis {
   return {
     outline: [], globals: new Map(), referencesByFile: new Map(), membersByKey: new Map(),
-    scope: { kind: 'file', children: [], declarations: [] }, includeScopes: new Map(), includeStarts: new Map(),
-    includeCheckpoints: new Map(), codeStarts: new Map(), comments: [], blocks: [],
+    scope: { kind: 'file', children: [], declarations: [] }, includeStarts: new Map(), includeCheckpoints: new Map(),
+    codeStarts: new Map(), comments: [], blocks: [],
   };
 }
 
@@ -1100,8 +1098,8 @@ export function analyze(chunk: Chunk): Analysis {
   }
   return {
     outline: binder.root.children, globals: binder.globals, referencesByFile, membersByKey,
-    scope: binder.fileScope, includeScopes: binder.includeScopes, includeStarts: binder.includeStarts,
-    includeCheckpoints: binder.includeCheckpoints, codeStarts: binder.codeStarts, comments, blocks: binder.blocks,
+    scope: binder.fileScope, includeStarts: binder.includeStarts, includeCheckpoints: binder.includeCheckpoints,
+    codeStarts: binder.codeStarts, comments, blocks: binder.blocks,
   };
 }
 

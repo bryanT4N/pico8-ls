@@ -179,6 +179,17 @@ describe('signatureHelpAt', () => {
     deepStrictEqual(branches.signatures.map(signature => signature.label), [ 'g(a)', 'g(a, b)' ]);
   });
 
+  it('finds the function a call in an included file names in the blocks around it as the file is pasted in', () => {
+    const labelsIn = (code: string, file: string) => {
+      const a = analyzeCode(code, { 'a.lua': file });
+      return [ a.chunk.errors.length, ...signatureHelpAt([ a.analysis ], testFile('a.lua'), file, file.lastIndexOf(')'))!.signatures.map(signature => signature.label) ];
+    };
+    deepStrictEqual(labelsIn(lines('function g(b, c) end', 'for i = 1, 2 do', '#include a.lua', ''), lines('  local function g(a) end', 'end', 'g(1, 2)')),
+      [ 0, 'g(b, c)' ]);
+    deepStrictEqual(labelsIn(lines('do', '#include a.lua', 'end'), lines('local function h(x) end', 'end', 'do', '  local function h(y, z) end', '  h(1, 2)')),
+      [ 0, 'h(y, z)' ]);
+  });
+
   it('finds the call in a .p8 cart', () => {
     deepStrictEqual(callContextAt(P8, P8.length), { path: [ 'f' ], colon: false, argument: 1 });
     strictEqual(helpAt(P8)!.signatures[0].label, 'f(a, b)');

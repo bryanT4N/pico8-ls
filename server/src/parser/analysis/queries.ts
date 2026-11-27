@@ -92,9 +92,7 @@ export function warningsOf(analysis: Analysis): Warning[] {
 export function visibleAt(analysis: Analysis, file: ResolvedFile, index: number): LuaSymbol[] {
   const order = orderAt(analysis, file, index);
   const visible = new Map<string, LuaSymbol>();
-  // Code #included in a function body sees the locals of that function.
-  const start = analysis.includeScopes.get(file.path) ?? analysis.scope;
-  for (let scope: Scope | undefined = innermostScope(start, file, index); scope; scope = scope.parent) {
+  for (let scope: Scope | undefined = innermostScope(analysis.scope, file, index); scope; scope = scope.parent) {
     for (let i = scope.declarations.length - 1; i >= 0; i--) {
       const { symbol, file: declaredIn, visibleFrom, order: declaredAt } = scope.declarations[i];
       const isVisible = declaredIn.path === file.path ? visibleFrom <= index : declaredAt < order;

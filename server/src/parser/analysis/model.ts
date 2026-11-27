@@ -58,8 +58,6 @@ export type Analysis = {
   membersByKey: Map<string, LuaSymbol[]>,
   // The file scope.
   scope: Scope,
-  // Key: ResolvedFile.path of an #included file. The scope its first #include is in.
-  includeScopes: Map<string, Scope>,
   // Key: ResolvedFile.path of an #included file. The order the analysis had come to at its first #include.
   includeStarts: Map<string, number>,
   // Key: ResolvedFile.path. Where each #include in the file ends, with the order the analysis had come to after the

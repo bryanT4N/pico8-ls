@@ -388,7 +388,7 @@ describe('#include', function () {
     }
     const chunk = parse('#include Lib.lua\nhelper()', { includeFileResolver: new CaseResolver({ 'lib.lua': 'function helper() end' }) });
     assert.strictEqual(chunk.includes![0].resolvedFile.path, path.normalize('lib.lua'));
-    assert.strictEqual(analyze(chunk).includeScopes.has(path.normalize('lib.lua')), true);
+    assert.strictEqual(analyze(chunk).includeStarts.has(path.normalize('lib.lua')), true);
   });
 
   it('takes the rest of the line after #include as the name, less the spaces and tabs around it, and quotes it in an error', () => {
