@@ -30,7 +30,7 @@
 			"title": "PICO-8-LS configuration",
 			"properties": {
 				"pico-8-ls.maxNumberOfProblems": {
-					"scope": "resource",
+					"scope": "window",
 					"type": "integer",
 					"minimum": 0,
 					"default": 100,
