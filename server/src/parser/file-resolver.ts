@@ -98,9 +98,9 @@ export function resolveIncludeFile(currFile: ResolvedFile, includeFilename: stri
   return ResolvedFile.fromPath([ ...written.slice(0, keep), ...spelled ].join(path.sep));
 }
 
-// Windows drops the period that ends a folder of a path, and the periods and spaces that end the path, so PICO-8 there
-// opens lib.lua for lib.lua. and sub/lib.lua for sub./lib.lua. A folder that ends in a space keeps it (3.colon-win-dot,
-// 3.colon-win-folder-dot, 3.colon-space, 3.colon-win-folder-space).
+// Windows drops a single period that ends a folder of a path, and the periods and spaces that end the path, so PICO-8
+// there opens lib.lua for lib.lua. and sub/lib.lua for sub./lib.lua. A folder that ends in a space, or in two periods,
+// keeps them (3.colon-win-dot, 3.colon-win-folder-dot, 3.colon-space, 3.colon-win-folder-space).
 function asWindowsReads(name: string): string {
   const parts = name.split(/[\\/]/);
   return parts.map((part, i) => {
