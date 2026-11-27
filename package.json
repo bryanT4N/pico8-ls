@@ -1,7 +1,7 @@
 {
 	"name": "pico-8-ls",
 	"displayName": "PICO-8-LS",
-	"description": "PICO-8 language server, a personal fork of japhib/pico8-ls",
+	"description": "A personal fork of PICO-8 LS that provides a language server for PICO-8 Lua in .p8 carts and .lua files.",
 	"icon": "img/icon.png",
 	"author": "JanPaul Bergeson",
 	"publisher": "bryanT4N",
@@ -34,7 +34,7 @@
 					"type": "integer",
 					"minimum": 0,
 					"default": 100,
-					"description": "Controls the maximum number of problems produced by the server."
+					"description": "Sets the maximum number of problems shown for a file."
 				},
 				"pico-8-ls.trace.server": {
 					"scope": "window",
@@ -45,25 +45,25 @@
 						"verbose"
 					],
 					"default": "off",
-					"description": "Traces the communication between VS Code and the language server."
+					"description": "Logs the messages between VS Code and the language server, for debugging."
 				},
 				"pico-8-ls.outline.showParameters": {
 					"scope": "window",
 					"type": "boolean",
 					"default": false,
-					"markdownDescription": "List each function's parameters under it in the outline, breadcrumbs and sticky scroll, and in Go to Symbol in Workspace. `...` is not listed."
+					"markdownDescription": "Lists the parameters of each function in the outline, breadcrumbs, sticky scroll and Go to Symbol in Workspace."
 				},
 				"pico-8-ls.outline.showLoopVariables": {
 					"scope": "window",
 					"type": "boolean",
 					"default": false,
-					"markdownDescription": "List the variables of each `for` loop in the outline, breadcrumbs and sticky scroll, and in Go to Symbol in Workspace: under the function the loop is in, or under the loop when `#pico-8-ls.outline.showBlocks#` is on."
+					"markdownDescription": "Lists the variables of each `for` loop in the outline, breadcrumbs, sticky scroll and Go to Symbol in Workspace."
 				},
 				"pico-8-ls.outline.showBlocks": {
 					"scope": "window",
 					"type": "boolean",
 					"default": false,
-					"markdownDescription": "Group the outline, breadcrumbs and sticky scroll by the `for`, `while`, `repeat` and `do` blocks and the branches of `if` that hold something they list. A block is named after its first line, as in `for i=1,#enemies`."
+					"markdownDescription": "Groups the outline, breadcrumbs and sticky scroll by the blocks that hold their entries, such as `for` loops and `if` branches."
 				}
 			}
 		},

@@ -1,110 +1,76 @@
 # PICO-8-LS
 
-A personal fork of [PICO-8 LS](https://github.com/japhib/pico8-ls) by JanPaul Bergeson. It keeps the original features and changes how the outline is built: it lists definitions instead of every assignment, groups table members under their table, and leaves out function parameters, loop variables and blocks unless you turn them on in the settings (`pico-8-ls.outline.*`). See [CHANGELOG.md](CHANGELOG.md) for details.
-
-Full language support for the [PICO-8](https://www.lexaloffle.com/pico-8.php)
-dialect of Lua. 
-
-The goal is to have all the features you'd expect in a full-fledged language
-server, such as [the one for Lua](https://marketplace.visualstudio.com/items?itemName=sumneko.lua),
-but specifically tailored for a frictionless PICO-8 experience.
-
-## Feature highlights
-
-View docs on hover, then auto-complete and signature help:
-
-![docs gif](https://github.com/japhib/pico8-ls/blob/master/img/docs.gif?raw=true)
-
-Full support for `#include` statements:
-
-![include gif](https://github.com/japhib/pico8-ls/blob/master/img/includes.gif?raw=true)
+PICO-8-LS is a Visual Studio Code extension with a language server for the Lua dialect of PICO-8. It works on `.p8` carts and on the `.lua` files that belong to them. Its reference for valid code is PICO-8 0.2.7. PICO-8-LS is a personal fork of [PICO-8 LS](https://github.com/japhib/pico8-ls) by JanPaul Bergeson.
 
 ## Features
 
-- Syntax highlighting (including all cartridge sections: `__lua__`, `__gfx__`, `__label__`, `__gff__`, `__map__`, `__sfx__`, `__music__`)
-- Code folding (functions, blocks, `-->8` tabs, `#region` markers, and cartridge sections); code that runs from one file into another through an `#include` folds up to the `#include` line, or to the end of the included file it starts in
-- Syntax errors
-- Warnings on undefined variable usage
-- Find symbol in document, with options to list parameters and loop variables and to group by `for` and `if` blocks; code that runs from one file into another through an `#include` ends there at the `#include` line, or at the end of the included file it starts in
-- Find symbol in workspace (Ctrl+T), also in `#include`d files outside it
-- Go to definition
-- Find references
-- Hover support & signature help for built-in functions
-- Hover for your own functions, variables, fields, parameters and labels: their declaration and the comment written above them
-- Signature help for your own functions, with their comment and each parameter's `@param` text
-- Auto-completion
-- Support for `#include`ing other files. As in PICO-8, a file's code is read in place of its `#include` line, so a block can open in one file and close in the other, a file can give the value of an `x =` above it, and a long string or comment that a file leaves open goes on after its `#include` line. An included file, unless it is a cart, shows the errors that the code including it has in it with the file read in. For completion and signature help, a block whose code runs from one file into another holds its locals in every file it runs through, whichever file it starts in.
-  - The name is the rest of the line, as in PICO-8: the characters with codes up to 32, such as spaces and tabs, and those that are not ASCII are dropped from both ends, and an error quotes the rest of the line. As in PICO-8, a name that starts with `/`, ends with `/` or `\`, or has a character that is not ASCII finds no file, and on Windows a name is read as Windows reads a path.
-  - `#include other.p8:N` pastes tab N, counted from 0 in hexadecimal, of a cart or of a file whose path has `.lua` in it. With no number the whole file is pasted, a cart or such a file as its first 16 tabs with nothing between them.
-- Snippets for common idioms (functions, loops, etc) as well as pico-8 symbols (`p8-jelpi` -> 🐱, `p8-x-key` -> ❎, etc)
+- Syntax highlighting of every section of a cart, from `__lua__` to `__music__`.
+- Errors that follow PICO-8 0.2.7, and warnings for undefined variables.
+- An outline of definitions, in which table members are grouped under their table. Breadcrumbs and sticky scroll show the same outline.
+- Go to Definition, Find References, hover with doc comments, completion and parameter hints. Find References, hover, completion and parameter hints also cover PICO-8's API.
+- Go to Symbol in Workspace.
+- Folding of functions, blocks, long comments, `-->8` tabs, `#region` markers and cart sections.
+- `#include` of `.lua` files, of other carts and of single tabs of other carts.
+- Snippets for `function`, `if`, `for` and `while`, and for the glyphs of PICO-8's font, such as `p8-heart` for ♥.
 
 ## Errors
 
-The first syntax error is at the token where PICO-8 stops reading the code; PICO-8 names the line where that statement began (for a token over several lines, the line it ends on; for a `goto` into a local's scope, the label's line), so the lines can differ. A statement with an error is left out of the outline, and while a cart has an error, none of its files shows undefined-variable warnings.
+PICO-8-LS marks the first error at the token where PICO-8 stops reading the code. PICO-8 itself names the line on which the statement with the error begins, so the two lines can differ. Errors after the first may be less exact. While a cart has an error, its undefined-variable warnings are not shown.
 
-PICO-8 0.2.7's limits are checked as PICO-8 counts them: more than 200 local variables in scope in a function, or 141 at a cart's top level, where PICO-8 keeps 59 of its own, counting the hidden ones that some compound assignments hold, such as `g.x += 1` on a global `g`; more than 255 upvalues of a function, in a cart each of the 58 API functions that PICO-8 keeps as locals of its main function, such as `sin`, counting as one when the function uses it; nesting deeper than 200 levels; and in a cart, with its `#include` files pasted in, more than 8,192 tokens or 65,536 characters. The cart limits apply to a main file that is a cart by its first line, `pico-8 cartridge`. A `.p8` file whose first line, from its first `p`, does not start with `pico-8 cartridge` is reported, as PICO-8 does not load it, unless its path has `.lua` in it.
+PICO-8-LS checks these limits of PICO-8:
 
-Not checked:
+- 200 levels of nested blocks and expressions;
+- 200 local variables in a function, and 141 at the top level of a cart;
+- 255 upvalues in a function;
+- 8,192 tokens in a cart;
+- 65,536 characters in a cart.
 
-- PICO-8's "function or expression too complex", too many registers in use, as with more than 189 arguments in one call at a cart's top level, or 248 in a function.
-- The size of the code in bytes: code made mostly of glyphs passes about 196,600 bytes before 65,536 characters, and PICO-8 then crashes or gives a false error.
-- The hidden local that PICO-8 also takes for a compound assignment once a function holds about 256 constants, which a cart's top level reaches from about its 68th compound assignment.
-- The hidden local of a compound assignment whose key is literals joined by an operator that PICO-8 does not fold, as in `t[~1] += 1`.
-- PICO-8's buffer of about 65,533 characters for an `#include`d file ("#include file too long"); the character limit is reported instead.
-- The character counts of code that has a U+FFFD, and the count with `#include` files when an included file that is neither a cart nor a `.lua` file has a `-->8` line, when a cart or `.lua` file included whole has more than 16 tabs, or when an `#include` names a tab outside 0 to 15.
-- A cart's limits, and the `return` and `goto` that PICO-8 rejects at the end of a cart's outermost block, for a main file without the cart header: a `.lua` file, often a library that a cart includes, or a `.p8` file whose path has `.lua` in it, which PICO-8 runs as Lua.
+It does not check the register limit, which PICO-8 reports as "function or expression too complex", or a few rare cases that PICO-8 rejects.
 
-PICO-8 reports loading, `#include` and token errors before the compiler's errors; the editor shows each error at its place, so another error can come first.
+## `#include`
+
+An `#include` at the start of a line of a cart pastes the code of the named file in its place, as in PICO-8. Code can therefore run from one file into the other. `#include other.p8` includes the code of another cart, and `#include other.p8:2` includes only its tab 2, counting from 0 as PICO-8's editor does. An `#include` inside an included file is not followed, and it is reported as an error, as in PICO-8.
 
 ## Which `.lua` files are PICO-8 Lua
 
-A `.lua` file opens as PICO-8 Lua when it belongs to a `.p8` file:
-
-- a `.p8` file is in its folder, or in a folder above it inside the workspace folder (a folder whose name starts with a dot does not count; folders reached through links, such as Windows junctions, do), or
-- a `.p8` file in the workspace (outside folders whose names start with a dot), a `.lua` file there that the rule above counts, or any file you have open as PICO-8 or PICO-8 Lua `#include`s it directly, wherever it is. As in PICO-8, an `#include` in an included file is not followed, unless that file is a `.p8` file of this list, as PICO-8 runs a cart on its own. When files of this list include one another and no other `#include` that is followed reaches them, each of them counts as not included.
-
-Only `#include` in lower case and followed by a space, with nothing but spaces or tabs before it on its line, is an `#include`, and, as in PICO-8, only where the including file's own text is outside a long string or comment: one that an included file leaves open does not count.
-
-Other `.lua` files open as plain Lua, and the language server leaves them alone. A file you switch to PICO-8 Lua yourself, with Change Language Mode, is PICO-8 Lua while it is open.
-
-When you switch a file from PICO-8 Lua to a language other than PICO-8, the extension does not switch it back to PICO-8 Lua in this workspace, also after a reload, until you choose PICO-8 Lua for it again. So a `.lua` file near a `.p8` file that is not PICO-8 code, such as a build script, can be kept as plain Lua, and it then shows no PICO-8 warnings. Nor does the extension switch a file that `files.associations` gives a language; when that language is not PICO-8 or PICO-8 Lua, the file shows no PICO-8 warnings either, open or closed.
-
-A change of `files.associations` also sets the open files whose language you have not chosen yourself back to the language it gives them, the file you are in too, for example when settings.json is saved as you click into a `.lua` file. So a change of language less than a second before or after a change of `files.associations`, to the language it gives the file, is taken as caused by it, not as your choice.
-
-The extension starts when you open a PICO-8 file, or when VS Code finds a `.p8` file in the workspace at startup or in a folder you add.
-
-To open every `.lua` file as PICO-8 Lua, as versions before 0.6.0 did, add this to your settings:
-
-```json
-"files.associations": { "*.lua": "pico-8-lua" }
-```
+A `.lua` file is PICO-8 Lua when it is in a folder that holds a `.p8` file or in a folder below one, or when a `.p8` file or another PICO-8 Lua file includes it. Other `.lua` files stay plain Lua. A language chosen for a file with Change Language Mode or `files.associations` is kept.
 
 ## Large workspaces
 
-The language server reads the `.p8` files of the workspace and the `.lua` files that belong to them, leaving out what `files.exclude` hides, also after you change it. When these files hold more than about 20 million characters, it says so once and analyses only the open files, each with the files that include it, the files that include those and so on, and what all of these include: an open file then shows what it shows when every file is read, but Go to Symbol in Workspace finds only what these files hold, and files that are not open show no problems. To have everything read, exclude the large folders you do not work on, such as generated or test output, with `files.exclude`.
+PICO-8-LS skips the files and folders that `files.exclude` hides. When the PICO-8 files of the workspace hold more than about 20 million characters, PICO-8-LS analyses only some of them. These are the open files, the files that include them, directly or through other files, and the files those include. Problems are then shown only for the open files, and a message says so once. To restore the features for the whole workspace, exclude large folders with `files.exclude`.
 
-## Support for other platforms
+## Settings
 
-This extension uses the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/),
-so while it's mainly made for VSCode, it could also be used for other editors
-such as NeoVim, Atom, etc.
+| Setting | Default | Description |
+| --- | --- | --- |
+| `pico-8-ls.maxNumberOfProblems` | `100` | Sets the maximum number of problems shown for a file. |
+| `pico-8-ls.trace.server` | `off` | Logs the messages between VS Code and the language server, for debugging. |
+| `pico-8-ls.outline.showParameters` | `false` | Lists the parameters of each function in the outline, breadcrumbs, sticky scroll and Go to Symbol in Workspace. |
+| `pico-8-ls.outline.showLoopVariables` | `false` | Lists the variables of each `for` loop in the outline, breadcrumbs, sticky scroll and Go to Symbol in Workspace. |
+| `pico-8-ls.outline.showBlocks` | `false` | Groups the outline, breadcrumbs and sticky scroll by the blocks that hold their entries, such as `for` loops and `if` branches. |
 
-I don't have any experience setting up language extensions for platforms other than VSCode, so currently
-looking for help with that. See tips and support thread on the issue for various editors:
-- [Neovim](https://github.com/japhib/pico8-ls/issues/34)
-- [Sublime Text](https://github.com/japhib/pico8-ls/issues/44)
+## Known issues
 
-## Changelog
+- Formatting is turned off, because the formatter could change what code means.
+- While a renamed folder is being scanned, editing an open file can show a false warning for up to about a second.
 
-[Changelog has been moved to a separate file.](CHANGELOG.md)
+## Other editors
+
+The language server uses the Language Server Protocol, but it is tested only in VS Code. The PICO-8 LS project has threads on setting up its server in [Neovim](https://github.com/japhib/pico8-ls/issues/34) and [Sublime Text](https://github.com/japhib/pico8-ls/issues/44).
 
 ## Development
 
-Please follow the official [Language Server Extension Guide](https://code.visualstudio.com/api/language-extensions/language-server-extension-guide)
-to understand how to develop VS Code language server extension.
+Build and test with these commands, run from the repository root:
 
-## Credits
+```sh
+npm install
+npm run compile
+npm run lint
+cd server && npm run test
+```
 
-PICO-8 Lua parser based on https://github.com/fstirlitz/luaparse (heavily updated & ported to Typescript by @japhib)
+`npm install` also installs the packages of the client and the server. `npm run compile` bundles both into `client/out-min` and `server/out-min`. In VS Code, the Launch Client configuration opens a window with the extension loaded. To build a package, run `npx @vscode/vsce package`, then install the `.vsix` file with Extensions: Install from VSIX.
 
-[PICO-8](https://www.lexaloffle.com/pico-8.php) by Lexaloffle Games
+## Credits and license
+
+PICO-8-LS is based on PICO-8 LS by JanPaul Bergeson. Its parser derives from [luaparse](https://github.com/fstirlitz/luaparse). PICO-8 is made by Lexaloffle Games. PICO-8-LS is released under the MIT license, as stated in [LICENSE](LICENSE).
