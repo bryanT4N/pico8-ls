@@ -1,5 +1,5 @@
 import { Comment_ } from '../expressions';
-import { isTabMarker, regionMarkerOf } from '../region-markers';
+import { regionMarkerOf } from '../region-markers';
 import { Statement } from '../statements';
 import { boundsContain } from '../types';
 import { moveEntry, OutlineEntry } from './model';
@@ -14,7 +14,7 @@ export type StatementInfo = { about?: OutlineEntry, defines?: OutlineEntry, meth
 export function findBoundaryLines(comments: Comment_[]): Map<string, number[]> {
   const lines = new Map<string, number[]>();
   for (const comment of comments) {
-    if (isTabMarker(comment) || regionMarkerOf(comment) !== undefined) {
+    if (comment.tabMarker || regionMarkerOf(comment) !== undefined) {
       const { filename, line } = comment.loc!.start;
       const fileLines = lines.get(filename.path) ?? [];
       fileLines.push(line);

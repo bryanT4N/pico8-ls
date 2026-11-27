@@ -337,6 +337,9 @@ describe('outline', () => {
         lines('obj [Table]', '  a() [Method]', '  b() [Method]'));
       assert.strictEqual(outlineOf('obj = {}\nfunction obj:a() end -->8\nfunction obj:b() end'),
         lines('obj [Table]', '  a() [Method]', '  b() [Method]'));
+      // PICO-8 starts no tab at an indented -->8 (tabsOf).
+      assert.strictEqual(outlineOf('obj = {}\nfunction obj:a() end\n  -->8\nfunction obj:b() end'),
+        lines('obj [Table]', '  a() [Method]', '  b() [Method]'));
     });
 
     it('groups methods of a local table inside a function', () => {

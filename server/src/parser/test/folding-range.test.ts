@@ -199,7 +199,8 @@ end
 
 describe('Folding Ranges (PICO-8)', () => {
   it('should create folding regions for -->8 tabs', () => {
-    const code = `
+    const code = `pico-8 cartridge // http://www.pico-8.com
+version 43
 __lua__
 -- tab 1
 function a() end
@@ -216,9 +217,9 @@ __gfx__
     const regions = getFoldingRegions(textDocument, comments || []);
 
     deepEquals(regions, [
-      { name: '0: tab 1', startLine: 2, endLine: 3 },
-      { name: '1: tab 2', startLine: 5, endLine: 6 },
-      { name: '2: tab 3', startLine: 8, endLine: 9 },
+      { name: '0: tab 1', startLine: 3, endLine: 4 },
+      { name: '1: tab 2', startLine: 6, endLine: 7 },
+      { name: '2: tab 3', startLine: 9, endLine: 10 },
     ]);
   });
 
@@ -436,10 +437,26 @@ local b = 2
     ]);
   });
 
-  it('leaves out empty tabs but keeps counting', () => {
-    deepEquals(foldingRegionsOf('test.p8', P8 + lines('-->8', 'function a() end', '-->8', '-->8', 'function b() end', '__gfx__', '0000')), [
-      { name: '1: tab', startLine: 4, endLine: 4 },
-      { name: '3: tab', startLine: 7, endLine: 7 },
+  it('splits tabs where an #include of a tab splits them: at a line -->8 between two line breaks, the first of two', () => {
+    deepEquals(foldingRegionsOf('test.p8', P8 + lines('-->8', 'function a() end', '-->8', '-->8', 'function b() end', '  -->8', 'function c() end',
+      '__gfx__', '0000')), [
+      { name: '0: >8', startLine: 3, endLine: 4 },
+      { name: '1: >8', startLine: 6, endLine: 9 },
+    ]);
+    // A .lua file ending in a line -->8 has an empty last tab.
+    deepEquals(foldingRegionsOf('test.lua', lines('function a() end', '-->8')), [
+      { name: '0: tab', startLine: 0, endLine: 0 },
+    ]);
+  });
+
+  it('ends the code where PICO-8 ends it: at any section, __meta: too, and with a lone CR as a line break', () => {
+    deepEquals(foldingRegionsOf('test.p8', P8 + lines('a = 1', '-->8', 'b = 1', '__meta:title__', 'my game', '__gfx__', '0000')), [
+      { name: '0: tab', startLine: 3, endLine: 3 },
+      { name: '1: tab', startLine: 5, endLine: 5 },
+    ]);
+    deepEquals(foldingRegionsOf('test.p8', P8 + 'a = 1\n-->8\nb = 1\r\r__gfx__\r0000'), [
+      { name: '0: tab', startLine: 3, endLine: 3 },
+      { name: '1: tab', startLine: 5, endLine: 6 },
     ]);
   });
 
@@ -500,18 +517,20 @@ __music__
     const textDocument = TextDocument.create('test.p8', 'pico-8', 0, code);
 
     deepEquals(getSectionFoldingRegions(textDocument), [
-      { name: '__lua__', startLine: 2, endLine: 3 },
-      { name: '__gfx__', startLine: 4, endLine: 6 },
-      { name: '__label__', startLine: 7, endLine: 8 },
-      { name: '__gff__', startLine: 9, endLine: 10 },
-      { name: '__map__', startLine: 11, endLine: 12 },
-      { name: '__sfx__', startLine: 13, endLine: 14 },
-      { name: '__music__', startLine: 15, endLine: 17 },
+      { startLine: 2, endLine: 3 },
+      { startLine: 4, endLine: 6 },
+      { startLine: 7, endLine: 8 },
+      { startLine: 9, endLine: 10 },
+      { startLine: 11, endLine: 12 },
+      { startLine: 13, endLine: 14 },
+      { startLine: 15, endLine: 17 },
     ]);
   });
 
   it('skips sections that have no content to fold', () => {
-    const code = `__lua__
+    const code = `pico-8 cartridge // http://www.pico-8.com
+version 29
+__lua__
 function a() end
 __gfx__
 __map__
@@ -520,9 +539,19 @@ __map__
     const textDocument = TextDocument.create('test.p8', 'pico-8', 0, code);
 
     deepEquals(getSectionFoldingRegions(textDocument), [
-      { name: '__lua__', startLine: 0, endLine: 1 },
-      { name: '__map__', startLine: 3, endLine: 5 },
+      { startLine: 2, endLine: 3 },
+      { startLine: 5, endLine: 7 },
     ]);
+  });
+
+  it('takes the sections that PICO-8 reads: __meta: ones too, after a lone CR too, and none in a file that is no cart', () => {
+    const code = 'pico-8 cartridge // http://www.pico-8.com\nversion 29\n__lua__\nx = 1\r\r__gfx__\r0000\n__meta:title__\nmy game\n';
+    deepEquals(getSectionFoldingRegions(TextDocument.create('test.p8', 'pico-8', 0, code)), [
+      { startLine: 2, endLine: 4 },
+      { startLine: 5, endLine: 6 },
+      { startLine: 7, endLine: 9 },
+    ]);
+    deepEquals(getSectionFoldingRegions(TextDocument.create('test.p8', 'pico-8', 0, '__lua__\nfunction a() end\n__gfx__\n0000\n')), []);
   });
 
   it('returns no regions for a plain .lua file', () => {

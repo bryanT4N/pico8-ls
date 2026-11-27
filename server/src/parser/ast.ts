@@ -313,7 +313,7 @@ export default class AST {
     };
   }
 
-  static comment(value: string, raw: string, startsLine: boolean, lineBefore: string, endsLine: boolean): Comment_ {
+  static comment(value: string, raw: string, startsLine: boolean, lineBefore: string, endsLine: boolean, tabMarker: boolean): Comment_ {
     return {
       type: 'Comment',
       value: value,
@@ -321,6 +321,7 @@ export default class AST {
       startsLine: startsLine,
       lineBefore: lineBefore,
       endsLine: endsLine,
+      tabMarker: tabMarker,
     };
   }
 }

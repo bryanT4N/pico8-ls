@@ -2,11 +2,6 @@ import { Comment_ } from './expressions';
 
 export type RegionMarker = { kind: 'start' | 'end', label: string };
 
-// In PICO-8, a -->8 after code on the same line does not start a tab.
-export function isTabMarker(comment: Comment_): boolean {
-  return comment.startsLine && comment.raw === '-->8';
-}
-
 export function isLongComment(comment: Comment_): boolean {
   return /^--\[=*\[/.test(comment.raw);
 }

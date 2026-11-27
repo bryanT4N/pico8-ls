@@ -180,6 +180,8 @@ export type Comment_ = ASTNode & {
   lineBefore: string,
   // Only whitespace, and comments that end the line, come after the comment on the line where it ends: no code.
   endsLine: boolean,
+  // A line -->8 where PICO-8 splits the code into tabs (tabsOf).
+  tabMarker: boolean,
 };
 
 export type Whitespace = ASTNode & {

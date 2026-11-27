@@ -2,7 +2,7 @@ import { textCode } from '../code';
 import { Comment_ } from '../expressions';
 import ResolvedFile, { FileResolver } from '../file-resolver';
 import Parser from '../parser';
-import { isLongComment, isTabMarker, regionMarkerOf } from '../region-markers';
+import { isLongComment, regionMarkerOf } from '../region-markers';
 import { ASTNode } from '../types';
 import { Analysis, Definition, LuaSymbol } from './model';
 import { placeOf, targetsOf } from './queries';
@@ -136,8 +136,8 @@ function fileComments(analysis: Analysis, path: string, comments: Comment_[]): F
       current = undefined;
     } else if (!comment.endsLine) {
       current = undefined;
-    } else if (isTabMarker(comment) || regionMarkerOf(comment) !== undefined) {
-      if (isTabMarker(comment)) {
+    } else if (comment.tabMarker || regionMarkerOf(comment) !== undefined) {
+      if (comment.tabMarker) {
         tabStarts.add(start.line + 1);
       }
       current = undefined;

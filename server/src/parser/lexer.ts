@@ -1,5 +1,5 @@
 import AST from './ast';
-import { Code, Run, textCode } from './code';
+import { Code, Run, tabMarkersOf, textCode } from './code';
 import * as errors from './errors';
 import { errMessages } from './errors';
 import { Comment_ } from './expressions';
@@ -60,6 +60,8 @@ export default class Lexer {
   private runs?: Run[];
   private lineStarts?: number[];
   private readonly end?: Code['end'];
+  // Where the -->8 of each line that splits the code into tabs is.
+  private readonly tabMarkers?: Set<number>;
 
   // Special flag that indicates we shouldn't skip over a newline, instead
   // treating it as a special newline token. This is useful for the special
@@ -87,6 +89,9 @@ export default class Lexer {
     this.length = this.input.length;
     this.filename = filename;
     this.end = code.end;
+    if (this.input.includes('-->8')) {
+      this.tabMarkers = new Set(tabMarkersOf(code));
+    }
     const from = code.runs[0].from;
     if (code.runs.length > 1) {
       this.runs = code.runs;
@@ -837,7 +842,8 @@ export default class Lexer {
       ++after;
     }
     const endsLine = after === this.length || isLineTerminator(this.input.charCodeAt(after));
-    const node = AST.comment(content, this.input.slice(this.tokenStart, this.index), startsLine, lineBefore, endsLine);
+    const node = AST.comment(content, this.input.slice(this.tokenStart, this.index), startsLine, lineBefore, endsLine,
+      this.tabMarkers?.has(this.tokenStart) ?? false);
 
     // `Marker`s depend on tokens available in the parser and as comments are
     // intercepted in the lexer all location data is set manually.

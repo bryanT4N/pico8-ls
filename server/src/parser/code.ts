@@ -18,6 +18,8 @@ export type Code = {
   end?: { index: number, length: number },
   // Set when a CR that ends a cart takes the line break before it, which ends the code.
   lostLineBreak?: boolean,
+  // Where each line that starts a section of a cart, __lua__ among them, starts in the text.
+  sections?: number[],
 };
 
 const SECTIONS = [ '__lua__', '__gfx__', '__gff__', '__label__', '__map__', '__sfx__', '__music__', '__meta:' ];
@@ -89,6 +91,7 @@ function cartCode(text: string): Code {
   let lostLineBreak = false;
   let inCode = false;
   let codeStart = text.length;
+  const sections: number[] = [];
   for (let i = 0, line = 0; i < text.length; line++) {
     let j = i;
     while (j < text.length && text.charCodeAt(j) !== 10 && text.charCodeAt(j) !== 13) {
@@ -121,6 +124,9 @@ function cartCode(text: string): Code {
     lastWasCode = false;
     const section = line < 2 || text.charCodeAt(i) !== 95 || text.charCodeAt(i + 1) !== 95 ? undefined
       : SECTIONS.find(word => to - i >= word.length && text.startsWith(word, i));
+    if (section !== undefined) {
+      sections.push(i);
+    }
     if (section === '__lua__') {
       inCode = true;
       end = undefined;
@@ -163,7 +169,7 @@ function cartCode(text: string): Code {
   if (runs.length === 0) {
     runs.push({ at: 0, from: codeStart });
   }
-  return { text, code, runs, cart: true, end, lostLineBreak };
+  return { text, code, runs, cart: true, end, lostLineBreak, sections };
 }
 
 // PICO-8 splits a cart's code, without its last line break, at each line -->8 between two line breaks, the first
@@ -171,19 +177,31 @@ function cartCode(text: string): Code {
 // the text of any other file as if it ended in a line break (si.t28.tabs-of-lua.last-no-lf,
 // si.t28.tabs-of-lua.two-at-end).
 export function tabsOf(code: Code): Code[] {
-  let body = code.code;
-  if (code.cart) {
-    body = body.replace(/\r?\n$/, '');
-  }
+  const { length, separators } = tabSeparators(code);
   const tabs: Code[] = [];
-  const separator = code.cart ? /\r?\n-->8\r?\n/g : /\r?\n-->8(?:\r?\n|$)/g;
   let from = 0;
-  for (let found = separator.exec(body); found; found = separator.exec(body)) {
-    tabs.push(slice(code, from, found.index));
-    from = found.index + found[0].length;
+  for (const { index, text } of separators) {
+    tabs.push(slice(code, from, index));
+    from = index + text.length;
   }
-  tabs.push({ ...slice(code, from, body.length), end: code.end });
+  tabs.push({ ...slice(code, from, length), end: code.end });
   return tabs;
+}
+
+// Where the -->8 of each line that splits the code into tabs (tabsOf) is in the code.
+export function tabMarkersOf(code: Code): number[] {
+  return tabSeparators(code).separators.map(({ index, text }) => index + text.indexOf('-'));
+}
+
+// The length of the code that tabsOf splits, and each line -->8 it splits it at, with the line breaks around it.
+function tabSeparators(code: Code): { length: number, separators: { index: number, text: string }[] } {
+  const body = code.cart ? code.code.replace(/\r?\n$/, '') : code.code;
+  const separator = code.cart ? /\r?\n-->8\r?\n/g : /\r?\n-->8(?:\r?\n|$)/g;
+  const separators: { index: number, text: string }[] = [];
+  for (let found = separator.exec(body); found; found = separator.exec(body)) {
+    separators.push({ index: found.index, text: found[0] });
+  }
+  return { length: body.length, separators };
 }
 
 // PICO-8's count of the characters of code: a line break is one, a CRLF too, and any other character the bytes PICO-8
