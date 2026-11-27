@@ -1761,7 +1761,10 @@ function shortStringEnd(input: string, i: number): number {
       return j;
     }
     if (c === 92) {
-      j += input.startsWith('\r\n', j + 1) ? 2 : 1;
+      // A line break as the lexer reads one: \r\n and \n\r are one (Lexer.consumeEOL).
+      const next = input.charCodeAt(j + 1);
+      const after = input.charCodeAt(j + 2);
+      j += (next === 10 && after === 13) || (next === 13 && after === 10) ? 2 : 1;
     }
   }
   return input.length;

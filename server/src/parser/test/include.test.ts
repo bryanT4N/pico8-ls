@@ -172,7 +172,7 @@ describe('#include', function () {
     }
   });
 
-  it('finds #include lines past a \\z as PICO-8 does, and goes on with the string the \\z takes into the file of one', () => {
+  it('finds #include lines past a string\'s \\ and any line break, and past its \\z, as PICO-8 does, and goes on with the string a \\z takes into the file of one', () => {
     const read = (code: string, files: Record<string, string>): [string[], unknown] => {
       const chunk = parseWith(code, files);
       const assignment = chunk.block.body.find((s): s is AssignmentStatement => s.type === 'AssignmentStatement');
@@ -187,8 +187,10 @@ describe('#include', function () {
       'main_test_file 1:2 unfinished string near \'"a\\z\n\'', 'main_test_file 2:0 Can\'t #include "nope.lua"" from main_test_file: File does not exist',
     ]);
     assert.deepStrictEqual(read('s="a\\\n#include nope.lua\\\n"\nprinth(s)', {}), [[], 'a\n#include nope.lua\n' ]);
-    assert.deepStrictEqual(read('s="a\\\n[["\n#include nope.lua', {})[0],
-      [ 'main_test_file 3:0 Can\'t #include "nope.lua" from main_test_file: File does not exist' ]);
+    for (const lineBreak of [ '\n', '\r\n', '\n\r', '\r' ]) {
+      assert.deepStrictEqual(read(`s="a\\${lineBreak}[["\n#include nope.lua`, {})[0],
+        [ 'main_test_file 3:0 Can\'t #include "nope.lua" from main_test_file: File does not exist' ], JSON.stringify(lineBreak));
+    }
     assert.deepStrictEqual(read('#include a.lua\nb"\nprinth(s)', { 'a.lua': 's="a\\z\n' }), [[], 'ab' ]);
     assert.deepStrictEqual(read('#include a.lua\n#include b.lua\nprinth(s)', { 'a.lua': 's="a\\z\n', 'b.lua': '  c"' }), [[], 'ac' ]);
   });
