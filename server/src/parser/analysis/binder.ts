@@ -1,7 +1,6 @@
 import { Expression, Identifier, IndexExpression, Indexer, MemberExpression, TableConstructorExpression } from '../expressions';
 import { AnonymousFunctionName, AssignmentStatement, Block, Chunk, ForGenericStatement, ForNumericStatement,
   FunctionDeclaration, GotoStatement, IncludeStatement, isStatementWithBody, LabelStatement, LocalStatement, Statement } from '../statements';
-import { resolveIncludeFile } from '../file-resolver';
 import { ASTNode, Bounds, boundsContain, CodeLocation } from '../types';
 import { ASTVisitor, VisitableASTNode } from '../visitor';
 import { addEntry, CodeSymbolType, isColonMethod, moveEntry, OutlineBlock, OutlineEntry, Owner, signatureOf } from '../outline/model';
@@ -234,7 +233,7 @@ class Binder extends ASTVisitor<BinderScope> {
   override visitIncludeStatement(node: IncludeStatement): void {
     const file = node.loc!.start.filename;
     this.closeIncludes(file.path);
-    const included = (node.resolvedFile ?? resolveIncludeFile(file, node.filename)).path;
+    const included = node.resolvedFile!.path;
     if (!this.includeScopes.has(included)) {
       this.includeScopes.set(included, this.topScope().analysisScope);
       this.includeStarts.set(included, this.order);
