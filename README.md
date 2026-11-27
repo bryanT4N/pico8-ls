@@ -33,7 +33,7 @@ An `#include` at the start of a line of a cart pastes the code of the named file
 
 ## Which `.lua` files are PICO-8 Lua
 
-A `.lua` file is PICO-8 Lua when it is in a folder that holds a `.p8` file or in a folder below one, or when a `.p8` file or another PICO-8 Lua file includes it. Other `.lua` files stay plain Lua. A language chosen for a file with Change Language Mode or `files.associations` is kept.
+A `.lua` file is PICO-8 Lua when it is in a folder that holds a `.p8` file or in a folder below one. It is also PICO-8 Lua when a `.p8` file or another PICO-8 Lua file includes it. Other `.lua` files stay plain Lua. A language chosen for a file with Change Language Mode or `files.associations` is kept.
 
 ## Large workspaces
 
