@@ -557,7 +557,9 @@ describe('Folding ranges with #include', () => {
     deepEquals(rangesOf('function f()\n#include body.lua\nend', { 'body.lua': 'if a then\n  b()\nend' }), [{ startLine: 0, endLine: 2 }]);
   });
 
-  it('folds a branch whose next branch is in an included file to the end of the file, and no branch of that file', () => {
-    deepEquals(rangesOf('if a then\nx=1\n#include b.lua\ny=2\nend\nz=3', { 'b.lua': 'elseif b then\nw=1\n' }), [{ startLine: 0, endLine: 5 }]);
+  it('folds code that runs into an included file up to the #include line, and no branch of that file', () => {
+    deepEquals(rangesOf('if a then\nx=1\n#include b.lua\ny=2\nend\nz=3', { 'b.lua': 'elseif b then\nw=1\n' }), [{ startLine: 0, endLine: 1 }]);
+    deepEquals(rangesOf('function f()\nprinth("in f")\n#include a.lua\nf()', { 'a.lua': 'end\n' }), [{ startLine: 0, endLine: 2 }]);
+    deepEquals(rangesOf('x=\n#include val.lua\nprinth(x)', { 'val.lua': '42' }), [{ startLine: 0, endLine: 1 }]);
   });
 });

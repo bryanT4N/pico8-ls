@@ -69,8 +69,8 @@ export class FoldingRangeVisitor extends ASTVisitor<void> {
       let endLine;
 
       if (nextClause?.included) {
-        // The parser ends this clause at the end of the file.
-        endLine = currentClause.loc.end.line;
+        // The parser ends this clause at the #include line where the next one comes in.
+        endLine = currentClause.loc.end.line - 1;
       } else if (nextClause && nextClause.loc) {
       // End one line before the next clause starts
         endLine = nextClause.loc.start.line - 1;

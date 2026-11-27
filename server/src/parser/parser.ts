@@ -42,7 +42,7 @@ import {
 } from './statements';
 import { Token, TokenType } from './tokens';
 import * as path from 'path';
-import { ASTNode, Bounds, boundsClone, CodeLocation } from './types';
+import { ASTNode, Bounds, boundsClone } from './types';
 import Operators from './operators';
 
 // PICO-8 takes 256 #include lines in a cart and stops at the next one with "too many #includes" (3.includes-257).
@@ -69,11 +69,15 @@ export default class Parser {
   private readonly lexerStack: Lexer[];
 
   // The files pasted in, in the order of their #include lines, by the ResolvedFile of each, which its lexer alone has:
-  // the lexer, and where the #include line starts in the main file.
-  private readonly pasted = new Map<ResolvedFile, { lexer: Lexer, at: number }>();
+  // the lexer, and the #include line in the main file.
+  private readonly pasted = new Map<ResolvedFile, { lexer: Lexer, line: Bounds }>();
 
   // The #include lines not yet placed in a block, each with the token that came after it (placeIncludes).
   private unplaced: { statement: IncludeStatement, next?: Token }[] = [];
+
+  // A long string or comment that a pasted file left open, still being read (goOnInBracket), with its token: the
+  // string's, or the end of that file for a comment.
+  private open?: { level: number, isComment: boolean, unfinished: errors.ParseError, token: Token };
 
   // The end-of-file token of each lexer that has read to its end.
   private readonly ends = new Map<ResolvedFile, Token>();
@@ -270,25 +274,16 @@ export default class Parser {
     chunk.includedComments = this.includedComments;
     chunk.unresolvedIncludes = this.unresolvedIncludes;
 
-    // The outline, folding and the analysis take a node that starts in one file and ends in another to end at the end
-    // of the code of the file it starts in.
+    // The outline, folding and the analysis take a node that runs from one file into another to end where its first file
+    // stops being read: at the #include line of the file it runs into, or at the end of the pasted file it starts in,
+    // which has been read to its end by then.
     for (const loc of this.crossing) {
-      loc.end = this.codeEnd(loc.start.filename);
+      loc.end = loc.start.filename === this.lexer.filename
+        ? this.pasted.get(loc.end.filename)!.line.end
+        : this.ends.get(loc.start.filename)!.bounds.end;
     }
 
     return chunk;
-  }
-
-  private codeEnd(file: ResolvedFile): CodeLocation {
-    let end = this.ends.get(file);
-    if (!end) {
-      // The parse stopped before the end of the file.
-      const lexer = new Lexer(this.lexerOf(file).input, file);
-      do {
-        end = lexer.lex();
-      } while (end.type !== TokenType.EOF);
-    }
-    return end.bounds.end;
   }
 
   private lexerOf(file: ResolvedFile): Lexer {
@@ -306,7 +301,17 @@ export default class Parser {
   private pull(): Token {
     for (;;) {
       const lexer = this.lexerStack[this.lexerStack.length - 1];
-      const token = lexer.lex();
+      const token = this.open ? this.goOnInBracket(lexer) : lexer.lex();
+      if (!token) {
+        continue;
+      }
+      if (lexer.openBracket) {
+        this.open = { ...lexer.openBracket, token };
+        lexer.openBracket = undefined;
+        if (token.type !== TokenType.EOF) {
+          continue;
+        }
+      }
       if (token.type === TokenType.EOF) {
         this.ends.set(lexer.filename, token);
         if (lexer !== this.lexer) {
@@ -340,9 +345,41 @@ export default class Parser {
     const text = this.includedText(statement, resolvedInclude, colon < 0 ? undefined : filename.slice(colon + 1));
     if (text !== undefined) {
       const lexer = new Lexer(text, resolvedInclude);
+      lexer.pasted = true;
       this.lexerStack.push(lexer);
-      this.pasted.set(resolvedInclude, { lexer, at: line.bounds.start.index });
+      this.pasted.set(resolvedInclude, { lexer, line: line.bounds });
     }
+  }
+
+  // PICO-8 pastes a file's text in with two line breaks after it, so a long string or comment that the file leaves open
+  // goes on after its #include line, also into the files of #include lines there, to its close (3.open-long-string,
+  // 3f.string-codes, 3f.chain-codes, 3f.comment-include-closes). Undefined when there is no token yet: a comment, or an
+  // #include line read; the end of a pasted file is its end-of-file token, for pull to go on after it.
+  private goOnInBracket(lexer: Lexer): Token | undefined {
+    const open = this.open!;
+    const from = lexer.index;
+    const reached = lexer.closeLongBracket(open.level, lexer === this.lexer);
+    if (!open.isComment && open.token.value !== null) {
+      const read = lexer.input.slice(from, reached === 'close' ? lexer.index - open.level - 2 : lexer.index);
+      const breaks = reached === 'end' && lexer !== this.lexer ? '\n\n' : '';
+      open.token.value = open.token.value + lexer.encodingMode.fixup(lexer.getLocation(), read + breaks);
+    }
+    if (reached === 'include') {
+      this.paste(lexer.readRestOfLine());
+      return undefined;
+    }
+    if (reached === 'end' && lexer !== this.lexer) {
+      return lexer.lex();
+    }
+    this.open = undefined;
+    if (reached === 'end') {
+      this.errors.push(open.unfinished);
+    }
+    if (open.isComment) {
+      return undefined;
+    }
+    open.token.bounds = { start: open.token.bounds.start, end: lexer.getCurrentBounds().end };
+    return open.token;
   }
 
   // The #include lines that come right before this.token, at the start of a statement or the end of a block, are
@@ -372,11 +409,11 @@ export default class Parser {
     }
     const errorBefore = (lexer: Lexer, index: number) => lexer.errors.some(error => error.bounds.start.index < index);
     const foundIn = this.pasted.get(found.bounds.start.filename);
-    const mainReadTo = foundIn ? foundIn.at : found.bounds.end.index;
+    const mainReadTo = foundIn ? foundIn.line.start.index : found.bounds.end.index;
     if (errorBefore(this.lexer, mainReadTo) || (foundIn && errorBefore(foundIn.lexer, found.bounds.end.index))) {
       return true;
     }
-    return [ ...this.pasted.values() ].some(({ lexer, at }) => at < mainReadTo && lexer.errors.length > 0);
+    return [ ...this.pasted.values() ].some(({ lexer, line }) => line.start.index < mainReadTo && lexer.errors.length > 0);
   }
 
   sortErrors() {
@@ -1497,7 +1534,9 @@ export default class Parser {
 
     if (literals.includes(type)) {
       this.pushLocation(marker);
-      const raw = this.lexerOf(this.token.bounds.start.filename).input.slice(this.token.bounds.start.index, this.token.bounds.end.index);
+      // A long string that a pasted file leaves open ends in another file: its text is the part in its own file.
+      const { start, end } = this.token.bounds;
+      const raw = this.lexerOf(start.filename).input.slice(start.index, end.filename === start.filename ? end.index : undefined);
       this.lexerNext();
       return this.finishNode(AST.literal(type, value, raw));
     } else if (type === TokenType.Keyword && 'function' === value) {

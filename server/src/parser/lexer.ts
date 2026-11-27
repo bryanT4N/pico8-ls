@@ -62,6 +62,13 @@ export default class Lexer {
   // PICO-8 one-line if statement.
   newlineSignificant: boolean = false;
 
+  // Set for a file that the parser pastes in, where a long string or comment can go on past the end of the text
+  // (openBracket).
+  pasted = false;
+  // A long string or comment that a pasted file leaves open: its level, and the error to give when nothing after the
+  // file closes it.
+  openBracket?: { level: number, isComment: boolean, unfinished: errors.ParseError };
+
   filename: ResolvedFile;
 
   constructor(input: string, filename: ResolvedFile) {
@@ -789,10 +796,7 @@ export default class Lexer {
   // then appending until an equal depth is found.
 
   readLongString(isComment: boolean): string | false {
-    let level = 0,
-      content = '',
-      terminator = false,
-      character: string;
+    let level = 0;
     const firstLine = this.line;
 
     ++this.index; // [
@@ -814,47 +818,42 @@ export default class Lexer {
     }
 
     const stringStart = this.index;
-    while (this.index < this.length) {
-      // PICO-8 ends a cart's code at the next section even inside a long string
-      // or comment. The line break is left for lex(), which ends the code there.
-      if (this.isBeforeNextSection()) {
-        break;
-      }
+    if (this.closeLongBracket(level) === 'close') {
+      return this.input.slice(stringStart, this.index - level - 2);
+    }
+    const unfinished = errors.createErr(this.getCurrentBounds(), isComment ? errMessages.unfinishedLongComment : errMessages.unfinishedLongString,
+      firstLine, '<eof>');
+    if (this.pasted) {
+      this.openBracket = { level, isComment, unfinished };
+    } else {
+      this.errors.push(unfinished);
+    }
+    return this.input.slice(stringStart, this.index);
+  }
 
-      // To keep track of line numbers run the `consumeEOL()` which increments
-      // its counter.
+  // Reads on to the close of a long bracket of the level, ]] or ]=] and so on, and past it; or to the end of the code;
+  // or, with atInclude, to the # of the next line that starts with #include.
+  closeLongBracket(level: number, atInclude = false): 'close' | 'end' | 'include' {
+    // PICO-8 ends a cart's code at the next section even inside a long string
+    // or comment. The line break is left for lex(), which ends the code there.
+    while (this.index < this.length && !this.isBeforeNextSection()) {
       if (this.consumeEOL()) {
-        continue;
-      }
-
-      character = this.input.charAt(this.index++);
-
-      // Once the delimiter is found, iterate through the depth count and see
-      // if it matches.
-      if (']' === character) {
-        terminator = true;
-        for (let i = 0; i < level; ++i) {
-          if ('=' !== this.input.charAt(this.index + i)) {
-            terminator = false;
-          }
+        let hash = this.index;
+        while (atInclude && (this.input.charCodeAt(hash) === 32 || this.input.charCodeAt(hash) === 9)) {
+          hash++;
         }
-
-        if (']' !== this.input.charAt(this.index + level)) {
-          terminator = false;
+        if (atInclude && this.input.startsWith('#include ', hash)) {
+          this.index = this.tokenStart = hash;
+          this.tokenStartLine = this.line;
+          this.tokenStartLineIdx = this.lineStart;
+          return 'include';
         }
-      }
-
-      // We reached the end of the multiline string. Get out now.
-      if (terminator) {
-        content += this.input.slice(stringStart, this.index - 1);
+      } else if (this.input.charAt(this.index++) === ']' && this.input.startsWith('='.repeat(level) + ']', this.index)) {
         this.index += level + 1;
-        return content;
+        return 'close';
       }
     }
-
-    const errMessage = isComment ? errMessages.unfinishedLongComment : errMessages.unfinishedLongString;
-    this.addError(errMessage, firstLine, '<eof>');
-    return this.input.slice(stringStart, this.index);
+    return 'end';
   }
 
   // Whether the line break at this.index is followed by a line that

@@ -181,7 +181,7 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   // The parser's range of a branch runs over the keyword of the next one, where breadcrumbs would then show this one. A
-  // next one in another file leaves the range as the parser ends it, at the end of the file.
+  // next one in another file leaves the range as the parser ends it, where its own file stops being read.
   private branchRange(node: VisitableASTNode, loc: Bounds): Bounds {
     const ifStatement = this.topNode()?.node;
     if ((node.type !== 'IfClause' && node.type !== 'ElseifClause') || ifStatement?.type !== 'IfStatement') {

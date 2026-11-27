@@ -132,6 +132,14 @@ describe('completionItems', () => {
     deepStrictEqual(names(itemsAt(includer, 3, 2, included)), [ '_update', 'cfg', 'helper' ]);
   });
 
+  it('ends code that runs into an included file at the #include line, and code that an included file leaves open at the end of that file', () => {
+    const closed = { 'a.lua': 'end\n' };
+    deepStrictEqual(names(itemsAt(lines('function f()', '  local q = 1', '#include a.lua', '', 'function g() end'), 4, 0, closed)), [ 'f', 'g' ]);
+    deepStrictEqual(names(itemsAt(lines('local x =', '#include val.lua', ''), 3, 0, { 'val.lua': '42' })), [ 'x' ]);
+    const opened = { 'a.lua': lines('function f()', '  local q = 1', '  ', '') };
+    deepStrictEqual(names(itemsAt(lines('#include a.lua', 'end'), 3, 2, opened, 'a.lua')), [ 'f', 'q' ]);
+  });
+
   it('sees the locals of the function an #include sits in', () => {
     const main = lines('function _init()', '  local speed = 1', '  #include lib.lua', 'end');
     const lib = { 'lib.lua': lines('local gravity = 2', 'function move()', '  ', 'end') };

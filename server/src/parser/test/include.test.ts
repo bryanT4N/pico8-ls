@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { analyze } from '../analysis/binder';
-import { Identifier } from '../expressions';
+import { Identifier, StringLiteral } from '../expressions';
 import ResolvedFile, { FileResolver, RealFileResolver, resolveIncludeFile } from '../file-resolver';
 import { AssignmentStatement, FunctionDeclaration, Statement } from '../statements';
 import { formatError, parse, parseInChild, TestFilesResolver } from './test-utils';
@@ -112,15 +112,39 @@ describe('#include', function () {
     assert.deepStrictEqual(errorsFor('#include lib.lua\nx = = 1', { 'lib.lua': 'printh("lib")\n' }), [ 'main_test_file 2:4 <expression> expected near \'=\'' ]);
   });
 
-  it('ends a node that runs from one file into another at the end of the code of the file it starts in', () => {
+  it('ends a node that runs from one file into another at the #include line of the file it runs into, or at the end of the included file it starts in', () => {
     const at = ({ filename, line, column }: { filename: ResolvedFile, line: number, column: number }) => `${filename.path} ${line}:${column}`;
     const range = (node: Statement) => `${at(node.loc!.start)}-${at(node.loc!.end)}`;
     const opened = parseWith('#include a.lua\nend\nx = 1', { 'a.lua': 'function f()\nprinth("in f")\n' }).block.body;
     assert.deepStrictEqual(opened.map(range), [ 'main_test_file 1:0-main_test_file 1:14', 'a.lua 1:0-a.lua 3:0', 'main_test_file 3:0-main_test_file 3:5' ]);
     const closed = parseWith('function f()\nprinth("in f")\n#include a.lua\nf()', { 'a.lua': 'end\n' }).block.body;
-    assert.deepStrictEqual(closed.map(range), [ 'main_test_file 1:0-main_test_file 4:3', 'main_test_file 4:0-main_test_file 4:3' ]);
-    const unread = parseWith('function f()\n#include a.lua\nreturn 1\nx=2', { 'a.lua': 'end\n' }).block.body;
-    assert.deepStrictEqual(unread.map(range), [ 'main_test_file 1:0-main_test_file 4:3', 'main_test_file 3:0-main_test_file 3:8' ]);
+    assert.deepStrictEqual(closed.map(range), [ 'main_test_file 1:0-main_test_file 3:14', 'main_test_file 4:0-main_test_file 4:3' ]);
+    const valued = parseWith('x=\n#include val.lua\nprinth(x)', { 'val.lua': '42' }).block.body;
+    assert.deepStrictEqual(valued.map(range), [ 'main_test_file 1:0-main_test_file 2:16', 'main_test_file 3:0-main_test_file 3:9' ]);
+  });
+
+  it('goes on with a long string or comment that an included file leaves open after its #include line, as PICO-8 pastes the text in', () => {
+    const read = (code: string, files: Record<string, string>) => {
+      const chunk = parseWith(code, files);
+      const assignment = chunk.block.body.find((s): s is AssignmentStatement => s.type === 'AssignmentStatement');
+      return [ chunk.errors.map(formatError), statementsOf(chunk), (assignment?.init[0] as StringLiteral | undefined)?.value ];
+    };
+    assert.deepStrictEqual(read('#include a.lua\nxy]]\nprinth(s)', { 'a.lua': 's=[[ab\n' }),
+      [[], [ 'IncludeStatement', 'AssignmentStatement*', 'CallStatement' ], 'ab\n\n\n\nxy' ]);
+    const joined = parseWith('#include a.lua\nxy]]', { 'a.lua': 's=[[abcdefghijklmnopqrstuvwxyz\n' }).block.body[1] as AssignmentStatement;
+    assert.strictEqual((joined.init[0] as StringLiteral).raw, '[[abcdefghijklmnopqrstuvwxyz\n');
+    const around = parseWith('x=\n#include a.lua\n]]', { 'a.lua': '[[abc' }).block.body[0].loc!;
+    assert.deepStrictEqual([ around.start.line, around.end.filename.path, around.end.line, around.end.column ], [ 1, 'main_test_file', 3, 2 ]);
+    assert.deepStrictEqual(read('#include a.lua\nc\n#include b.lua\nprinth(s)', { 'a.lua': 's=[[a', 'b.lua': 'b]]\n' }),
+      [[], [ 'IncludeStatement', 'AssignmentStatement*', 'CallStatement' ], 'a\n\n\nc\nb' ]);
+    assert.deepStrictEqual(read('#include a.lua\nprinth("hidden")\n]]\nprinth("ok")', { 'a.lua': '--[[\n' }),
+      [[], [ 'IncludeStatement', 'CallStatement' ], undefined ]);
+    assert.deepStrictEqual(read('#include a.lua\n#include b.lua\nprinth(x)', { 'a.lua': '--[[\n', 'b.lua': ']]\nx=1\n' }),
+      [[], [ 'IncludeStatement', 'IncludeStatement', 'AssignmentStatement*', 'CallStatement' ], 1 ]);
+    assert.deepStrictEqual(read('#include a.lua\n#include nope.lua\n]]\nprinth("ok")', { 'a.lua': '--[[\n' })[0],
+      [ 'main_test_file 2:0 Can\'t #include "nope.lua" from main_test_file: File does not exist' ]);
+    assert.deepStrictEqual(read('#include a.lua\nprinth(s)', { 'a.lua': 's=[[abc\n' })[0],
+      [ 'a.lua 1:2 unfinished long string (starting at line 1) near \'<eof>\'' ]);
   });
 
   it('resolves an #include after an included file next to the cart', () => {
