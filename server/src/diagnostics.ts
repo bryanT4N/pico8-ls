@@ -28,10 +28,6 @@ export function errorsInFile(uri: string, errors: ParseError[]): ParseError[] {
 
 export type FileDiagnostics = { uri: string, diagnostics: Diagnostic[] };
 
-// Returns one entry per unique URI: first the URIs from uris (deduplicated, in
-// order of first appearance), then any additional URIs that appear only in
-// warnings. Each entry lists the file's parse errors first, then its warnings,
-// up to maxPerFile in all.
 export function mergeDiagnostics(
   uris: string[],
   parseErrors: ReadonlyMap<string, ParseError[]>,

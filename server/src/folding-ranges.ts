@@ -22,29 +22,24 @@ function getCommentFoldingRanges(comments: Comment_[]): FoldingRange[] {
 }
 
 export function computeFoldingRanges(textDocument: TextDocument, chunk: Chunk): FoldingRange[] {
-  // 1. Get ranges for the cartridge sections themselves (__lua__, __gfx__, etc)
   const sectionRanges: FoldingRange[] = getSectionFoldingRegions(textDocument).map(section => ({
     startLine: section.startLine,
     endLine: section.endLine,
     kind: 'region' as string,
   }));
 
-  // 2. Get ranges from grouping regions (#region / -->8 tabs)
   const groupingRanges: FoldingRange[] = getFoldingRegions(textDocument, chunk.comments || []).map(region => ({
     startLine: region.startLine,
     endLine: region.endLine,
     kind: 'region' as string,
   }));
 
-  // 3. Get ranges from AST blocks (if, for, while, etc.)
   const visitor = new FoldingRangeVisitor();
   visitor.visit(chunk);
   const blockRanges = visitor.ranges;
 
-  // 4. Get ranges from multi-line comments
   const commentRanges = getCommentFoldingRanges(chunk.comments || []);
 
-  // 5. Combine and deduplicate
   const allRanges = [ ...sectionRanges, ...groupingRanges, ...blockRanges, ...commentRanges ];
   const uniqueRanges = Array.from(new Map(allRanges.map(r => [ `${r.startLine}-${r.endLine}`, r ])).values());
 

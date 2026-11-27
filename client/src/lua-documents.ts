@@ -13,14 +13,12 @@ const KEY = 'pico-8-ls.keptLanguage';
 // busy by other work.
 const RESET_WINDOW = 1000;
 
-// PICO-8, the language of .p8 files, is as much PICO-8 as PICO-8 Lua.
 function isPico(languageId: string): boolean {
   return languageId === 'pico-8' || languageId === 'pico-8-lua';
 }
 
-// The uris of the documents the user moved away from PICO-8 Lua. They are read before the client is made, because its
-// diagnostics middleware needs them too. Also drops the uris of documents already open in a PICO-8 language, which no
-// open event reports: they were given it back while the extension was not running.
+// The uris of the documents the user moved away from a PICO-8 language. One already open in a PICO-8 language was
+// given it back while the extension was not running, which no open event reports.
 export function keptLanguages(context: ExtensionContext): Set<string> {
   const kept = new Set(context.workspaceState.get<string[]>(KEY, []));
   let changed = false;
@@ -37,14 +35,13 @@ export function keptLanguages(context: ExtensionContext): Set<string> {
 
 export type DiagnosticsFilter = {
   middleware: (uri: Uri, diagnostics: Diagnostic[], next: HandleDiagnosticsSignature) => void,
-  // Shows or hides again what the server sent, after the kept languages or files.associations changed.
   refresh: (client: LanguageClient) => void,
 };
 
 // A .lua file near a cart stays in the cart's project whatever language its editor has, as a file stays in its tsconfig
-// project, so the server goes on sending its warnings, from its text on the disk. A file the user moved away from
-// PICO-8 Lua, or that files.associations gives a language other than PICO-8, shows none, as a file that the TypeScript
-// extension no longer has open as TypeScript shows no errors.
+// project, so the server goes on sending its warnings, from its text on the disk. A file the user moved away from a
+// PICO-8 language, or that files.associations gives a language other than PICO-8 and PICO-8 Lua, shows none, as a file
+// that the TypeScript extension no longer has open as TypeScript shows no errors.
 export function diagnosticsFilter(kept: Set<string>): DiagnosticsFilter {
   // A change of the kept languages or of files.associations shows or hides what the server sent before, which it has
   // no reason to send again: for a closed file it does not know about the change at all.
@@ -65,7 +62,6 @@ export function diagnosticsFilter(kept: Set<string>): DiagnosticsFilter {
   };
 }
 
-// Switches the open lua documents that belong to a cart to PICO-8 Lua, and leaves alone those the user moved away from it.
 export function switchLuaDocuments(context: ExtensionContext, client: LanguageClient, kept: Set<string>, filter: DiagnosticsFilter): void {
   const saveKept = () => void context.workspaceState.update(KEY, [ ...kept ]);
 
@@ -133,7 +129,6 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
       kept.add(uri);
       choice = { document, at: Date.now() };
       saveKept();
-      // The middleware hides the warnings the server sends from now on; those it sent before are hidden now.
       filter.refresh(client);
     } else {
       void check(document);

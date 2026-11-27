@@ -21,9 +21,8 @@ import { searchSymbols, SymbolItem, symbolItems, toSymbolInformation } from './w
 
 export type ProjectDocument = { textDocument: TextDocument, chunk: Chunk, errors: ParseError[] };
 
-// A file is tracked when it has a .p8/.lua extension and the scan of some workspace folder holding it reaches it: the
-// scan does not descend into folders whose names start with a dot, so with C:\ and C:\.proj\game both open, the second
-// one's scan reaches its files although the first one's does not. With no folder holding it, only the extension counts.
+// Any folder whose scan reaches the file will do: with C:\ and C:\.proj\game both open, the second one's scan reaches
+// its files although the first one's does not.
 export function isTrackedPath(filePath: string, roots: string[]): boolean {
   if (!(/\.(p8|lua)$/i.test(filePath))) {
     return false;
@@ -38,15 +37,12 @@ export function scansFolder(folder: string, roots: string[]): boolean {
   return roots.some(root => (isUnder(folder, root) || path.relative(root, folder) === '') && reaches(root, folder));
 }
 
-// Whether the scan of the workspace folders lists the file: a .p8 or .lua file under one of them, with no folder whose
-// name starts with a dot between it and one of the folders that hold it.
 export function isScanned(filePath: string, roots: string[]): boolean {
   return roots.some(root => isUnder(filePath, root)) && isTrackedPath(filePath, roots);
 }
 
-// Design 5.4 (a): a cart in the file's folder or a folder above it, up to the outermost workspace folder that scans the
-// file. A file in a dot-folder of every workspace folder that holds it is near none; a file under no workspace folder
-// looks in its own folder alone. hasCart gets folders as path.dirname gives them.
+// A cart takes in the .lua files of its folder and the folders below, as a tsconfig.json does. hasCart gets folders as
+// path.dirname gives them.
 export function nearCart(filePath: string, roots: string[], hasCart: (folder: string) => boolean): boolean {
   const holding = roots.filter(root => isUnder(filePath, root));
   const tracking = holding.filter(root => reaches(root, path.dirname(filePath)));
@@ -108,9 +104,8 @@ const DISK: FolderReader = {
   realpath: file => new Promise((resolve, reject) => fs.realpath.native(file, (e, real) => e ? reject(e) : resolve(real))),
 };
 
-// The .p8 and .lua files under folder, outside folders whose names start with a dot. Links, junctions among them, are
-// followed, as VS Code's search does, but not a link back to a folder the listing came through from the workspace
-// folder `from`, which would never end.
+// Links, junctions among them, are followed, as VS Code's search does, but not a link back to a folder the listing
+// came through from the workspace folder `from`, which would never end.
 export async function listCartFiles(folder: string, from = folder, reader: FolderReader = DISK): Promise<string[]> {
   const between = path.relative(from, folder).split(path.sep).filter(part => part !== '');
   const above = between.map((_, i) => path.join(from, ...between.slice(0, i)));
@@ -201,10 +196,8 @@ export function makeFileResolver(editorText: (uri: string) => string | undefined
   };
 }
 
-// The file's current text, parsed; undefined when it cannot be read.
 export type ParseFile = (uri: string) => ProjectDocument | undefined;
 
-// analysed: the parse of the root that analysis comes from. failed: that analysis threw, and an empty one stands in.
 type IndexedProject = { root: string, files: string[], analysis: Analysis, warnings: Warning[], analysed?: ProjectDocument, failed: boolean };
 
 // One analysis per project, of its root's syntax tree, into which the parser has pasted every #include. Each file takes
@@ -215,14 +208,12 @@ type IndexedProject = { root: string, files: string[], analysis: Analysis, warni
 // reads them. A project is a root, which is a member (findRoots says which), and the files the root #includes. A file
 // that is neither a member nor in a project leaves the index, and its diagnostics are cleared.
 export class ProjectIndex {
-  // Each file's own parse, by URI.
   private readonly documents: ParsedDocumentsMap = new Map();
   // Sorted by root URI.
   private projects: IndexedProject[] = [];
   private joined = 0;
   private readonly arrived = new Set<string>();
   private awaited: Set<string> | undefined;
-  // The members when the index last settled.
   private settledMembers = new Set<string>();
 
   constructor(private readonly parseFile: ParseFile, private readonly isMember: (uri: string) => boolean = () => true) {}
@@ -288,9 +279,8 @@ export class ProjectIndex {
     return unique([ ...this.documents.keys(), ...uris, ...dropped, ...left ]);
   }
 
-  // After what the server counts as a member changed: the files that left, and also every other file when the roots
-  // changed, as when a cart that another cart includes stops being a member. When this is not empty, every file's
-  // diagnostics are to be sent again.
+  // After what the server counts as a member changed, as when a cart that another cart includes stops being a member,
+  // every file's diagnostics are to be sent again.
   prune(): string[] {
     const { left, regrouped } = this.settle();
     this.analyseChanged();
@@ -317,7 +307,6 @@ export class ProjectIndex {
     return this.awaitedFiles().has(uri);
   }
 
-  // The files under the folder with this URI that the #includes of project roots could not find.
   awaitedUnder(folder: string): string[] {
     return [ ...this.awaitedFiles() ].filter(uri => uri.startsWith(folder + '/'));
   }
@@ -349,7 +338,6 @@ export class ProjectIndex {
     return this.lookUp(uri, index, (_analysis, reference) => referencesOf(reference.symbol, includeDeclaration));
   }
 
-  // From the first project that has one: the file's own, then the others by root URI.
   hover(uri: string, index: number): string | undefined {
     const file = ResolvedFile.fromFileURL(uri);
     for (const { analysis } of this.projectsOf(uri)) {
@@ -362,13 +350,11 @@ export class ProjectIndex {
     return undefined;
   }
 
-  // From the first project that finds the function, the file's own and then the others by root URI, or else from the
-  // builtins. The caller finds the call, so that it can still give a builtin's help when this throws.
+  // The caller finds the call, so that it can still give a builtin's help when this throws.
   signatureHelp(uri: string, index: number, call: CallContext): SignatureHelp | undefined {
     return signatureHelpFor(this.analyses(uri), ResolvedFile.fromFileURL(uri), index, call);
   }
 
-  // One per project containing uri: the file's own first, then the others by root URI.
   analyses(uri: string): Analysis[] {
     return this.projectsOf(uri).map(project => project.analysis);
   }
@@ -472,15 +458,15 @@ export class ProjectIndex {
     return rebuilt ? unique([ ...this.documents.keys(), ...dropped ]) : unique([ uri, ...containing.flatMap(project => project.files) ]);
   }
 
-  // The project that a file's outline and its Go to Symbol in Workspace entries come from: its own when it is a root,
-  // and otherwise the first that contains it whose analysis did not fail, a failed analysis being empty.
+  // A failed analysis is empty, so a file that is no root takes its outline and Go to Symbol in Workspace entries
+  // from the next project.
   private sourceProject(uri: string): IndexedProject | undefined {
     const containing = this.projectsOf(uri);
     return containing[0]?.root === uri ? containing[0] : containing.find(({ failed }) => !failed);
   }
 
-  // Each file once: a file of the index from the project its outline comes from, and another from the first project
-  // whose analysis has it.
+  // Each file once: a file of the index from the project its outline comes from, even where that project gives it none,
+  // and any other file from the first project whose analysis has it.
   private symbolItemsOfEachFile(options: OutlineOptions): SymbolItem[] {
     const taken = new Set<string>();
     const lists: SymbolItem[][] = [];
@@ -567,8 +553,7 @@ export class ProjectIndex {
 
   // A file that cannot be parsed now is dropped, as update drops it, so that nothing is analysed from its old text. The
   // files that a new parse no longer includes, or that a dropped file included, are parsed again too: one that is gone
-  // is dropped, and so counts as new when it comes back. changed: whether some file was dropped or now includes other
-  // files than before.
+  // is dropped, and so counts as new when it comes back.
   private reparse(uris: string[]): { dropped: string[], changed: boolean } {
     const dropped: string[] = [];
     let changed = false;
@@ -594,9 +579,6 @@ export class ProjectIndex {
     return { dropped, changed };
   }
 
-  // Builds the projects with the members as they are now, adds the files that their roots #include and the index does
-  // not have yet, then lets go of the files that are neither members nor in a project. Returns the files that left,
-  // whether a file joined, and whether the roots of the files that stay changed.
   private settle(): { left: string[], joined: boolean, regrouped: boolean } {
     const rootsBefore = new Set(this.projects.map(project => project.root));
     let joined = false;
@@ -658,9 +640,8 @@ export class ProjectIndex {
     }
   }
 
-  // Never keeps an earlier result: one that failed gives way to an empty analysis. A statement with an error is not in
-  // the analysis, nor are the names it defines, so while the root's parse has an error no file of the project is told
-  // that a name is undefined.
+  // A statement with an error is not in the analysis, nor are the names it defines, so while the root's parse has an
+  // error no file of the project is told that a name is undefined.
   private analyse(project: IndexedProject): void {
     project.analysed = this.documents.get(project.root);
     try {
@@ -676,7 +657,6 @@ export class ProjectIndex {
     }
   }
 
-  // The union of the results in the projects containing uri, each place once, by file path and then by start.
   private lookUp(uri: string, index: number, query: (analysis: Analysis, reference: Reference) => Bounds[]): Location[] {
     const file = ResolvedFile.fromFileURL(uri);
     const places = new Map<string, Bounds>();
@@ -698,9 +678,8 @@ function includedUris(document: ProjectDocument | undefined): Set<string> {
   return new Set(document?.chunk.includes?.map(include => include.resolvedFile.fileURL));
 }
 
-// The files the index has that the earlier parse included and the new one does not, the file itself left out; after is
-// undefined when the file is gone. They are parsed again, as they can be gone too; one that nothing includes any more
-// and that is not a member leaves the index when it settles.
+// The callers parse these again, as they can be gone too; one that nothing includes any more and that is not a member
+// leaves the index when it settles.
 function stoppedIncluding(before: ProjectDocument | undefined, after: ProjectDocument | undefined, documents: ParsedDocumentsMap): string[] {
   const now = includedUris(after);
   return [ ...includedUris(before) ].filter(uri => !now.has(uri) && uri !== after?.textDocument.uri && documents.has(uri));

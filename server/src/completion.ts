@@ -27,8 +27,6 @@ export function wordAt(lineText: string, character: number): string {
   return lineText.substring(begin, end);
 }
 
-// path: [] for a plain name; the names before the last . or : otherwise; null after a . or : that follows something
-// other than a name. start: the character where the word being typed begins.
 export type CompletionRequest = { path: string[] | null, colon: boolean, start: number };
 
 export function completionRequestAt(lineText: string, character: number): CompletionRequest {
@@ -54,7 +52,7 @@ export function completionRequestAt(lineText: string, character: number): Comple
   }
 }
 
-// The . or : right before index i, if there is one. The second dot of .., the concatenation operator, is not.
+// The second dot of .., the concatenation operator, is not a separator.
 function separatorBefore(text: string, i: number): '.' | ':' | undefined {
   const char = text[i - 1];
   if (char === ':' || (char === '.' && text[i - 2] !== '.')) {
@@ -74,7 +72,7 @@ function wordStart(text: string, end: number): number {
 // The user symbol each item stands for, by label, kept for completionItem/resolve.
 export type Offered = Map<string, { analysis: Analysis, symbol: LuaSymbol }>;
 
-// Not filtered by what is typed: VS Code does that. offered gets the user symbols among the items.
+// Not filtered by what is typed: VS Code does that.
 export function completionItems(analyses: Analysis[], file: ResolvedFile, index: number, request: CompletionRequest,
   line: number, character: number, offered?: Offered): CompletionItem[] {
   const { path, colon } = request;
@@ -109,7 +107,6 @@ export function completionItems(analyses: Analysis[], file: ResolvedFile, index:
   return [ ...items.values() ];
 }
 
-// Gives an item that stands for a user symbol its declaration and doc. False for any other item, such as a builtin.
 export function resolveUserItem(item: CompletionItem, offered: Offered): boolean {
   const user = offered.get(item.label);
   if (!user) {
@@ -145,8 +142,6 @@ function kindOf(symbol: LuaSymbol, isFunction: boolean): CompletionItemKind {
   }
 }
 
-// The first character of sortText: 0 for the names of the scopes around the cursor, 1 for globals and members, 2 for
-// the built-in names.
 function rankOf(symbol: LuaSymbol): string {
   return symbol.kind === 'global' || symbol.kind === 'member' ? '1' : '0';
 }

@@ -11,8 +11,7 @@ import { containerOf } from './workspace-symbols';
 // table does not define shows each method of that name, as Go to Definition offers them all.
 export function hoverMarkdown(analysis: Analysis, reference: Reference): string | undefined {
   const { symbol } = reference;
-  // candidate: one of the methods of that name. Several of them can sit on tables no name holds, where only what holds
-  // the table tells them apart.
+  // Several candidates can sit on tables no name holds, where only what holds the table tells them apart.
   const describe = (described: LuaSymbol, candidate = false) => {
     const { definition, doc } = documentationOf(analysis, described);
     const text = doc ? renderDoc(doc) : '';
@@ -32,7 +31,6 @@ export function hoverMarkdown(analysis: Analysis, reference: Reference): string 
   return undefined;
 }
 
-// definition: the one documentationOf gives, which may be none.
 export function declarationOf(symbol: LuaSymbol, definition?: Definition): string {
   // The value of x += 1 is what x changes by.
   const value = definition?.compound ? undefined : definition?.value;
@@ -86,7 +84,6 @@ function literalOf(value: Expression | undefined): string {
   case 'UnaryExpression':
     return value.operator === '-' && value.argument.type === 'NumericLiteral' ? ` = -${value.argument.raw}` : '';
   case 'StringLiteral':
-    // A string on several lines would end the code block early, or carry a \r into it.
     return value.raw.length <= 40 && !/[\r\n]/.test(value.raw) ? ` = ${value.raw}` : '';
   case 'BooleanLiteral':
     return ` = ${value.value}`;

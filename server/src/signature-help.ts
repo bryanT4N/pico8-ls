@@ -10,8 +10,6 @@ import { isColonMethod, parameterNames } from './parser/outline/model';
 import { FunctionDeclaration } from './parser/statements';
 import { Token, TokenType } from './parser/tokens';
 
-// path: the names before the (, as in a.b.c or obj:m; colon: the last separator is ':'; argument: the commas before the
-// cursor at the call's depth, null when the cursor is inside a { or [ of the call.
 export type CallContext = { path: string[], colon: boolean, argument: number | null };
 
 type Signature = SignatureInformation & { activeParameter: number };
@@ -19,18 +17,14 @@ type Signature = SignatureInformation & { activeParameter: number };
 const LEXED_FILE = new ResolvedFile('signature-help', 'signature-help');
 
 type Callee = { path: string[], colon: boolean };
-// What a ( opens: the arguments of a call on a name path, or of a call on something else; the parameters of a function;
-// or a group.
 type Paren = Callee | 'unnamed call' | 'parameters' | 'group';
-// A function's body opens where its parameter list closes; the other blocks open at then, do and repeat, so that
-// PICO-8's one-line if (c) and while (c), which have neither, open none. The then or do of an elseif opens none either:
-// the block its if opened runs on to the end, and a one-line if has none.
+// Blocks open at then and do, not at if and while, so that PICO-8's one-line if (c) and while (c), which have
+// neither, open none. The then or do of an elseif opens none either: the block its if opened runs on to the end,
+// and a one-line if has none.
 type Open = { kind: '(', paren: Paren, commas: number } | { kind: '{' | '[', commas: number } | { kind: 'function' | 'then' | 'do' | 'repeat' };
 
-// The innermost call still open at offset. The tokens are read from the start of the text, so strings, comments,
-// nesting and calls over several lines count as Lua reads them. A grouping parenthesis and a function's parameter list
-// are looked past. There is none inside a call on something other than a name path, such as get():hit( or f(x)(, nor
-// in a block opened inside the call, such as the body of a function passed to it.
+// The tokens are read from the start of the text, so strings, comments, nesting and calls over several lines count
+// as Lua reads them.
 export function callContextAt(text: string, offset: number): CallContext | undefined {
   const tokens: Token[] = [];
   try {
@@ -135,7 +129,6 @@ export function callContextAt(text: string, offset: number): CallContext | undef
   return undefined;
 }
 
-// Closes the innermost open item of one of kinds, and whatever is still open inside it.
 function close(open: Open[], kinds: Array<Open['kind']>): Open | undefined {
   for (let i = open.length - 1; i >= 0; i--) {
     if (kinds.includes(open[i].kind)) {
@@ -151,9 +144,6 @@ function closeBrackets(open: Open[]) {
   }
 }
 
-// The ( at tokens[at] calls the names before it, separated by . or by a last :, as in a.b.c( or obj:m(, unless function
-// comes before them, as in function f(. A call on anything else comes after ), ], } or a string, as in f(x)( or f{}(,
-// or after names that follow one, as in get():hit(.
 function parenAt(tokens: Token[], at: number): Paren {
   const previous = tokens[at - 1];
   if (previous?.type === TokenType.StringLiteral || (previous?.type === TokenType.Punctuator && [ ')', ']', '}' ].includes(previous.value as string))) {
@@ -194,8 +184,6 @@ export function signatureHelpAt(analyses: Analysis[], file: ResolvedFile, text: 
   return call ? signatureHelpFor(analyses, file, offset, call) : undefined;
 }
 
-// The signatures of the functions call at offset may go to, from the first analysis that finds one. A plain name that
-// none finds is looked up among the builtins.
 export function signatureHelpFor(analyses: Analysis[], file: ResolvedFile, offset: number, call: CallContext): SignatureHelp | undefined {
   for (const analysis of analyses) {
     const signatures: Signature[] = [];
@@ -241,16 +229,15 @@ function builtinHelp(name: string, argument: number | null): SignatureHelp | und
   }]);
 }
 
-// The active signature is the first whose parameters take the argument: its active parameter is one of them, which a
-// vararg always is. With none, as inside a table, the first.
+// A vararg always takes the argument: activeParameter stops at it.
 function helpOf(signatures: Signature[]): SignatureHelp {
   const active = Math.max(0, signatures.findIndex(signature => signature.activeParameter < (signature.parameters?.length ?? 0)));
   return { signatures, activeSignature: active, activeParameter: signatures[active].activeParameter };
 }
 
-// For a.b.c, the member c of a.b; when a.b has no c with a definition, every method named c, as the table may inherit
-// it. Nothing when a or b is not found, or nothing defines it: such a path leads to no known table. self has no
-// definition, but stands for the method's table.
+// When a.b has no c with a definition, the table may inherit c, so every method named c is a candidate. A path
+// through a table that nothing defines leads to no known table; self has no definition, but stands for the
+// method's table.
 function calleesOf(analysis: Analysis, file: ResolvedFile, offset: number, path: string[]): LuaSymbol[] {
   if (path.length === 1) {
     const symbol = symbolOfPath(analysis, file, offset, path);

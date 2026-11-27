@@ -74,7 +74,6 @@ export function buildDocumentSymbols(textDocument: TextDocument, comments: Comme
   return outsideRegions.concat(topLevelRegions);
 }
 
-// Outer regions first. A #region over the same lines as a tab goes inside the tab.
 function outerFirst(a: FoldingRegion, b: FoldingRegion): number {
   const kindOrder = { tab: 0, region: 1 };
   return a.startLine - b.startLine || b.endLine - a.endLine || kindOrder[a.kind] - kindOrder[b.kind];

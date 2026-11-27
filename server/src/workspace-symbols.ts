@@ -9,16 +9,11 @@ import { compareStrings, groupBy } from './parser/util';
 import { rangeOf } from './ranges';
 
 export type SymbolItem = {
-  // As the code writes it, with its tables: entity:update, game.state.level, on_damaged.
   name: string,
-  // The last part of name: update.
   own: string,
-  // name and own in lower case, for searchSymbols.
   nameKey: string,
   ownKey: string,
-  // name, then () for a function or method.
   label: string,
-  // '' at the top of a file.
   container: string,
   type: CodeSymbolType,
   selectionLoc: Bounds,
@@ -27,25 +22,21 @@ export type SymbolItem = {
 // A cart holds at most 8,192 tokens, so only a folder full of .lua files gets near this.
 export const SYMBOL_LIMIT = 1000;
 
-// byPlace: by placeOf(selectionLoc).
 type Items = { byUri: Map<string, SymbolItem[]>, byPlace: Map<string, SymbolItem> };
 
-// An analysis is never changed, only replaced, so its items hold for as long as it lives. Key: what the options list.
+// An analysis is never changed, only replaced, so its items hold for as long as it lives.
 const cache = new WeakMap<Analysis, Map<string, Items>>();
 
-// By file URI, each entry once, and the parameters and loop variables the options list. Built on the first call for an
-// analysis and these options and kept with it.
 export function symbolItems(analysis: Analysis, options: OutlineOptions = NO_OUTLINE_OPTIONS): Map<string, SymbolItem[]> {
   return itemsOf(analysis, options).byUri;
 }
 
-// The container of the item whose selectionLoc is at nameLoc; undefined when there is none.
 export function containerOf(analysis: Analysis, nameLoc: Bounds): string | undefined {
   return itemsOf(analysis, NO_OUTLINE_OPTIONS).byPlace.get(placeOf(nameLoc))?.container;
 }
 
-// Best first, at most limit; nothing for a query that is empty once normalized. VS Code filters and ranks the result
-// again with its own fuzzy match, so this match only has to be loose enough to keep whatever that one keeps.
+// VS Code filters and ranks the result again with its own fuzzy match, so this match only has to be loose enough to
+// keep whatever that one keeps.
 export function searchSymbols(items: SymbolItem[], query: string, limit = SYMBOL_LIMIT): SymbolItem[] {
   // VS Code takes these characters out of a query before it matches too.
   const q = query.toLowerCase().replace(/[\s*"\u2026]/g, '');
@@ -95,15 +86,13 @@ function itemsOf(analysis: Analysis, options: OutlineOptions): Items {
   return items;
 }
 
-// What the traversal knows of an entry's parent. The entry's own parent field is no help at the top, where it is the
-// file's root, which has no name or members.
+// The entry's own parent field is no help at the top, where it is the file's root, which has no name or members.
 type Parent = { entry: OutlineEntry, name: string, container: string };
 
 function buildItems(analysis: Analysis, options: OutlineOptions): Items {
   const byUri = new Map<string, SymbolItem[]>();
   const byPlace = new Map<string, SymbolItem>();
   const listed = new Set<string>();
-  // Whether the item is new.
   const add = (item: SymbolItem): boolean => {
     const { start, end } = item.selectionLoc;
     // A file included twice is in the analysis twice.
@@ -165,7 +154,6 @@ function buildItems(analysis: Analysis, options: OutlineOptions): Items {
         addVariables(entry.parameters ?? [], inside);
       }
       addLoopVariables(entry, inside);
-      // The entries left out still pass their names and containers on to their children.
       visit(entry.children, { entry, name, container });
     }
   };
@@ -186,7 +174,6 @@ function isMemberOf(entry: OutlineEntry, parent: OutlineEntry): boolean {
     || (entry.symbol !== undefined && parent.symbol !== undefined && entry.symbol.owner === parent.symbol);
 }
 
-// ':' for a function declared with one, from the definition at the entry's name.
 function separatorOf(entry: OutlineEntry): string {
   if (entry.type !== CodeSymbolType.Function && entry.type !== CodeSymbolType.Method) {
     return '.';
@@ -198,7 +185,6 @@ function separatorOf(entry: OutlineEntry): string {
   return value?.type === 'FunctionDeclaration' && isColonMethod(value) ? ':' : '.';
 }
 
-// Whether the characters of query appear in text in their order.
 function hasInOrder(text: string, query: string): boolean {
   let at = 0;
   for (const char of query) {

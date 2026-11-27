@@ -33,17 +33,11 @@ const documents = new TextDocuments(TextDocument);
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 
-// The text of the index's files that the file watcher keeps current, as the scan, the file watcher or a first read took
-// it from the disk.
 const diskText = new Map<string, string>();
 
-// The paths of the workspace folders, which change as folders are added and removed. Which files belong to a cart
-// depends on them: the scan of the folders lists the carts and the .lua files, and a .lua file looks for a cart up to
-// the outermost folder that lists it.
 let workspaceRoots: string[] = [];
 
-// The carts that the scan and the file watcher found, by path.normalize. The index asks whether a file belongs for
-// every file it settles, so the folders that hold a cart are kept as a set, made again after the carts change.
+// The index asks whether a file belongs for every file it settles, so the folders that hold a cart are kept as a set.
 const carts = new Set<string>();
 let cartFolders: Set<string> | undefined;
 
@@ -79,8 +73,7 @@ function pathOf(uri: string): string | undefined {
   }
 }
 
-// A file open in the editor, a cart the scan lists, or a .lua file the scan lists near a cart. The index asks while it
-// changes, so this answers false for a URI that is not a file's rather than throw.
+// The index asks while it changes, so this answers false for a URI that is not a file's rather than throw.
 function isMember(uri: string): boolean {
   if (documents.get(uri)) {
     return true;
@@ -351,7 +344,6 @@ function takeSettings(given: PicoSettings) {
   }
 }
 
-// Set up validation handler for when document changes
 documents.onDidChangeContent(change => {
   const joined = index.joins();
   publish(index.update(change.document.uri));
@@ -394,7 +386,6 @@ connection.onDidChangeConfiguration(change => {
     takeSettings(change.settings?.['pico-8-ls']);
   }
 
-  // The diagnostics come from the index, so the files need not be read again.
   fetchGlobalSettings().then(() => publish(index.uris())).catch(e => {
     console.error('Failed to send the diagnostics', e);
   });
@@ -497,7 +488,6 @@ connection.onDidChangeWatchedFiles(change => {
       addCart(filePath);
       newCarts.push(filePath);
     }
-    // A file that belongs to no cart is neither read nor parsed.
     if (!known && !isMember(uri) && !index.isAwaited(uri)) {
       continue;
     }
@@ -660,7 +650,6 @@ connection.onSignatureHelp(guarded<SignatureHelpParams, SignatureHelp | null | u
     return index.signatureHelp(uri, offset, call);
   } catch (e) {
     console.error('Failed to give signature help', e);
-    // With no analysis, only the builtins.
     return builtinSignatureHelp(call);
   }
 }));
