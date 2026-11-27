@@ -856,6 +856,39 @@ describe('ProjectIndex', () => {
     deepStrictEqual([ ...state(), closed.includes(uriOf('.hidden/x.lua')) ], [[ '.hidden/other.p8', 'main.p8' ], false, [], true ]);
   });
 
+  it('sends a file again when it moves into the project of a cart that is opened', () => {
+    const files: Record<string, string> = {};
+    const onDisk = new Map([[ 'main.p8', '#include .hidden/other.p8' ], [ 'other.p8', 'nope = 1\n#include ../lib.lua' ], [ 'lib.lua', 'print(nope)' ]]);
+    const index = indexOver(files, { disk: diskOf(onDisk), isMember: uri => [ uriOf('main.p8'), uriOf('lib.lua') ].includes(uri) || files[nameOf(uri)] !== undefined });
+    index.scan([ uriOf('main.p8'), uriOf('lib.lua') ]);
+    deepStrictEqual(index.warnings(uriOf('lib.lua')).map(formatError), [ 'lib.lua 1:6 undefined variable: nope' ]);
+    files['other.p8'] = onDisk.get('other.p8')!;
+    const resend = index.update(uriOf('.hidden/other.p8'));
+    deepStrictEqual([ resend.includes(uriOf('lib.lua')), index.warnings(uriOf('lib.lua')) ], [ true, []]);
+  });
+
+  it('makes a member a root when the member that includes it is in a project, along a chain of #includes', () => {
+    const onDisk = new Map([[ 'main.p8', '#include f.lua' ], [ 'f.lua', '#include r.lua' ], [ 'r.lua', '#include m.lua' ], [ 'm.lua', '#include .hidden/q.lua' ], [ 'q.lua', 'function fq() end' ]]);
+    const members = [ 'main.p8', 'f.lua', 'r.lua', 'm.lua' ].map(uriOf);
+    const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => members.includes(uri) });
+    index.scan(members);
+    deepStrictEqual(members.map(uri => index.analyses(uri).length), [ 1, 1, 1, 1 ]);
+    deepStrictEqual([ sorted(index.uris()), index.isIncluded(uriOf('.hidden/q.lua')) ], [[ 'f.lua', 'm.lua', 'main.p8', 'r.lua' ], false ]);
+  });
+
+  it('makes only the members of a cycle of #includes roots, and places the files below them as below any root', () => {
+    const cycle = new Map([
+      [ 'a.lua', '#include b.lua\n#include c.lua' ], [ 'b.lua', '#include a.lua' ], [ 'c.lua', '#include .hidden/d.lua\nfunction fc() end' ], [ 'd.lua', 'function fd() end' ],
+    ]);
+    const index = indexOver({}, { disk: diskOf(cycle), isMember: uri => [ 'a.lua', 'b.lua', 'c.lua' ].map(uriOf).includes(uri) });
+    index.scan([ 'a.lua', 'b.lua', 'c.lua' ].map(uriOf));
+    deepStrictEqual([ sorted(index.uris()), index.isIncluded(uriOf('.hidden/d.lua')), index.analyses(uriOf('c.lua')).length ], [[ 'a.lua', 'b.lua', 'c.lua' ], false, 1 ]);
+    const chain = new Map([[ 'a.lua', '#include b.lua\n#include c.lua' ], [ 'b.lua', '#include a.lua' ], [ 'c.lua', '#include e.lua' ], [ 'e.lua', 'function fe() end' ]]);
+    const below = indexOver({}, { disk: diskOf(chain) });
+    below.scan([ ...chain.keys() ].map(uriOf));
+    deepStrictEqual([ 'a.lua', 'b.lua', 'c.lua', 'e.lua' ].map(name => below.analyses(uriOf(name)).length), [ 2, 2, 1, 1 ]);
+  });
+
   it('follows the #includes of a member that no project root includes, though another member includes it', () => {
     const onDisk = new Map([
       [ 'main.p8', '#include f.lua' ], [ 'f.lua', '#include r.lua' ], [ 'r.lua', '#include .hidden/q.lua\nfunction fr() fq() end' ], [ 'q.lua', 'function fq() end' ],

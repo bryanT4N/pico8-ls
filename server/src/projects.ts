@@ -469,15 +469,15 @@ export class ProjectIndex {
     return rebuilt ? unique([ ...this.documents.keys(), ...dropped ]) : unique([ uri, ...containing.flatMap(project => project.files) ]);
   }
 
-  // The project that a file's outline and its Go to Symbol in Workspace entries come from: its own when it is a root, and
-  // otherwise the first that contains it whose analysis did not fail, a failed analysis being empty.
+  // The project that a file's outline and its Go to Symbol in Workspace entries come from: its own when it is a root,
+  // and otherwise the first that contains it whose analysis did not fail, a failed analysis being empty.
   private sourceProject(uri: string): IndexedProject | undefined {
     const containing = this.projectsOf(uri);
     return containing[0]?.root === uri ? containing[0] : containing.find(({ failed }) => !failed);
   }
 
-  // Each file once: a file of the index from the project its outline comes from, and another from the first project whose
-  // analysis has it.
+  // Each file once: a file of the index from the project its outline comes from, and another from the first project
+  // whose analysis has it.
   private symbolItemsOfEachFile(options: OutlineOptions): SymbolItem[] {
     const taken = new Set<string>();
     const lists: SymbolItem[][] = [];
@@ -509,8 +509,8 @@ export class ProjectIndex {
   }
 
   // The roots of the projects: every member cart, which PICO-8 runs on its own, and every other member that no root
-  // #includes, as PICO-8 follows no #include in an included file. Members that #include one another, and that no root
-  // #includes, are roots each.
+  // #includes, as PICO-8 follows no #include in an included file. Members that #include one another in a cycle that no
+  // root #includes are roots each, and the members they #include are then placed as below any other root.
   private findRoots(): string[] {
     const members = [ ...this.documents.keys() ].filter(uri => this.isMember(uri));
     const includers = new Map<string, string[]>(members.map(uri => [ uri, []]));
@@ -523,18 +523,42 @@ export class ProjectIndex {
     }
     const roots = new Set(members.filter(isCartUri));
     const included = new Set<string>();
-    for (let changed = true; changed;) {
-      changed = false;
-      for (const uri of members.filter(member => !roots.has(member) && !included.has(member))) {
-        if (includers.get(uri)!.some(other => roots.has(other))) {
-          included.add(uri);
-          changed = true;
-        } else if (includers.get(uri)!.every(other => included.has(other))) {
-          roots.add(uri);
-          changed = true;
+    const undecided = () => members.filter(member => !roots.has(member) && !included.has(member));
+    const place = () => {
+      for (let changed = true; changed;) {
+        changed = false;
+        for (const uri of undecided()) {
+          if (includers.get(uri)!.some(other => roots.has(other))) {
+            included.add(uri);
+            changed = true;
+          } else if (includers.get(uri)!.every(other => included.has(other))) {
+            roots.add(uri);
+            changed = true;
+          }
         }
       }
+    };
+    place();
+    // Each member left has a member left among its includers, so following them leads into a cycle.
+    const left = new Set(undecided());
+    const inCycle = (start: string) => {
+      const seen = new Set<string>();
+      const stack = [ ...includers.get(start)! ];
+      for (let uri = stack.pop(); uri !== undefined; uri = stack.pop()) {
+        if (uri === start) {
+          return true;
+        }
+        if (left.has(uri) && !seen.has(uri)) {
+          seen.add(uri);
+          stack.push(...includers.get(uri)!);
+        }
+      }
+      return false;
+    };
+    for (const uri of [ ...left ].filter(inCycle)) {
+      roots.add(uri);
     }
+    place();
     return members.filter(uri => !included.has(uri));
   }
 
@@ -567,9 +591,9 @@ export class ProjectIndex {
     return { dropped, changed };
   }
 
-  // Builds the projects with the members as they are now, adds the files that their roots #include and the index does not
-  // have yet, then lets go of the files that are neither members nor in a project. Returns the files that left, whether
-  // a file joined, and whether the roots of the files that stay changed.
+  // Builds the projects with the members as they are now, adds the files that their roots #include and the index does
+  // not have yet, then lets go of the files that are neither members nor in a project. Returns the files that left,
+  // whether a file joined, and whether the roots of the files that stay changed.
   private settle(): { left: string[], joined: boolean, regrouped: boolean } {
     const rootsBefore = new Set(this.projects.map(project => project.root));
     let joined = false;

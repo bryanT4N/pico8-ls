@@ -41,7 +41,7 @@ Full support for `#include` statements:
 A `.lua` file opens as PICO-8 Lua when it belongs to a cart:
 
 - a `.p8` file is in its folder, or in a folder above it inside the workspace folder (a folder whose name starts with a dot does not count; folders reached through links, such as Windows junctions, do), or
-- a cart in the workspace (outside folders whose names start with a dot), a `.lua` file there that the rule above counts, or any file you have open as PICO-8 or PICO-8 Lua `#include`s it directly, wherever it is. As in PICO-8, an `#include` in an included file is not followed, unless that file is a cart of this list, which PICO-8 runs on its own.
+- a cart in the workspace (outside folders whose names start with a dot), a `.lua` file there that the rule above counts, or any file you have open as PICO-8 or PICO-8 Lua `#include`s it directly, wherever it is. As in PICO-8, an `#include` in an included file is not followed, unless that file is a cart of this list, which PICO-8 runs on its own. When files of this list include one another and no other `#include` that is followed reaches them, each of them counts as not included.
 
 Only `#include` in lower case and followed by a space, with nothing but spaces or tabs before it on its line, is an `#include`.
 
