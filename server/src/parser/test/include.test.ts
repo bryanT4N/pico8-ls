@@ -235,6 +235,22 @@ describe('#include', function () {
     assert.strictEqual(resolveIncludeFile(from, 'lib/Util.lua', disk(() => 'util.lua')).path, path.join(game, 'lib', 'Util.lua'));
   });
 
+  it('reads an #include on Windows as Windows reads a path: without the period that ends a folder, and without the periods and spaces that end the name', function () {
+    if (process.platform !== 'win32') {
+      this.skip();
+    }
+    const from = ResolvedFile.fromPath(path.resolve('/carts/game/main.p8'));
+    const game = path.resolve('/carts/game');
+    const names = [ 'lib.lua.', 'lib.lua..', 'lib.lua. .', 'a.p8 ', 'sub./lib.lua', 'sub .\\lib.lua', 'sub /lib.lua', 'sub../lib.lua', '../lib.lua', './lib.lua' ];
+    assert.deepStrictEqual(names.map(name => resolveIncludeFile(from, name).path), [
+      path.join(game, 'lib.lua'), path.join(game, 'lib.lua'), path.join(game, 'lib.lua'), path.join(game, 'a.p8'), path.join(game, 'sub', 'lib.lua'),
+      path.join(game, 'sub ', 'lib.lua'), path.join(game, 'sub ', 'lib.lua'), path.join(game, 'sub..', 'lib.lua'), path.join(path.resolve('/carts'), 'lib.lua'),
+      path.join(game, 'lib.lua'),
+    ]);
+    const chunk = parseWith('#include lib.lua.\n#include sub./a.lua:1', { 'lib.lua': 'x = 1', 'sub/a.lua': 'y = 2\n-->8\nz = 3' });
+    assert.deepStrictEqual([ chunk.errors.map(formatError), assignedNames(chunk.block.body) ], [[], [ 'x', 'z' ]]);
+  });
+
   it('resolves an #include and binds its file under the name the disk gives', () => {
     class CaseResolver extends TestFilesResolver {
       onDiskName(p: string): string | undefined {

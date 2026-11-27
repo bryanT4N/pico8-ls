@@ -74,7 +74,8 @@ function percentEncode(text: string, keep: RegExp): string {
 // case, as through a link, the #include is taken as written.
 export function resolveIncludeFile(currFile: ResolvedFile, includeFilename: string, resolver?: FileResolver): ResolvedFile {
   const currFileDir = path.dirname(currFile.path);
-  const resolvedPath = path.normalize(path.join(currFileDir, includeFilename));
+  const name = process.platform === 'win32' ? asWindowsReads(includeFilename) : includeFilename;
+  const resolvedPath = path.normalize(path.join(currFileDir, name));
   const real = resolver?.onDiskName?.(resolvedPath);
   if (real === undefined) {
     return ResolvedFile.fromPath(resolvedPath);
@@ -95,6 +96,19 @@ export function resolveIncludeFile(currFile: ResolvedFile, includeFilename: stri
     return ResolvedFile.fromPath(resolvedPath);
   }
   return ResolvedFile.fromPath([ ...written.slice(0, keep), ...spelled ].join(path.sep));
+}
+
+// Windows drops the period that ends a folder of a path, and the periods and spaces that end the path, so PICO-8 there
+// opens lib.lua for lib.lua. and sub/lib.lua for sub./lib.lua. A folder that ends in a space keeps it (3.colon-win-dot,
+// 3.colon-win-folder-dot, 3.colon-space, 3.colon-win-folder-space).
+function asWindowsReads(name: string): string {
+  const parts = name.split(/[\\/]/);
+  return parts.map((part, i) => {
+    if (part === '.' || part === '..') {
+      return part;
+    }
+    return i < parts.length - 1 ? part.replace(/([^.])\.$/, '$1') : part.replace(/[. ]+$/, '');
+  }).join('\\');
 }
 
 export interface FileResolver {
