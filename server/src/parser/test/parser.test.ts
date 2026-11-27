@@ -866,7 +866,7 @@ __music__
     const { block: { body }, errors } = parse('a = 0b0101101001011010.1');
     deepEquals(errors, []);
     deepEquals(body, [
-      { type: 'AssignmentStatement', init: [{ type: 'NumericLiteral', raw: '0b0101101001011010.1' }] },
+      { type: 'AssignmentStatement', init: [{ type: 'NumericLiteral', value: 23130.5, raw: '0b0101101001011010.1' }] },
     ]);
   });
 

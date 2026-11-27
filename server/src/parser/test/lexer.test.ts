@@ -105,6 +105,18 @@ describe('Lexer', () => {
       assertNoMoreTokens(tokens);
     });
 
+    it('NumericLiteral - binary, with the value PICO-8 gives it', () => {
+      const tokens = getLexedTokens('0b101 0B1.11 0b1.1 0b.01 0b11. 0b0001 0b0.0000000000000001');
+      assertNextToken(tokens, TokenType.NumericLiteral, 5);
+      assertNextToken(tokens, TokenType.NumericLiteral, 1.75);
+      assertNextToken(tokens, TokenType.NumericLiteral, 1.5);
+      assertNextToken(tokens, TokenType.NumericLiteral, 0.25);
+      assertNextToken(tokens, TokenType.NumericLiteral, 3);
+      assertNextToken(tokens, TokenType.NumericLiteral, 1);
+      assertNextToken(tokens, TokenType.NumericLiteral, 1 / 65536);
+      assertNoMoreTokens(tokens);
+    });
+
     it('NumericLiteral - malformed hexadecimal fraction', () => {
       const { tokens, errors } = lexWithErrors('0x.');
       assertNextToken(tokens, TokenType.NumericLiteral);

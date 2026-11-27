@@ -700,19 +700,21 @@ export default class Lexer {
     while (isBinaryDigit(this.input.charCodeAt(this.index))) {
       ++this.index;
     }
+    const digits = this.input.slice(digitStart, this.index);
 
     // Fraction part is optional
     let foundFraction = false;
+    let fraction = '';
     if ('.' === this.input.charAt(this.index)) {
       foundFraction = true;
-      ++this.index;
-      // Fraction part defaults to 0
+      const fractionStart = ++this.index;
       while (isBinaryDigit(this.input.charCodeAt(this.index))) {
         ++this.index;
       }
       if ('.' === this.input.charAt(this.index)) {
         return this.malformedWithDots(isBinaryDigit);
       }
+      fraction = this.input.slice(fractionStart, this.index);
     }
 
     // A minimum of one binary digit is required, before or after the dot.
@@ -721,7 +723,7 @@ export default class Lexer {
     }
 
     return {
-      value: parseFloat(this.input.slice(this.tokenStart, this.index)),
+      value: (digits === '' ? 0 : parseInt(digits, 2)) + (fraction === '' ? 0 : parseInt(fraction, 2) / Math.pow(2, fraction.length)),
       hasFractionPart: foundFraction,
     };
   }
