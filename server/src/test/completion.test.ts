@@ -11,7 +11,7 @@ function itemsAt(code: string, line: number, column: number, files?: Record<stri
   const request = completionRequestAt(text.split('\n')[line - 1], column);
   return completionItems([ a.analysis ], testFile(filename), indexAt(a, line, column, filename), request, line - 1, column);
 }
-// The names a test cares about: everything but the built-in ones, sorted.
+// sortText 2 marks the built-in names.
 const names = (items: CompletionItem[]) => items.filter(i => !i.sortText!.startsWith('2')).map(i => i.label).sort();
 
 function about(items: CompletionItem[], label: string) {

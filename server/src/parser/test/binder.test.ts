@@ -4,8 +4,7 @@ import { analyzeCode, Analyzed, describeSymbol, getTestFileContents, referenceAt
 
 const lines = (...l: string[]) => l.join('\n');
 
-// Positions are line (from 1) and column (from 0) in the main file. Every name the tests compare has a symbol,
-// so that two missing ones never count as the same.
+// `at` asserts a symbol, so that two missing ones never count as the same.
 function probe(a: Analyzed) {
   return {
     at: (line: number, column: number) => {

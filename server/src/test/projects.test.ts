@@ -210,9 +210,8 @@ type IndexOptions = {
   tweak?: (doc: ProjectDocument) => void, cache?: Map<string, string>, disk?: FileResolver, parsed?: string[], isMember?: (uri: string) => boolean,
 };
 
-// An index over files kept in memory; tests change `files` and call update or remove. `files` are the editor's open
-// documents; the server reads any other file through the resolver, from `cache` while `disk` has it. `parsed` gets the
-// name of each file the index parses. Without `isMember`, every file is a member.
+// `files` are the editor's open documents; the server reads any other file through the resolver, from `cache` while
+// `disk` has it.
 function indexOver(files: Record<string, string>, { tweak, cache = new Map(), disk = NO_DISK, parsed, isMember }: IndexOptions = {}) {
   const openText = (uri: string) => files[nameOf(uri)];
   const resolver = makeFileResolver(openText, cache, disk);
@@ -231,10 +230,8 @@ function indexOver(files: Record<string, string>, { tweak, cache = new Map(), di
   return new ProjectIndex(parseFile, isMember);
 }
 
-// `${file} ${line}:${character}-${line}:${character}`, lines from 1.
 const loc = (l: Location) => `${nameOf(l.uri)} ${l.range.start.line + 1}:${l.range.start.character}-${l.range.end.line + 1}:${l.range.end.character}`;
 
-// The index at line (from 1) and character in the current text of a file.
 const offsetIn = (files: Record<string, string>, name: string, line: number, character: number) =>
   TextDocument.create(uriOf(name), 'pico-8-lua', 0, files[name]).offsetAt({ line: line - 1, character });
 
@@ -402,7 +399,7 @@ describe('ProjectIndex', () => {
     const helper = offsetIn(files, 'main.p8', 5, 0);
     const includeLine = offsetIn(files, 'main.p8', 4, 3);
     deepStrictEqual(index.definitions(uriOf('main.p8'), helper).map(loc), [ 'lib.lua 1:9-1:15' ]);
-    // Its folder is deleted, which the file watcher does not report for lib.lua; then main.p8 is edited.
+    // Nothing tells the index that lib.lua is gone: only the edit of main.p8 finds it.
     onDisk.delete('lib.lua');
     index.update(uriOf('main.p8'));
     deepStrictEqual(index.document(uriOf('main.p8'))!.errors.map(formatError),
@@ -1070,7 +1067,7 @@ describe('ProjectIndex', () => {
     const files: Record<string, string> = {};
     const onDisk = new Map([[ 'main.p8', CART + '#include .shared/lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ]]);
     const index = indexOver(files, { disk: diskOf(onDisk) });
-    // The scan leaves out the dot-folder, and the file watcher does not report it.
+    // The scan leaves out the dot-folder.
     index.scan([ uriOf('main.p8') ]);
     onDisk.set('lib.lua', '-- moved down\n\nfunction helper() end');
     files['lib.lua'] = onDisk.get('lib.lua')!;
@@ -1085,7 +1082,7 @@ describe('ProjectIndex', () => {
     const index = indexOver(files, { disk: diskOf(onDisk) });
     index.scan([ uriOf('main.p8'), uriOf('lib/x.lua') ]);
     const x = onDisk.get('x.lua')!;
-    // The file watcher reports the folder only, which the server leaves out; then main.p8 is edited.
+    // Nothing tells the index that x.lua is gone: only the edit of main.p8 finds it.
     onDisk.delete('x.lua');
     files['main.p8'] = onDisk.get('main.p8')! + '\n';
     const resend = index.update(uriOf('main.p8'));
@@ -1131,7 +1128,7 @@ describe('ProjectIndex', () => {
     const onDisk = new Map([[ 'main.p8', CART + 'only_in_main = 1\n#include x.lua\n#include y.lua\nhelper()' ], [ 'x.lua', 'x = 1' ], [ 'y.lua', 'function helper() return only_in_main end' ]]);
     const { files, index } = onDiskAndScanned(onDisk);
     const [ x, y ] = [ onDisk.get('x.lua')!, onDisk.get('y.lua')! ];
-    // Their folder is deleted, which the file watcher reports for the folder only; then main.p8 is edited.
+    // Nothing tells the index that x.lua and y.lua are gone: only the edit of main.p8 finds them.
     onDisk.delete('x.lua');
     onDisk.delete('y.lua');
     files['main.p8'] = onDisk.get('main.p8')! + '\n';
@@ -1149,7 +1146,8 @@ describe('ProjectIndex', () => {
   it('drops a file included by a removed file when it is gone too', () => {
     const onDisk = new Map([[ 'x.lua', '#include y.lua' ], [ 'y.lua', 'function helper() end' ]]);
     const { files, index } = onDiskAndScanned(onDisk);
-    // x.lua is open when their folder is deleted, and is then closed.
+    // x.lua is open when it is deleted, and is then closed. Nothing tells the index that y.lua is gone: only the
+    // removal of x.lua finds it.
     files['x.lua'] = onDisk.get('x.lua')!;
     index.update(uriOf('x.lua'));
     onDisk.delete('x.lua');

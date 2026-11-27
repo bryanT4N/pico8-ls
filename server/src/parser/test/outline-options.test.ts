@@ -5,7 +5,6 @@ import { outlineLines, outlineLinesWithRanges } from './outline-utils';
 import { ALL_OUTLINE_OPTIONS, analyzeCode, testFile } from './test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
-// The outline of name (the main file by default) with these options.
 function outlineWith(code: string, options: Partial<OutlineOptions>, { files, name, ranges }: { files?: Record<string, string>, name?: string, ranges?: boolean } = {}): string[] {
   const { analysis, texts } = analyzeCode(code, files);
   const file = testFile(name);

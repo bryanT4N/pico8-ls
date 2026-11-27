@@ -5,7 +5,6 @@ import { builtinMarkdown } from '../hover';
 import { builtinSignatureHelp, callContextAt, signatureHelpAt } from '../signature-help';
 
 const lines = (...l: string[]) => l.join('\n');
-// Signature help at line and column, or at the end of the code.
 function helpAt(code: string, line?: number, column?: number) {
   const a = analyzeCode(code);
   return signatureHelpAt([ a.analysis ], testFile(), code, line === undefined ? code.length : indexAt(a, line, column!));

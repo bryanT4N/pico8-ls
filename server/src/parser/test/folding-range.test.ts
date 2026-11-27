@@ -374,8 +374,6 @@ local b = 2
       return a.endLine - b.endLine;
     });
 
-    // Filter out regions that are not of type FoldingRange (e.g., PICO-8 tab regions)
-    // and only compare startLine and endLine.
     const actualFoldingRanges = combinedRanges
       .filter(r => r.startLine !== undefined && r.endLine !== undefined)
       .map(r => ({ startLine: r.startLine, endLine: r.endLine }));

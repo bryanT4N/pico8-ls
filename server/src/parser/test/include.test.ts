@@ -464,7 +464,8 @@ describe('#include', function () {
       'other.p8:fffffff1', 'other.p8:fffffffe', 'other.p8:ffffffff1' ]) {
       assert.deepStrictEqual(included(name), [[], []], name);
     }
-    // The end of each tab and the function of the next are one name, endfunction, as for PICO-8 (si.t28.join.functions.colon).
+    // The end of each tab and the function of the next are one name, endfunction, as for PICO-8
+    // (si.t28.join.functions.colon).
     const whole = [[
       'main_test_file 1:0 \'end\' expected (to close \'function\' at line 4 in other.p8) near \'<eof>\'',
       'other.p8 6:9 assignment operator expected near \'t1\'',

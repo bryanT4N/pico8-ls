@@ -3,7 +3,6 @@ import { Identifier } from '../expressions';
 import { ASTVisitor, VisitableASTNode } from '../visitor';
 import { parse } from './test-utils';
 
-// Records each name with the number of scopes open when it is visited.
 class ScopeDepths extends ASTVisitor<number> {
   seen: string[] = [];
   createDefaultScope(): number {
@@ -38,7 +37,6 @@ describe('ASTVisitor scopes', () => {
   });
 });
 
-// Records each visit with how many nodes are on the stack.
 class Order extends ASTVisitor<number> {
   seen: string[] = [];
   createDefaultScope(): number {

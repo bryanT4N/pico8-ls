@@ -36,8 +36,6 @@ function isClosingBrace(token: Token): boolean {
   return token.type === TokenType.Punctuator && token.value === '}';
 }
 
-// Each version changes one code line, sampled from those edit applies to, as code is changed while it is typed. In a
-// .p8, only the __lua__ section is code.
 function editedVersions(name: string, text: string, count: number, edit: (line: string, index: number) => string | undefined): string[] {
   const lines = text.split('\n');
   let first = 0;
@@ -64,7 +62,6 @@ function editedVersions(name: string, text: string, count: number, edit: (line: 
   });
 }
 
-// As if the line were being typed.
 const cutInHalf = (line: string) => line.trim().length > 1 ? line.slice(0, Math.ceil(line.length / 2)) : undefined;
 
 // x = 1 becomes x =, with the value still to be typed; += and the like too.

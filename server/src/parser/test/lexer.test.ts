@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-call */
 import * as assert from 'assert';
 import { ParseError } from '../errors';
 import { Code, textCode } from '../code';

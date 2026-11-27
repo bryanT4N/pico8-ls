@@ -102,8 +102,6 @@ function parseJob(job: ChildParseJob): ChildParseResult {
     };
   }
 
-  // A throw in the analysis or in a query shows up in `threw` too, along with
-  // what the parse found.
   let noOptions: CodeSymbol[];
   let allOptions: CodeSymbol[];
   const counts: Counts = { queries: 0, hovers: 0, signatureHelps: 0, symbols: 0 };

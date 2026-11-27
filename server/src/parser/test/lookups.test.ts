@@ -5,7 +5,6 @@ import { analyzeCode, Analyzed, definitionsAtPos, describeSymbol, referencesAtPo
 
 const lines = (...l: string[]) => l.join('\n');
 
-// Positions are line (from 1) and column (from 0) in the main file.
 function probe(a: Analyzed) {
   return {
     d: (line: number, column: number) => definitionsAtPos(a, line, column),

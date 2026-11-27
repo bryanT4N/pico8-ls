@@ -59,12 +59,10 @@ describe('Formatter', () => {
     // TODO: write proper tests for these
     it('formats low.p8', () => {
       const _formatted = formatLua(getTestFileContents('low.p8'));
-      // console.log(formatted);
     });
 
     it('formats low.lua', () => {
       const _formatted = formatLua(getTestFileContents('low.lua'));
-      // console.log(formatted);
     });
   });
 
@@ -90,7 +88,6 @@ describe('Formatter', () => {
         const initialContent = getTestFileContents(filename);
         const initialAst = parse(initialContent);
 
-        // call structuredClone before formatChunk because formatChunk inserts comments/whitespace nodes
         const formattedContent = formatLua(initialContent);
         const newAst = parse(formattedContent);
 
@@ -237,7 +234,6 @@ end)()`.trim());
       });
 
       it('preserves parentheses when a property is accessed by value on their inner expression', () => {
-        // Formatter actually removes parens here, transforming this into invalid Lua ...
         const input = `
 local result = ({
   [123] = "xyz"

@@ -15,7 +15,7 @@ import { searchSymbols, symbolItems } from '../workspace-symbols';
 const N = 30000;
 const file = new ResolvedFile('main_test_file', 'main_test_file');
 
-// What the server does with a file when the editor asks for everything. Returns the errors and the outline.
+// What the server does with a file when the editor asks for everything.
 function serve(code: string): { errors: string[], outline: string[] } {
   const chunk = parse(code);
   const analysis = analyze(chunk);

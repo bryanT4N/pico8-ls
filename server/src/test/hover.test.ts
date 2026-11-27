@@ -37,7 +37,7 @@ describe('hoverMarkdown', () => {
     strictEqual(hoverAt(code, 7, 6), block('(global) g_debug = false'));
     strictEqual(hoverAt(code, 7, 15), block('(global) speed = -2'));
     strictEqual(hoverAt(code, 7, 22), block('(global) title = "mole mole"'));
-    // Its raw has 42 characters.
+    // A raw over 40 characters is not shown.
     strictEqual(hoverAt(code, 7, 29), block('(global) long'));
     strictEqual(hoverAt(code, 7, 35), block('(global) player = {\u2026}'));
     strictEqual(hoverAt(code, 7, 43), block('(global) entity'));
@@ -78,7 +78,6 @@ describe('hoverMarkdown', () => {
     strictEqual(hoverAt(one, 5, 27), block('function entity:become(state)') + '\n\nchanges state');
     const two = lines('entity = {}', 'function entity:become(state) end', 'bee = {}', 'function bee:become(s) end', 'guy = {}', 'function guy:update() self:become("idle") end');
     strictEqual(hoverAt(two, 6, 27), block('function entity:become(state)') + '\n\n---\n\n' + block('function bee:become(s)'));
-    // Not a call.
     strictEqual(hoverAt(lines('entity = {}', 'function entity:become(state) end', 'guy = {}', 'function guy:update() return self.become end'), 4, 34), undefined);
   });
 
@@ -108,7 +107,6 @@ describe('hoverMarkdown', () => {
   it('renders LDoc tags as TypeScript does', () => {
     const code = lines('x = 1', '--- Moves a thing.', '-- @param p the thing', '-- @param dx how far,', '--   in pixels', '-- @return the new x', '-- @return',
       'function move(p, dx) return p end');
-    // The empty @return is left out.
     strictEqual(hoverAt(code, 8, 9),
       block('function move(p, dx)') + '\n\nMoves a thing.\n\n*@param* `p` \u2014 the thing  \n\n*@param* `dx`  \nhow far,\nin pixels  \n\n*@return* \u2014 the new x');
   });

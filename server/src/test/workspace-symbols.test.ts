@@ -7,7 +7,6 @@ import { SymbolItem, searchSymbols, symbolItems } from '../workspace-symbols';
 
 const lines = (...l: string[]) => l.join('\n');
 const shown = (item: SymbolItem) => `${item.label} [${item.container}] ${item.selectionLoc.start.line}:${item.selectionLoc.start.column}`;
-// The main file's items as `label [container] line:column`, by place.
 function itemsIn(code: string, files?: Record<string, string>, options?: OutlineOptions): string[] {
   const items = symbolItems(analyzeCode(code, files).analysis, options).get(testFile().fileURL) ?? [];
   return [ ...items ].sort((a, b) => a.selectionLoc.start.index - b.selectionLoc.start.index).map(shown);

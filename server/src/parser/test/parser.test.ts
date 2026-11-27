@@ -850,8 +850,8 @@ __music__
     eq(errors.length, 0, 'Unexpected errors: ' + errors.map(e => `[${e.bounds.start.line}:${e.bounds.end.column}] ${e.message}`).join(','));
   });
 
-  // PICO-8 0.2.7 ends the one-line if of line 13 at its else, so the end of line 14 closes the for and the second end of
-  // line 15 closes nothing.
+  // PICO-8 0.2.7 ends the one-line if of line 13 at its else, so the end of line 14 closes the for and the second end
+  // of line 15 closes nothing.
   it('reports in minified pico-8 code - hop the end that PICO-8 rejects', () => {
     const { errors } = parse(getTestFileContents('tweettweetjam-hop.p8'));
     deepEquals(errors.map(formatError), [ 'main_test_file 15:4 unexpected keyword \'end\' near \'function\'' ]);

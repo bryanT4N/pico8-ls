@@ -77,7 +77,6 @@ export function testFile(filename = 'main_test_file'): ResolvedFile {
   return filename === 'main_test_file' ? new ResolvedFile(filename, filename) : ResolvedFile.fromPath(path.normalize(filename));
 }
 
-// line counts from 1 and column from 0. A '\r' at the end of a line is part of that line.
 export function indexAt(a: Analyzed, line: number, column: number, filename = 'main_test_file'): number {
   return a.texts[filename].split('\n').slice(0, line - 1).reduce((index, text) => index + text.length + 1, 0) + column;
 }
@@ -129,7 +128,6 @@ export type ChildParseResult = {
   // Hover and signature help calls that returned, whatever they gave: on some files signature help never finds a call.
   hovers: number,
   signatureHelps: number,
-  // Workspace symbol items built.
   symbols: number,
 };
 

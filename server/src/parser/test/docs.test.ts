@@ -3,7 +3,6 @@ import { Doc, Documentation, documentationOf, parseDoc } from '../analysis/docs'
 import { analyzeCode, symbolAt } from './test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
-// The doc of the symbol at line and column of filename (the main file when left out).
 function docAt(code: string, line: number, column: number, files?: Record<string, string>, filename?: string): Doc | undefined {
   const a = analyzeCode(code, files);
   return documentationOf(a.analysis, symbolAt(a, line, column, filename)!).doc;
