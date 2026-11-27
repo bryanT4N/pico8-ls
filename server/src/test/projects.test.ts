@@ -878,11 +878,64 @@ describe('ProjectIndex', () => {
     deepStrictEqual([ index.isAwaited(uriOf('gone.lua')), index.isIncluded(uriOf('gone.lua')) ], [ false, true ]);
   });
 
-  it('takes a file as included only when a member includes it, as PICO-8 follows no #include in an included file', () => {
-    const onDisk = new Map([[ 'main.p8', '#include .shared/a.lua' ], [ 'a.lua', '#include b.lua' ], [ 'b.lua', 'function deep() end' ]]);
+  it('does not follow the #includes of a file that a member includes when it is opened, whatever comes after', () => {
+    const files: Record<string, string> = {};
+    const onDisk = new Map([[ 'main.p8', '#include .shared/a.lua' ], [ 'a.lua', '#include b.lua\nfunction fa() end' ], [ 'b.lua', 'function fb() end' ]]);
+    const index = indexOver(files, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') || files[nameOf(uri)] !== undefined });
+    index.scan([ uriOf('main.p8') ]);
+    const joins = index.joins();
+    const state = () => [ sorted(index.uris()), index.isIncluded(uriOf('.shared/a.lua')), index.isIncluded(uriOf('.shared/b.lua')), index.joins() ];
+    files['a.lua'] = onDisk.get('a.lua')!;
+    index.update(uriOf('.shared/a.lua'));
+    deepStrictEqual(state(), [[ '.shared/a.lua', 'main.p8' ], true, false, joins ]);
+    index.prune();
+    deepStrictEqual(state(), [[ '.shared/a.lua', 'main.p8' ], true, false, joins ]);
+  });
+
+  it('settles membership as soon as a file is opened or closed', () => {
+    const files: Record<string, string> = {};
+    const onDisk = new Map([[ 'main.p8', '#include .shared/n.lua' ], [ 'n.lua', '#include ../l.lua' ], [ 'l.lua', '#include .hidden/z.lua' ], [ 'z.lua', 'function fz() end' ]]);
+    const isMember = (uri: string) => [ uriOf('main.p8'), uriOf('l.lua') ].includes(uri) || files[nameOf(uri)] !== undefined;
+    const index = indexOver(files, { disk: diskOf(onDisk), isMember });
+    index.scan([ uriOf('main.p8'), uriOf('l.lua') ]);
+    const state = () => [ sorted(index.uris()), index.isIncluded(uriOf('.hidden/z.lua')) ];
+    deepStrictEqual(state(), [[ '.hidden/z.lua', '.shared/n.lua', 'l.lua', 'main.p8' ], true ]);
+    // Open, n.lua is a member, and l.lua, which it includes, no longer follows its #include.
+    files['n.lua'] = onDisk.get('n.lua')!;
+    const opened = index.update(uriOf('.shared/n.lua'));
+    deepStrictEqual([ ...state(), opened.includes(uriOf('.hidden/z.lua')) ], [[ '.shared/n.lua', 'l.lua', 'main.p8' ], false, true ]);
+    delete files['n.lua'];
+    index.update(uriOf('.shared/n.lua'));
+    deepStrictEqual(state(), [[ '.hidden/z.lua', '.shared/n.lua', 'l.lua', 'main.p8' ], true ]);
+  });
+
+  it('does not follow the #includes of a member that a member includes, as PICO-8 follows no #include in an included file', () => {
+    const onDisk = new Map([[ 'main.p8', '#include lib.lua' ], [ 'lib.lua', '#include ../shared/x.lua\nfunction l() end' ], [ 'x.lua', 'function x() end' ]]);
+    const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => [ uriOf('game/main.p8'), uriOf('game/lib.lua') ].includes(uri) });
+    index.scan([ uriOf('game/main.p8'), uriOf('game/lib.lua') ]);
+    deepStrictEqual([ sorted(index.uris()), index.isIncluded(uriOf('game/lib.lua')), index.isIncluded(uriOf('shared/x.lua')) ],
+      [[ 'game/lib.lua', 'game/main.p8' ], true, false ]);
+  });
+
+  it('does not follow the #includes of a cart that a member includes whole and that is not a member', () => {
+    const onDisk = new Map([[ 'main.p8', '#include .hidden/other.p8' ], [ 'other.p8', '#include x.lua\nfunction o() end' ], [ 'x.lua', 'function x() end' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') });
     index.scan([ uriOf('main.p8') ]);
-    deepStrictEqual([ index.isIncluded(uriOf('.shared/a.lua')), index.isIncluded(uriOf('.shared/b.lua')) ], [ true, false ]);
+    deepStrictEqual([ sorted(index.uris()), index.isIncluded(uriOf('.hidden/x.lua')) ], [[ '.hidden/other.p8', 'main.p8' ], false ]);
+  });
+
+  it('follows the #includes of a .lua member that no member includes', () => {
+    const onDisk = new Map([[ 'main.p8', 'x = 1' ], [ 'tool.lua', '#include ../shared/x.lua' ], [ 'x.lua', 'function x() end' ]]);
+    const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => [ uriOf('game/main.p8'), uriOf('game/tool.lua') ].includes(uri) });
+    index.scan([ uriOf('game/main.p8'), uriOf('game/tool.lua') ]);
+    deepStrictEqual([ sorted(index.uris()), index.isIncluded(uriOf('shared/x.lua')) ], [[ 'game/main.p8', 'game/tool.lua', 'shared/x.lua' ], true ]);
+  });
+
+  it('waits only for the files that a cart or a member that no member includes #includes', () => {
+    const onDisk = new Map([[ 'main.p8', '#include .shared/a.lua\n#include gone.lua' ], [ 'a.lua', '#include b.lua' ]]);
+    const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') });
+    index.scan([ uriOf('main.p8') ]);
+    deepStrictEqual([ index.isAwaited(uriOf('gone.lua')), index.isAwaited(uriOf('.shared/b.lua')), index.awaitedUnder(uriOf('.shared')) ], [ true, false, []]);
   });
 
   it('lists the files under a folder that an #include waits for, which a scan of them links', () => {

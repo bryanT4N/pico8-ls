@@ -304,8 +304,9 @@ type IndexedProject = { root: string, files: string[], analysis: Analysis, warni
 // its outline, lookups and warnings from the projects that contain it. Every change is analysed before the call
 // returns, so a request that comes after it sees the new text.
 //
-// The index holds the members, which the server names, and the files they #include, wherever those are, as PICO-8 reads
-// them. A file that is neither leaves the index, and its diagnostics are cleared.
+// The index holds the members, which the server names, and the files that member roots #include, wherever those are, as
+// PICO-8 reads them. A member root is a member cart, or a member that no member #includes: PICO-8 follows no #include
+// in an included file. A file that is none of these leaves the index, and its diagnostics are cleared.
 export class ProjectIndex {
   // Each file's own parse, by URI.
   private readonly documents: ParsedDocumentsMap = new Map();
@@ -314,6 +315,8 @@ export class ProjectIndex {
   private joined = 0;
   private readonly arrived = new Set<string>();
   private awaited: Set<string> | undefined;
+  // The members when the index last settled.
+  private settledMembers = new Set<string>();
 
   constructor(private readonly parseFile: ParseFile, private readonly isMember: (uri: string) => boolean = () => true) {}
 
@@ -395,19 +398,18 @@ export class ProjectIndex {
     return this.joined;
   }
 
-  // Whether a member #includes uri, as only a member's #include brings a file into the index.
+  // Whether a member root #includes uri, as only such an #include brings a file into the index.
   isIncluded(uri: string): boolean {
-    return [ ...this.documents ].some(([ other, document ]) =>
-      other !== uri && this.isMember(other) && (document.chunk.includes ?? []).some(include => include.resolvedFile.fileURL === uri));
+    return this.memberRoots().some(root => root !== uri && includedUris(this.documents.get(root)).has(uri));
   }
 
-  // Whether a file of the index has an #include of uri that it could not find, so that the file joins when it appears
+  // Whether a member root has an #include of uri that it could not find, so that the file joins when it appears
   // although it is not a member.
   isAwaited(uri: string): boolean {
     return this.awaitedFiles().has(uri);
   }
 
-  // The files under the folder with this URI that #includes of the index could not find.
+  // The files under the folder with this URI that the #includes of member roots could not find.
   awaitedUnder(folder: string): string[] {
     return [ ...this.awaitedFiles() ].filter(uri => uri.startsWith(folder + '/'));
   }
@@ -546,9 +548,10 @@ export class ProjectIndex {
       this.buildProjects();
       rebuilt = true;
     }
-    // An edit to a member that still includes what it included before, as most keystrokes are, moves no file in or out.
+    // An edit to a member that still includes what it included before, as most keystrokes are, moves no file in or out;
+    // a file that has become a member since the index last settled, as one just opened, can.
     let left: string[] = [];
-    if (rebuilt || !this.isMember(uri)) {
+    if (rebuilt || !this.isMember(uri) || !this.settledMembers.has(uri)) {
       const settled = this.settle();
       left = settled.left;
       rebuilt ||= left.length > 0 || settled.joined;
@@ -626,18 +629,16 @@ export class ProjectIndex {
     return { dropped, changed };
   }
 
-  // Adds the files that members #include and the index does not have yet, then lets go of the files that are neither
-  // members nor included by one, and builds the projects again when a file joined or left. Returns the files that left
-  // and whether a file joined. A file that leaves can have been the only includer of a member, which is then the root of
-  // its own project.
+  // Adds the files that member roots #include and the index does not have yet, then lets go of the files that are
+  // neither members nor included by a member root, and builds the projects again when a file joined or left. Returns the
+  // files that left and whether a file joined. A file that leaves can have been the only includer of a member, which is
+  // then the root of its own project.
   private settle(): { left: string[], joined: boolean } {
     let joined = false;
     const tried = new Set<string>();
-    const includedByMembers = () => [ ...this.documents ]
-      .filter(([ uri ]) => this.isMember(uri))
-      .flatMap(([ , document ]) => [ ...includedUris(document) ]);
+    const includedByMemberRoots = () => this.memberRoots().flatMap(uri => [ ...includedUris(this.documents.get(uri)) ]);
     for (;;) {
-      const missing = unique(includedByMembers()).filter(uri => !this.documents.has(uri) && !tried.has(uri));
+      const missing = unique(includedByMemberRoots()).filter(uri => !this.documents.has(uri) && !tried.has(uri));
       if (missing.length === 0) {
         break;
       }
@@ -649,15 +650,26 @@ export class ProjectIndex {
         }
       }
     }
-    const kept = new Set([ ...[ ...this.documents.keys() ].filter(uri => this.isMember(uri)), ...includedByMembers() ]);
+    const members = [ ...this.documents.keys() ].filter(uri => this.isMember(uri));
+    const kept = new Set([ ...members, ...includedByMemberRoots() ]);
     const left = [ ...this.documents.keys() ].filter(uri => !kept.has(uri));
     for (const uri of left) {
       this.drop(uri);
     }
+    this.settledMembers = new Set(members);
+    this.awaited = undefined;
     if (left.length > 0 || joined) {
       this.buildProjects();
     }
     return { left, joined };
+  }
+
+  // The members whose #includes bring files into the index: a cart, which PICO-8 runs on its own, and a file that no
+  // member #includes.
+  private memberRoots(): string[] {
+    const members = [ ...this.documents.keys() ].filter(uri => this.isMember(uri));
+    const included = new Set(members.flatMap(uri => [ ...includedUris(this.documents.get(uri)) ].filter(other => other !== uri)));
+    return members.filter(uri => isCartUri(uri) || !included.has(uri));
   }
 
   private store(uri: string, document: ProjectDocument): boolean {
@@ -677,7 +689,7 @@ export class ProjectIndex {
   }
 
   private awaitedFiles(): Set<string> {
-    return this.awaited ??= new Set([ ...this.documents.values() ].flatMap(document => (document.chunk.unresolvedIncludes ?? []).map(file => file.fileURL)));
+    return this.awaited ??= new Set(this.memberRoots().flatMap(uri => (this.documents.get(uri)!.chunk.unresolvedIncludes ?? []).map(file => file.fileURL)));
   }
 
   // A project's analysis comes from its root's parse alone, so it holds until the root is parsed again.
