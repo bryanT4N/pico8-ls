@@ -528,15 +528,16 @@ __music__
       assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 hexadecimal digit expected near \'\\xZ\'' ]);
     });
 
-    it('ends a string at a backslash at the end of the file', () => {
+    it('ends a string unfinished at a backslash at the end of the code, which takes the line break PICO-8 reads after it', () => {
       const { tokens, errors } = lexWithErrors('"a\\');
       assert.deepStrictEqual(tokens.map(t => t.bounds.end.index), [ 3, 3 ]);
-      assertNextToken(tokens, TokenType.StringLiteral, 'a');
+      assertNextToken(tokens, TokenType.StringLiteral, 'a\n');
       assertNoMoreTokens(tokens);
-      assert.deepStrictEqual(errors.map(formatLexError), [
-        '1:0 invalid escape sequence near \'\\\'',
-        '1:0 unfinished string near \'"a\'',
-      ]);
+      assert.deepStrictEqual(errors.map(formatLexError), [ '1:0 unfinished string near \'"a\n\'' ]);
+      const header = 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\n';
+      for (const cart of [ 'x="a\\\n__gfx__\n0000\n', 'x=1\n-->8\nx="a\\\n__gfx__\n', 'x="a\\' ]) {
+        assert.deepStrictEqual(lexWithErrors(header + cart).errors.map(e => e.message), [ 'unfinished string near \'"a\n\'' ], cart);
+      }
     });
 
     it('runs an unterminated long comment to the end of the file', () => {

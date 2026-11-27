@@ -790,9 +790,9 @@ export default class Lexer {
     }
     }
 
-    // PICO-8 pastes a file in with two line breaks after it, and a \ that ends the file takes the first
-    // (si.eff.str.short-bs-no-final).
-    if (this.pasted && this.index >= this.length) {
+    // PICO-8 reads a line break after the code, and pastes a file in with two line breaks after it; a \ that ends the
+    // code takes the first, and the string is unfinished (si.eff.str.short-bs-no-final, 4.strtext.unf-bs-end).
+    if (this.index >= this.length) {
       return '\n';
     }
     this.addError(errMessages.invalidEscape, '\\' + this.input.slice(sequenceStart, this.index + 1));
