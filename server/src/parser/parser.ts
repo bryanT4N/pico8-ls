@@ -42,7 +42,7 @@ import {
 } from './statements';
 import { Token, TokenType } from './tokens';
 import * as path from 'path';
-import { ASTNode, Bounds } from './types';
+import { ASTNode, Bounds, boundsClone, CodeLocation } from './types';
 import Operators from './operators';
 
 // PICO-8 takes 256 #include lines in a cart and stops at the next one with "too many #includes" (3.includes-257).
@@ -61,17 +61,25 @@ export type ParserOptions = {
 export default class Parser {
   includeFileResolver: FileResolver;
 
-  // A stack of lexers representing the file and any '#include'ed files we're
-  // currently working with.
-  //
-  // The lexer at position 0 (bottom of the stack) is the lexer for the "main"
-  // file that we're working with.
-  lexerStack: {
-    lexer: Lexer,
-    // The IncludeStatement #including the file that prompted the creation of
-    // this lexer.
-    includeStatement: IncludeStatement | null,
-  }[];
+  // The main file's lexer. Every token is read through it, those of the files that its #include lines paste in too
+  // (pull).
+  readonly lexer: Lexer;
+
+  // The lexers being read from: the main file's, and above it the one of the file that an #include line pastes in.
+  private readonly lexerStack: Lexer[];
+
+  // The files pasted in, in the order of their #include lines, by the ResolvedFile of each, which its lexer alone has:
+  // the lexer, and where the #include line starts in the main file.
+  private readonly pasted = new Map<ResolvedFile, { lexer: Lexer, at: number }>();
+
+  // The #include lines not yet placed in a block, each with the token that came after it (placeIncludes).
+  private unplaced: { statement: IncludeStatement, next?: Token }[] = [];
+
+  // The end-of-file token of each lexer that has read to its end.
+  private readonly ends = new Map<ResolvedFile, Token>();
+
+  // The locations of the nodes that end in another file than the one they start in (finishNode).
+  private readonly crossing: Bounds[] = [];
 
   // Locations are stored in a stack as a `Marker` object consisting of both
   // `loc` and `range` data. Once a `Marker` is popped off the stack an end
@@ -100,10 +108,9 @@ export default class Parser {
   constructor(filename: ResolvedFile, input: string, options: ParserOptions = {}) {
     this.includeFileResolver = options?.includeFileResolver || new RealFileResolver();
 
-    this.lexerStack = [{
-      lexer: new Lexer(input, filename),
-      includeStatement: null,
-    }];
+    this.lexer = new Lexer(input, filename);
+    this.lexer.read = () => this.pull();
+    this.lexerStack = [ this.lexer ];
   }
 
   isCart(): boolean {
@@ -116,16 +123,6 @@ export default class Parser {
 
   // The top-level file being parsed (everything else is #include-d from it)
   get mainFile(): ResolvedFile {
-    return this.lexerStack[0].lexer.filename;
-  }
-
-  // Returns the top lexer on the stack
-  get lexer(): Lexer {
-    return this.lexerStack[this.lexerStack.length - 1].lexer;
-  }
-
-  // Returns the filename of the current lexer
-  get filename(): ResolvedFile {
     return this.lexer.filename;
   }
 
@@ -164,6 +161,9 @@ export default class Parser {
     if (location && endingToken) {
       location.complete(endingToken.bounds.end);
       location.bless(node as any as ASTNode);
+      if (endingToken.bounds.end.filename !== location.loc.start.filename) {
+        this.crossing.push(location.loc);
+      }
     }
 
     // A node belongs to an included file if it *started* in one.
@@ -233,7 +233,6 @@ export default class Parser {
 
   parseChunk(): Chunk {
     this.lexerNext();
-    this.markLocation();
     const flowContext = new FlowContext(this.gotoErrors, found => this.stoppedBefore(found));
     flowContext.allowVararg = true;
     flowContext.pushScope();
@@ -243,7 +242,7 @@ export default class Parser {
     } else if (this.isCart()) {
       // PICO-8 rejects a return in a cart's outermost block, also as its last statement (4.return.end-bare), and a
       // goto there past a local to a label at the end, which Lua allows at the end of a block (4.goto.end-of-chunk-local).
-      const last = body.body[body.body.length - 1];
+      const last = lastCodeStatement(body.body);
       if (last?.type === 'ReturnStatement') {
         this.errors.push(errors.createErr(last.loc!, errMessages.returnInCart));
       }
@@ -252,18 +251,109 @@ export default class Parser {
     flowContext.endFunction(this.token);
 
     this.addLexerErrors(this.lexer);
+    for (const { lexer } of this.pasted.values()) {
+      this.addLexerErrors(lexer);
+    }
+    // The parse can stop in a file pasted in.
+    for (const lexer of this.lexerStack.slice(1)) {
+      this.takeComments(lexer);
+    }
     for (const error of this.gotoErrors) {
       this.errors.push(error);
     }
     this.sortErrors();
 
+    this.pushLocation(new Marker(body.loc!));
     const chunk = this.finishNode(AST.chunk(body, this.errors));
     chunk.includes = this.includes;
     chunk.comments = this.lexer.comments;
     chunk.includedComments = this.includedComments;
     chunk.unresolvedIncludes = this.unresolvedIncludes;
 
+    // The outline, folding and the analysis take a node that starts in one file and ends in another to end at the end
+    // of the code of the file it starts in.
+    for (const loc of this.crossing) {
+      loc.end = this.codeEnd(loc.start.filename);
+    }
+
     return chunk;
+  }
+
+  private codeEnd(file: ResolvedFile): CodeLocation {
+    let end = this.ends.get(file);
+    if (!end) {
+      // The parse stopped before the end of the file.
+      const lexer = new Lexer(this.lexerOf(file).input, file);
+      do {
+        end = lexer.lex();
+      } while (end.type !== TokenType.EOF);
+    }
+    return end.bounds.end;
+  }
+
+  private lexerOf(file: ResolvedFile): Lexer {
+    return file === this.lexer.filename ? this.lexer : this.pasted.get(file)!.lexer;
+  }
+
+  private takeComments(lexer: Lexer): void {
+    for (const comment of lexer.comments) {
+      this.includedComments.push(comment);
+    }
+  }
+
+  // The next token of the main file with the files that its #include lines paste in, as PICO-8 pastes them: a file's
+  // tokens come in place of its #include line, and the main file's go on after the file's last.
+  private pull(): Token {
+    for (;;) {
+      const lexer = this.lexerStack[this.lexerStack.length - 1];
+      const token = lexer.lex();
+      if (token.type === TokenType.EOF) {
+        this.ends.set(lexer.filename, token);
+        if (lexer !== this.lexer) {
+          this.lexerStack.pop();
+          this.takeComments(lexer);
+          continue;
+        }
+      } else if (lexer === this.lexer && token.type === TokenType.Punctuator && token.value === '#' && this.isIncludeLine(token)) {
+        this.paste(lexer.readRestOfLine());
+        continue;
+      }
+      for (let i = this.unplaced.length - 1; i >= 0 && !this.unplaced[i].next; i--) {
+        this.unplaced[i].next = token;
+      }
+      return token;
+    }
+  }
+
+  // An #include line: the tokens of its file are read next. Wherever the line is, the file is listed in includes, and
+  // where a statement can start, the line is a statement too (placeIncludes).
+  private paste(line: Token): void {
+    // PICO-8 finds the file with the spaces and tabs around the name left out (3.trailing-spaces, 3.two-spaces-before).
+    const filename = (line.value as string).slice('#include '.length).replace(/^[ \t]+|[ \t]+$/g, '');
+    const statement: IncludeStatement = { type: 'IncludeStatement', filename, loc: boundsClone(line.bounds), included: false };
+    this.unplaced.push({ statement });
+    // PICO-8 takes the name up to its first colon as the file's, whatever the file is, and the rest as a tab
+    // (3.colon-two-p8, 3.colon-before, 3.colon-lua-p8).
+    const colon = filename.indexOf(':');
+    const resolvedInclude = resolveIncludeFile(this.mainFile, colon < 0 ? filename : filename.slice(0, colon), this.includeFileResolver);
+    statement.resolvedFile = resolvedInclude;
+    const text = this.includedText(statement, resolvedInclude, colon < 0 ? undefined : filename.slice(colon + 1));
+    if (text !== undefined) {
+      const lexer = new Lexer(text, resolvedInclude);
+      this.lexerStack.push(lexer);
+      this.pasted.set(resolvedInclude, { lexer, at: line.bounds.start.index });
+    }
+  }
+
+  // The #include lines that come right before this.token, at the start of a statement or the end of a block, are
+  // statements of the block. One read in the middle of a statement, as for the value after an =, is not.
+  private placeIncludes(block: Statement[]): void {
+    while (this.unplaced.length > 0 && this.unplaced[0].next !== this.lexer.lookahead) {
+      const { statement, next } = this.unplaced.shift()!;
+      if (next === this.token) {
+        block.push(statement);
+      }
+    }
   }
 
   addLexerErrors(lexer: Lexer) {
@@ -273,17 +363,20 @@ export default class Parser {
     }
   }
 
-  // Whether Lua stops at an error before it is done reading found: one found so far, or one that a lexer still reading
-  // has found before there. The lexer of the file being read has read up to found, and each lexer under it up to the
-  // #include of the next one.
+  // Whether Lua stops at an error before it is done reading found: one found so far, or one that a lexer has found
+  // before there. The main file is read up to found, or up to the #include line of the file that found is in, and each
+  // file pasted in before that whole.
   private stoppedBefore(found: Token): boolean {
     if (this.errors.length > 0 || this.gotoErrors.length > 0) {
       return true;
     }
-    return this.lexerStack.some(({ lexer }, i) => {
-      const readTo = i + 1 < this.lexerStack.length ? this.lexerStack[i + 1].includeStatement!.loc!.start.index : found.bounds.end.index;
-      return lexer.errors.some(error => error.bounds.start.index < readTo);
-    });
+    const errorBefore = (lexer: Lexer, index: number) => lexer.errors.some(error => error.bounds.start.index < index);
+    const foundIn = this.pasted.get(found.bounds.start.filename);
+    const mainReadTo = foundIn ? foundIn.at : found.bounds.end.index;
+    if (errorBefore(this.lexer, mainReadTo) || (foundIn && errorBefore(foundIn.lexer, found.bounds.end.index))) {
+      return true;
+    }
+    return [ ...this.pasted.values() ].some(({ lexer, at }) => at < mainReadTo && lexer.errors.length > 0);
   }
 
   sortErrors() {
@@ -309,9 +402,9 @@ export default class Parser {
   //     block ::= {stat} [retstat]
 
   parseBlock(flowContext: FlowContext, endingFunction: (token: Token) => boolean = isBlockFollow): Block {
-    this.pushLocation(this.createLocationMarker());
-
     const block: Statement[] = [];
+    this.placeIncludes(block);
+    this.pushLocation(block.length > 0 ? new Marker(block[0].loc!) : this.createLocationMarker());
 
     // A newline is a token only in a one-line statement, whose line ends every block in it, as in PICO-8.
     const ends = (token: Token) => endingFunction(token) || token.type === TokenType.Newline;
@@ -326,38 +419,20 @@ export default class Parser {
         const statement = this.parseStatement(flowContext);
         this.levels--;
 
-        if (statement?.type === 'IncludeStatement') {
-          // PICO-8 takes the name up to its first colon as the file's, whatever the file is, and the rest as a tab
-          // (3.colon-two-p8, 3.colon-before, 3.colon-lua-p8).
-          const colon = statement.filename.indexOf(':');
-          const fileName = colon < 0 ? statement.filename : statement.filename.slice(0, colon);
-          const resolvedInclude = resolveIncludeFile(this.filename, fileName, this.includeFileResolver);
-          statement.resolvedFile = resolvedInclude;
-
-          // Pushed on its own so the #include stays when its file throws, and
-          // the file's statements one by one, since spreading a huge file's
-          // statements as arguments overflows the stack.
+        // Statements are only added if they are returned, this allows us to
+        // ignore some statements, such as EmptyStatement.
+        if (statement) {
           block.push(statement);
-          const tab = colon < 0 ? undefined : statement.filename.slice(colon + 1);
-          for (const includedStatement of this.parseIncludedFile(statement, resolvedInclude, flowContext, tab)) {
-            block.push(includedStatement);
+        }
+        // A return is the last statement of its block, and has taken its own ;: what follows it is for the block's
+        // closer to report.
+        if (statement?.type === 'ReturnStatement') {
+          if (!endingFunction(this.token)) {
+            break;
           }
         } else {
-          // Statements are only added if they are returned, this allows us to
-          // ignore some statements, such as EmptyStatement.
-          if (statement) {
-            block.push(statement);
-          }
-          // A return is the last statement of its block, and has taken its own ;: what follows it is for the block's
-          // closer to report.
-          if (statement?.type === 'ReturnStatement') {
-            if (!endingFunction(this.token)) {
-              break;
-            }
-          } else {
-            // optional semicolon ending the statement
-            this.lexer.consume(';');
-          }
+          // optional semicolon ending the statement
+          this.lexer.consume(';');
         }
       } catch (e) {
         if (errors.isParseError(e)) {
@@ -392,7 +467,9 @@ export default class Parser {
           throw e;
         }
       }
+      this.placeIncludes(block);
     }
+    this.placeIncludes(block);
 
     // A label right before `until` is not at the end of its block for Lua, which checks the gotos to it there.
     if (this.token.type === TokenType.Keyword && this.token.value === 'until') {
@@ -402,15 +479,14 @@ export default class Parser {
     return this.finishNode(AST.block(block), true);
   }
 
-  // An #included file is parsed to its own end of file, so a statement or
-  // block left open in it can't run on into the file that includes it.
-  parseIncludedFile(statement: IncludeStatement, resolvedInclude: ResolvedFile, flowContext: FlowContext, tabSuffix?: string): Statement[] {
+  // The text that an #include pastes in, or undefined when there is none, with the error saying why.
+  private includedText(statement: IncludeStatement, resolvedInclude: ResolvedFile, tabSuffix?: string): string | undefined {
     if (this.includeParses >= MAX_INCLUDE_PARSES) {
       if (!this.reportedTooManyIncludeParses) {
         this.reportedTooManyIncludeParses = true;
         this.errors.push(new errors.ParseError(`too many #includes (limit is ${MAX_INCLUDE_PARSES})`, statement.loc!));
       }
-      return [];
+      return undefined;
     }
 
     if (!this.includeFileResolver.doesFileExist(resolvedInclude.path)) {
@@ -441,57 +517,42 @@ export default class Parser {
       const tabText = tab >= 0 && tab < 16 ? tabOf(fileContents, tab) : '';
       if (tabText === undefined) {
         this.errors.push(this.getIncludeStatementError(statement, `${path.basename(resolvedInclude.path)} has no tab ${tab}`));
-        return [];
+        return undefined;
       }
       fileContents = tabText;
     }
 
     this.includeParses++;
-    const newLexer = new Lexer(fileContents, resolvedInclude);
-    this.lexerStack.push({
-      lexer: newLexer,
-      includeStatement: statement,
-    });
-
-    // A statement that throws part-way through leaves its location marker
-    // behind; restoring it keeps that out of the including file.
-    const locationDepth = this.locations.length;
-
-    try {
-      newLexer.next();
-      const body = this.parseBlock(flowContext, isEndOfFile).body;
-      if (this.token.type !== TokenType.EOF) {
-        this.errors.push(errors.createErrForToken(this.token, errMessages.expected, '<eof>', this.token.value));
-      }
-      return body;
-    } finally {
-      this.lexerStack.pop();
-      this.locations.length = locationDepth;
-      this.addLexerErrors(newLexer);
-      for (const comment of newLexer.comments) {
-        this.includedComments.push(comment);
-      }
-    }
+    return fileContents;
   }
 
-  private unresolvedInclude(statement: IncludeStatement, resolvedInclude: ResolvedFile, reason: string): Statement[] {
+  private unresolvedInclude(statement: IncludeStatement, resolvedInclude: ResolvedFile, reason: string): undefined {
     this.errors.push(this.getIncludeStatementError(statement, reason));
     this.unresolvedIncludes.push(resolvedInclude);
-    return [];
+    return undefined;
   }
 
   // A block still open at the end of the file keeps what it read, and its node reaches the end of the file, where the
   // code is being typed. Its error is the one Lua gives there.
   private expectBlockEnd(closer: 'end' | 'until', opener: Bounds, word: string): boolean {
     if (this.token.type === TokenType.EOF) {
-      this.errors.push(errors.createErrForToken(this.token, errMessages.expectedToClose, closer, word, opener.start.line, this.token.value));
+      this.errors.push(this.blockEndError(closer, opener, word));
       return false;
     }
     if (this.token.type !== TokenType.Keyword || this.token.value !== closer) {
-      errors.raiseErrForToken(this.token, errMessages.expectedToClose, closer, word, opener.start.line, this.token.value);
+      throw this.blockEndError(closer, opener, word);
     }
     this.lexerNext();
     return true;
+  }
+
+  // The opener's line is given with its file when the end is missing in another file, where it would read as a line of
+  // that one.
+  private blockEndError(closer: 'end' | 'until', opener: Bounds, word: string): errors.ParseError {
+    const { line, filename } = opener.start;
+    return filename.equals(this.token.bounds.start.filename)
+      ? errors.createErrForToken(this.token, errMessages.expectedToClose, closer, word, line, this.token.value)
+      : errors.createErrForToken(this.token, errMessages.expectedToCloseInFile, closer, word, line, path.basename(filename.path), this.token.value);
   }
 
   // There are two types of statements, simple and compound.
@@ -515,11 +576,7 @@ export default class Parser {
       return null;
     }
 
-    // An #include line is no statement to Lua, which reads the file's code in its place: a label before it can still be
-    // at the end of its block (j1).
-    if (!(this.token.type === TokenType.Punctuator && this.token.value === '#' && this.isIncludeLine())) {
-      flowContext.raiseDeferredErrors(this.token);
-    }
+    flowContext.raiseDeferredErrors(this.token);
 
     if (this.token.type === TokenType.Keyword) {
       switch (this.token.value) {
@@ -547,15 +604,6 @@ export default class Parser {
       case '?':
         this.lexerNext();
         return this.parseSpecialPrint(flowContext);
-
-        // #include filename.lua
-      case '#':
-        if (this.isIncludeLine()) {
-          const currTokenIdx = this.token.bounds.start.index;
-          this.lexer.consumeRestOfLine(currTokenIdx);
-          return this.parseIncludeStatement();
-        }
-        break;
       }
     }
 
@@ -644,7 +692,8 @@ export default class Parser {
   private isOneLineBody(condition: Expression, opener: Bounds): boolean {
     const endsWithParen = this.previousToken.type === TokenType.Punctuator && this.previousToken.value === ')';
     return this.token.type !== TokenType.EOF && this.token.type !== TokenType.Newline
-      && this.token.bounds.start.line === opener.start.line && (!endsWithParen || !!condition.parens);
+      && this.token.bounds.start.filename === opener.start.filename && this.token.bounds.start.line === opener.start.line
+      && (!endsWithParen || !!condition.parens);
   }
 
   // A one-line body stops at the end of its line or at a word that ends a block; a return that is not last stops it
@@ -1043,28 +1092,14 @@ export default class Parser {
 
   // PICO-8 reads #include only at the start of a line of the cart's own code, in lower case and followed by a space
   // (3.after-code, 3.upper, 3.tab-after-include, 3.nested): elsewhere the # is the length operator.
-  private isIncludeLine(): boolean {
-    const { index, column } = this.token.bounds.start;
+  private isIncludeLine(token: Token): boolean {
+    const { index, column } = token.bounds.start;
     const input = this.lexer.input;
-    return !this.isInIncludedFile() && /^[ \t]*$/.test(input.slice(index - column, index)) && input.startsWith('#include ', index);
-  }
-
-  // Special PICO-8 include statement: '#include' filename. The name is the rest of the line, and PICO-8 finds the file
-  // with the spaces and tabs around the name left out (3.trailing-spaces, 3.two-spaces-before).
-  parseIncludeStatement(): IncludeStatement {
-    const filename = (this.token.value as string).slice('#include '.length).replace(/^[ \t]+|[ \t]+$/g, '');
-
-    // skip over the rest of the line for the next statement to be parsed
-    this.lexerNext();
-
-    return this.finishNode({
-      type: 'IncludeStatement',
-      filename,
-    });
+    return /^[ \t]*$/.test(input.slice(index - column, index)) && input.startsWith('#include ', index);
   }
 
   getIncludeStatementError(statement: IncludeStatement, errorMessage: string) {
-    return new errors.ParseError(`Can't #include "${statement.filename}" from ${path.basename(this.filename.path)}: ${errorMessage}`, statement.loc!);
+    return new errors.ParseError(`Can't #include "${statement.filename}" from ${path.basename(this.mainFile.path)}: ${errorMessage}`, statement.loc!);
   }
 
   // ### Non-statements
@@ -1462,7 +1497,7 @@ export default class Parser {
 
     if (literals.includes(type)) {
       this.pushLocation(marker);
-      const raw = this.lexer.input.slice(this.token.bounds.start.index, this.token.bounds.end.index);
+      const raw = this.lexerOf(this.token.bounds.start.filename).input.slice(this.token.bounds.start.index, this.token.bounds.end.index);
       this.lexerNext();
       return this.finishNode(AST.literal(type, value, raw));
     } else if (type === TokenType.Keyword && 'function' === value) {
@@ -1551,6 +1586,16 @@ function isBlockFollow(token: Token) {
 
 function isEndOfFile(token: Token) {
   return token.type === TokenType.EOF;
+}
+
+// An #include line is no statement to Lua, which reads the file's code in its place.
+function lastCodeStatement(statements: Statement[]): Statement | undefined {
+  for (let i = statements.length - 1; i >= 0; i--) {
+    if (statements[i].type !== 'IncludeStatement') {
+      return statements[i];
+    }
+  }
+  return undefined;
 }
 
 // PICO-8 reads the tab after the colon as a hexadecimal number that the text starts with, after white space and a sign,

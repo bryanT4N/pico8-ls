@@ -209,12 +209,12 @@ describe('Parser recovery', () => {
     );
   });
 
-  it('keeps a function left open at the end of an included file', () => {
+  it('keeps a function left open at the end of an included file open on into the cart, as PICO-8 pastes the file in', () => {
     const { errors, block } = parse('#include inc.lua\nfunction _update()\nend', {
       includeFileResolver: new TestFilesResolver({ 'inc.lua': 'function typing()\n  local a = 1' }),
     });
-    assert.deepStrictEqual(errors.map(formatError), [ 'inc.lua 2:12 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ]);
-    assert.deepStrictEqual(block.body.map(s => s.type + (s.included ? '*' : '')), [ 'IncludeStatement', 'FunctionDeclaration*', 'FunctionDeclaration' ]);
+    assert.deepStrictEqual(errors.map(formatError), [ 'main_test_file 3:0 \'end\' expected (to close \'function\' at line 1 in inc.lua) near \'<eof>\'' ]);
+    assert.deepStrictEqual(block.body.map(s => s.type + (s.included ? '*' : '')), [ 'IncludeStatement', 'FunctionDeclaration*' ]);
   });
 
   it('parses the statement after a broken for statement into the function', () => {

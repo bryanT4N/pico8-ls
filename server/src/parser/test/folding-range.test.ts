@@ -556,4 +556,8 @@ describe('Folding ranges with #include', () => {
   it('folds a function whose body includes a file, but not the included lines', () => {
     deepEquals(rangesOf('function f()\n#include body.lua\nend', { 'body.lua': 'if a then\n  b()\nend' }), [{ startLine: 0, endLine: 2 }]);
   });
+
+  it('folds a branch whose next branch is in an included file to the end of the file, and no branch of that file', () => {
+    deepEquals(rangesOf('if a then\nx=1\n#include b.lua\ny=2\nend\nz=3', { 'b.lua': 'elseif b then\nw=1\n' }), [{ startLine: 0, endLine: 5 }]);
+  });
 });

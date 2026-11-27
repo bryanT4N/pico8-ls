@@ -875,6 +875,9 @@ export default class Lexer {
 
   // ## Lex functions and helpers.
 
+  // Where next() takes each token from: lex(), or, as the parser has it, the cart with the files it pastes in.
+  read: () => Token = () => this.lex();
+
   // Read the next token.
   //
   // This is actually done by setting the current token to the lookahead and
@@ -884,14 +887,14 @@ export default class Lexer {
     this.previousToken = this.token;
 
     if (this.lookahead === undefined) {
-      // First time calling next(), we'll call lex() twice to get lookahead in
+      // First time calling next(), we'll read two tokens to get lookahead in
       // the right state
-      this.lookahead = this.lex();
+      this.lookahead = this.read();
     }
 
     if (this.newlineSignificant
         && this.token?.type !== TokenType.Newline
-        && this.token?.bounds.start.line !== this.lookahead.bounds.start.line) {
+        && !onOneLine(this.token, this.lookahead)) {
       this.token = this.makeToken(TokenType.Newline, '\\n');
       // Create fake zero-width location right after the last real token.
       // Prevents misformatting one-line if statements.
@@ -904,26 +907,16 @@ export default class Lexer {
       // lookahead remains the same until newlineSignificant is turned off
     } else {
       this.token = this.lookahead;
-      this.lookahead = this.lex();
+      this.lookahead = this.read();
     }
   }
 
-  consumeRestOfLine(fromIdx: number) {
-    this.previousToken = this.token;
-
-    // The lookahead has read on past fromIdx.
-    this.index = fromIdx;
-    this.tokenStart = fromIdx;
-
-    let charCode = this.input.charCodeAt(this.index);
-    while (this.index < this.length && !isLineTerminator(charCode)) {
+  // The token lex() just read and the rest of its line, as one token: the line of an #include.
+  readRestOfLine(): Token {
+    while (this.index < this.length && !isLineTerminator(this.input.charCodeAt(this.index))) {
       this.index++;
-      charCode = this.input.charCodeAt(this.index);
     }
-
-    this.token = this.makeToken(TokenType.Raw, this.input.slice(fromIdx, this.index));
-
-    this.lookahead = this.lex();
+    return this.makeToken(TokenType.Raw, this.input.slice(this.tokenStart, this.index));
   }
 
   // Consume a token if its value matches. Once consumed or not, return the
@@ -946,6 +939,12 @@ export default class Lexer {
       errors.raiseErrForToken(this.token!, errMessages.expected, value, this.token!.value);
     }
   }
+}
+
+// Each lexer has a ResolvedFile of its own. A file the parser pastes in shares no line with the code around it: a line
+// break comes before an #include line and after the file.
+function onOneLine(a: Token | undefined, b: Token): boolean {
+  return a !== undefined && a.bounds.start.filename === b.bounds.start.filename && a.bounds.start.line === b.bounds.start.line;
 }
 
 // ### Validation functions

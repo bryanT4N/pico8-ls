@@ -640,6 +640,24 @@ describe('ProjectIndex', () => {
     ]);
   });
 
+  it('shows in a file that a cart includes only the errors that the cart\'s parse, which pastes it in, finds there', () => {
+    const index = scanned({
+      'main.p8': '#include open.lua\nend\nf()\n#include bad.lua',
+      'open.lua': 'function f()\nprinth("in f")\n',
+      'bad.lua': 'x = = 1',
+      'alone.lua': 'function g()\n',
+    });
+    const shown = (name: string) => index.diagnostics([ uriOf(name) ], 100)[0].diagnostics
+      .map(d => `${d.range.start.line + 1}:${d.range.start.character} ${d.message}`);
+    deepStrictEqual(index.document(uriOf('open.lua'))!.errors.map(formatError), [ 'open.lua 2:13 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ]);
+    deepStrictEqual([ 'main.p8', 'open.lua', 'bad.lua', 'alone.lua' ].map(shown), [
+      [],
+      [],
+      [ '1:4 <expression> expected near \'=\'' ],
+      [ '1:11 \'end\' expected (to close \'function\' at line 1) near \'<eof>\'' ],
+    ]);
+  });
+
   it('sends each file\'s diagnostics once', () => {
     const index = scanned(localAfterInclude());
     const sent = index.diagnostics([ uriOf('lib.lua'), uriOf('main.p8') ], 100);

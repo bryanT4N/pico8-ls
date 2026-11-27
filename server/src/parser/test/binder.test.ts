@@ -200,10 +200,10 @@ describe('binder', () => {
     eq(probe(analyzeCode(lines('function f()', '  for i=1,10 x', '  i = 5', 'end'))).kind(3, 2), 'global i');
   });
 
-  it('assigns the global after an #include whose file leaves a block open', () => {
+  it('takes the code after an #include whose file leaves a function open as the function\'s, as PICO-8 pastes the file in', () => {
     const a = analyzeCode(lines('function _init()', '  x = 0', 'end', '#include inc.lua', 'a = 5', 'function _update()', '  x += 1', 'end'),
       { 'inc.lua': 'function typing()\n  local a = 1' });
-    eq(probe(a).kind(5, 0), 'global a');
+    eq(probe(a).kind(5, 0), 'local a');
   });
 
   it('copes with names that JavaScript objects have', () => {

@@ -992,16 +992,13 @@ __music__
       deepEquals(errors, [{ type: 'ParseError' }]);
     });
 
-    it('reports a statement split across an #include in both files', () => {
+    it('reads a statement split across an #include as one, as PICO-8 pastes the file in', () => {
       const fileResolver = new MockFileResolver();
       fileResolver.loadFileContents = () => 'a';
 
       const { block: { body }, errors } = parse('#include other_file.lua\n= 1', { includeFileResolver: fileResolver });
-      deepEquals(errors.map(formatError).sort(), [
-        'main_test_file 2:0 unexpected symbol \'=\' near \'1\'',
-        'other_file.lua 1:0 assignment operator expected near \'<eof>\'',
-      ]);
-      deepEquals(body, [{ type: 'IncludeStatement' }]);
+      deepEquals(errors, []);
+      deepEquals(body, [{ type: 'IncludeStatement' }, { type: 'AssignmentStatement' }]);
     });
 
     it('keeps the line numbers after a lone #', () => {

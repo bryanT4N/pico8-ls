@@ -393,13 +393,16 @@ export class ProjectIndex {
     return unique(uris).flatMap(uri => mergeDiagnostics([ uri ], new Map([[ uri, this.errors(uri) ]]), this.warnings(uri), maxPerFile));
   }
 
-  // The file's own errors, and those that only the parse of a cart containing it finds in it, such as a label the cart
-  // defines too, or a `...` in a file the cart includes inside a function: each once, in order of place.
+  // PICO-8 reads a file that a root includes only pasted into the root, so such a file has the errors that the parses
+  // of the roots containing it find in it, each once, in order of place: a block it leaves for the root to close is
+  // none. A root, or a file in no project, has those of its own parse.
   private errors(uri: string): ParseError[] {
-    const errors = errorsInFile(uri, this.documents.get(uri)?.errors ?? []);
-    const seen = new Set(errors.map(keyOf));
-    for (const project of this.projectsOf(uri)) {
-      for (const error of errorsInFile(uri, this.documents.get(project.root)?.errors ?? [])) {
+    const containing = this.projectsOf(uri);
+    const parses = containing.length === 0 || containing[0].root === uri ? [ uri ] : containing.map(project => project.root);
+    const errors: ParseError[] = [];
+    const seen = new Set<string>();
+    for (const parse of parses) {
+      for (const error of errorsInFile(uri, this.documents.get(parse)?.errors ?? [])) {
         if (!seen.has(keyOf(error))) {
           seen.add(keyOf(error));
           errors.push(error);

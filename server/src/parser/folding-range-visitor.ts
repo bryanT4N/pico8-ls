@@ -24,13 +24,7 @@ export class FoldingRangeVisitor extends ASTVisitor<void> {
   }
 
   private skips(node: ASTNode): boolean {
-    if (node.included) {
-      return true;
-    }
-    if (node.loc && !node.loc.start.filename.equals(node.loc.end.filename)) {
-      return true;
-    }
-    return false;
+    return !!node.included;
   }
 
   private addExplicitRange(startLine: number, endLine: number) {
@@ -66,14 +60,18 @@ export class FoldingRangeVisitor extends ASTVisitor<void> {
       const currentClause = node.clauses[i];
       const nextClause = (i + 1 < node.clauses.length) ? node.clauses[i+1] : null;
 
-      if (!currentClause.loc) {
+      // A clause in a file that this one includes has lines of that file.
+      if (!currentClause.loc || currentClause.included) {
         continue;
       }
 
       const startLine = currentClause.loc.start.line;
       let endLine;
 
-      if (nextClause && nextClause.loc) {
+      if (nextClause?.included) {
+        // The parser ends this clause at the end of the file.
+        endLine = currentClause.loc.end.line;
+      } else if (nextClause && nextClause.loc) {
       // End one line before the next clause starts
         endLine = nextClause.loc.start.line - 1;
       } else {

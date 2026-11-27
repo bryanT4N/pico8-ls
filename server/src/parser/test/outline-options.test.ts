@@ -97,6 +97,12 @@ describe('outline options', () => {
     deepStrictEqual(outlineWith(code, ALL_OUTLINE_OPTIONS, { files, name: 'dbg.lua' }), [ 'x [Variable]', 'for j = 1, 2 [Block]', '  j [Variable]', '  y [Variable]' ]);
   });
 
+  it('ends a branch whose next branch is in an included file at the end of the file, and lists what it defines under it', () => {
+    const code = lines('if a then', '  x = 1', '#include b.lua', '  y = 2', 'end', 'z = 3');
+    deepStrictEqual(outlineWith(code, { showBlocks: true }, { files: { 'b.lua': 'elseif b then\n  w = 1\n' }, ranges: true }),
+      [ 'if a [Block] 1:0-6:5 1:0-1:2', '  x [Variable] 2:2-2:7 2:2-2:3', 'y [Variable] 4:2-4:7 4:2-4:3', 'z [Variable] 6:0-6:5 6:0-6:1' ]);
+  });
+
   it('lists the loop variables and blocks of a file #included in a function at the top of its outline', () => {
     const code = lines('function f()', '  if a then', '    #include lib.lua', '  end', 'end');
     const files = { 'lib.lua': lines('for i = 1, 2 do', '  for k, v in pairs(t) do local y = v end', 'end', 'local z = 1') };
