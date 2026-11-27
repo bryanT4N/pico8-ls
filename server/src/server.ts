@@ -1,8 +1,8 @@
 import {
   CompletionItem, CompletionItemTag, createConnection, DefinitionParams,
   DidChangeConfigurationNotification, DocumentSymbolParams,
-  FileChangeType, FoldingRange, FoldingRangeParams, Hover, HoverParams, InitializeParams, InitializeResult, Position, ProposedFeatures,
-  ReferenceParams, SignatureHelp, SignatureHelpParams, TextDocumentPositionParams,
+  FileChangeType, FoldingRange, FoldingRangeParams, Hover, HoverParams, InitializeParams, InitializeResult, MessageType, Position, ProposedFeatures,
+  ReferenceParams, ShowMessageNotification, SignatureHelp, SignatureHelpParams, TextDocumentPositionParams,
   TextDocuments, TextDocumentSyncKind, WorkspaceFolder, WorkspaceSymbolParams,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -12,7 +12,11 @@ import { isParseError } from './parser/errors';
 import { builtinInfo } from './parser/builtins';
 import ResolvedFile, { fileText, hasP8Extension, pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
-import { forgetWatched, isScanned, isUnder, isWatched, listCartFiles, makeFileResolver, nearCart, ProjectDocument, ProjectIndex, scansFolder } from './projects';
+import {
+  DISK_OPERATIONS, forgetWatched, isScanned, isUnder, isWatched, listCartFiles, makeFileResolver, nearCart, onDisk, ProjectDocument, ProjectIndex, ScanBudget,
+  scansFolder, setExcludes, smallFoldersFirst,
+} from './projects';
+import { Exclude, excludeOf } from './files-exclude';
 import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -73,14 +77,29 @@ function pathOf(uri: string): string | undefined {
   }
 }
 
-// The index asks while it changes, so this answers false for a URI that is not a file's rather than throw.
+// The scans stop reading files for the project-wide features once the text of the files read passes this many
+// characters (ScanBudget). At the most the index was measured to keep for a character, 43 bytes, that is about 860 MB,
+// a fifth of the 4 GB heap of the Node that VS Code runs the server in.
+const SCAN_BUDGET = 20000000;
+const budget = new ScanBudget(SCAN_BUDGET);
+let budgetShown = false;
+
+// The index asks while it changes, so this answers false for a URI that is not a file's rather than throw. Past the
+// budget, a file the index does not hold yet is one only while it is open.
 function isMember(uri: string): boolean {
-  if (documents.get(uri)) {
-    return true;
-  }
+  return documents.get(uri) !== undefined || (isScanMember(uri) && (!budget.reached || index.document(uri) !== undefined));
+}
+
+function isScanMember(uri: string): boolean {
   const filePath = pathOf(uri);
   return filePath !== undefined && isScanned(filePath, workspaceRoots)
     && (hasP8Extension(filePath) || nearCart(filePath, workspaceRoots, hasCart));
+}
+
+// The carts a file can belong to, the .p8 files of its folder and the folders above it that the scans found, which the
+// index does not hold.
+function cartsNotReadFor(filePath: string): string[] {
+  return [ ...carts ].filter(cart => isUnder(filePath, path.dirname(cart))).map(cart => pathToFileURL(cart)).filter(uri => !index.document(uri));
 }
 
 const fileResolver = makeFileResolver(uri => documents.get(uri)?.getText(), diskText);
@@ -167,6 +186,7 @@ connection.onInitialized(() => {
       if (removed.length > 0 || index.joins() > joined) {
         notifyCartFiles();
       }
+      void fetchExcludes();
       Promise.all(event.added.map(scanWorkspaceFolder)).catch(e => {
         console.log('Error scanning workspace folders', e);
       });
@@ -174,7 +194,7 @@ connection.onInitialized(() => {
   }
 
   // The scan does not wait for the settings, which a client can leave unanswered; once they come, the diagnostics are
-  // sent again with their limit.
+  // sent again with their limit, and the files that files.exclude hides leave.
   scanWorkspace();
   fetchGlobalSettings().then(() => publish(index.uris())).catch(e => {
     console.error('Failed to send the diagnostics', e);
@@ -188,6 +208,7 @@ function scanWorkspace() {
     }
 
     workspaceRoots = workspaceFolders.map(wf => url.fileURLToPath(wf.uri));
+    void fetchExcludes();
     Promise.all(workspaceFolders.map(scanWorkspaceFolder)).catch(e => {
       console.log('Error scanning workspace folders', e);
     });
@@ -200,8 +221,19 @@ function scanWorkspaceFolder(workspaceFolder: WorkspaceFolder): Promise<void> {
   return scanFolder(url.fileURLToPath(workspaceFolder.uri));
 }
 
+// Each workspace folder's files.exclude as the client last gave it. A scan takes the files it lists to the index by the
+// files.exclude it has then, so a change after that is applied to the index once no scan is running (rescan): it drops
+// the files now hidden, and lists the folders again when something may have been left out, by the files.exclude of
+// before or by the budget.
+let excludeSettings = new Map<string, string>();
+let excludesHide = false;
+let scansRunning = 0;
+let scansTookFiles = false;
+let rescanWanted: 'drop' | 'list' | undefined;
+
 async function scanFolder(folderPath: string, onlyNew = false, alsoPublish: string[] = []): Promise<void> {
   let published = false;
+  scansRunning++;
   try {
     // A folder inside a workspace folder is listed as the scan of the outermost one that reaches it would list it.
     const from = workspaceRoots.filter(root => scansFolder(folderPath, [ root ]))
@@ -216,14 +248,23 @@ async function scanFolder(folderPath: string, onlyNew = false, alsoPublish: stri
     }
     // A .lua file that belongs to no cart is not read at all, so a folder of plain Lua costs only its listing. One that
     // an #include waits for is read, as it is when the file watcher reports it.
-    const members = allFiles.map(filePath => pathToFileURL(filePath))
+    const members = smallFoldersFirst(allFiles).map(filePath => pathToFileURL(filePath))
       .filter(uri => (isMember(uri) || index.isAwaited(uri)) && !(onlyNew && index.document(uri)));
-    await readFromDisk(members);
+    scansTookFiles = true;
+    const read = await readWithinBudget(members);
+    if (budget.reached) {
+      // Past the budget the files open in the editor still get every feature, with their carts.
+      for (const document of documents.all()) {
+        const filePath = pathOf(document.uri);
+        read.push(...filePath === undefined ? [] : cartsNotReadFor(filePath));
+      }
+      tellBudgetReached();
+    }
 
     // The folder can have been removed while its files were being read, when the index did not have them yet for the
     // removal to drop. Files open in the editor stay, as they do when a folder is removed.
-    const stillMembers = new Set(members.filter(uri => isMember(uri) || index.isAwaited(uri)));
-    for (const uri of members) {
+    const stillMembers = new Set(read.filter(uri => documents.get(uri) || isScanMember(uri) || index.isAwaited(uri)));
+    for (const uri of read) {
       if (!stillMembers.has(uri)) {
         diskText.delete(uri);
       }
@@ -239,22 +280,110 @@ async function scanFolder(folderPath: string, onlyNew = false, alsoPublish: stri
       publish(alsoPublish);
     }
     notifyCartFiles();
+    scansRunning--;
+    if (rescanWanted !== undefined && scansRunning === 0) {
+      rescan();
+    }
   }
 }
 
-// The text of a file that the file watcher does not report would go stale; textOf reads such a file when it is parsed.
-async function readFromDisk(uris: string[]) {
-  await Promise.all(uris.map(async uri => {
-    const filePath = url.fileURLToPath(uri);
-    if (!isWatched(filePath, workspaceRoots)) {
-      return;
+// Once in a session.
+function tellBudgetReached(): void {
+  if (budgetShown) {
+    return;
+  }
+  budgetShown = true;
+  connection.sendNotification(ShowMessageNotification.type, { type: MessageType.Warning,
+    message: `PICO-8-LS read ${budget.files.toLocaleString('en-US')} files and stopped, to keep its memory in bounds. Workspace symbols and `
+      + 'the problems of files that are not open leave out the rest; a file you open still gets every feature. To have it read everything, '
+      + 'exclude large folders you do not work on with files.exclude.' });
+}
+
+// Reads the files in order while the budget lasts, and returns those it read. The text of a file that the file watcher
+// does not report would go stale; textOf reads such a file again when it is parsed.
+async function readWithinBudget(uris: string[]): Promise<string[]> {
+  const read: string[] = [];
+  let next = 0;
+  const readNext = async (): Promise<void> => {
+    while (next < uris.length && !budget.reached) {
+      const uri = uris[next++];
+      const filePath = url.fileURLToPath(uri);
+      let text: string;
+      try {
+        text = fileText(await onDisk(() => fs.promises.readFile(filePath)));
+      } catch (e) {
+        console.error('Error reading ' + filePath, e);
+        continue;
+      }
+      if (!budget.take(text.length)) {
+        return;
+      }
+      if (isWatched(filePath, workspaceRoots)) {
+        diskText.set(uri, text);
+      }
+      read.push(uri);
     }
-    try {
-      diskText.set(uri, fileText(await fs.promises.readFile(filePath)));
-    } catch (e) {
-      console.error('Error reading ' + filePath, e);
+  };
+  await Promise.all(Array.from({ length: DISK_OPERATIONS }, readNext));
+  return read;
+}
+
+async function fetchExcludes(): Promise<void> {
+  if (!hasConfigurationCapability || workspaceRoots.length === 0) {
+    return;
+  }
+  const roots = [ ...workspaceRoots ];
+  let given: unknown[];
+  try {
+    given = await connection.workspace.getConfiguration(roots.map(root => ({ scopeUri: pathToFileURL(root), section: 'files.exclude' })));
+  } catch (e) {
+    console.error('Failed to get files.exclude', e);
+    return;
+  }
+  const settings = new Map(roots.map((root, i) => [ root, JSON.stringify(given[i] ?? null) ]));
+  if (settings.size === excludeSettings.size && [ ...settings ].every(([ root, setting ]) => excludeSettings.get(root) === setting)) {
+    return;
+  }
+  excludeSettings = settings;
+  const byRoot = new Map<string, Exclude>();
+  roots.forEach((root, i) => {
+    const exclude = excludeOf(given[i]);
+    if (exclude) {
+      byRoot.set(root, exclude);
     }
-  }));
+  });
+  setExcludes(byRoot);
+  if (scansTookFiles) {
+    rescanWanted = rescanWanted === 'list' || excludesHide || budget.reached ? 'list' : 'drop';
+    if (scansRunning === 0) {
+      rescan();
+    }
+  }
+  excludesHide = byRoot.size > 0;
+}
+
+// After files.exclude changed: the files it now hides leave, unless they are open or a root includes them, and when
+// something may have been left out the workspace folders are listed again, with the budget counted from what is left.
+function rescan(): void {
+  const list = rescanWanted === 'list';
+  rescanWanted = undefined;
+  for (const cart of [ ...carts ]) {
+    if (!isScanned(cart, workspaceRoots)) {
+      deleteCart(cart);
+    }
+  }
+  const joined = index.joins();
+  const resend = index.prune();
+  budget.restart(index.uris().map(uri => index.document(uri)!.textDocument.getText().length));
+  publish(resend);
+  if (index.joins() > joined || resend.length > 0) {
+    notifyCartFiles();
+  }
+  for (const root of list ? workspaceRoots : []) {
+    void scanFolder(root, true).catch(e => {
+      console.error('Error scanning ' + root, e);
+    });
+  }
 }
 
 function parseFile(uri: string): ProjectDocument | undefined {
@@ -344,6 +473,16 @@ function takeSettings(given: PicoSettings) {
   }
 }
 
+// Past the budget a file opened in the editor still gets every feature, with its carts; the file itself joins as its
+// content comes.
+documents.onDidOpen(({ document }) => {
+  const filePath = pathOf(document.uri);
+  const unread = budget.reached && filePath !== undefined ? cartsNotReadFor(filePath) : [];
+  if (unread.length > 0) {
+    publish(index.scan(unread));
+  }
+});
+
 documents.onDidChangeContent(change => {
   const joined = index.joins();
   publish(index.update(change.document.uri));
@@ -389,6 +528,7 @@ connection.onDidChangeConfiguration(change => {
   fetchGlobalSettings().then(() => publish(index.uris())).catch(e => {
     console.error('Failed to send the diagnostics', e);
   });
+  void fetchExcludes();
 });
 
 connection.onDocumentSymbol(guarded('build the outline', () => [], (params: DocumentSymbolParams) => {
@@ -494,12 +634,19 @@ connection.onDidChangeWatchedFiles(change => {
     if (!known && !isMember(uri) && !index.isAwaited(uri)) {
       continue;
     }
-    if (isWatched(filePath, workspaceRoots)) {
-      try {
-        diskText.set(uri, fileText(fs.readFileSync(filePath)));
-      } catch (e) {
-        console.error('Error reading ' + uri, e);
-      }
+    let text: string | undefined;
+    try {
+      text = fileText(fs.readFileSync(filePath));
+    } catch (e) {
+      console.error('Error reading ' + uri, e);
+    }
+    // A file that joins as a member takes from the budget, as the scan's files do.
+    if (!known && text !== undefined && !documents.get(uri) && !index.isAwaited(uri) && !budget.take(text.length)) {
+      tellBudgetReached();
+      continue;
+    }
+    if (text !== undefined && isWatched(filePath, workspaceRoots)) {
+      diskText.set(uri, text);
     }
     if (!documents.get(uri)) {
       uris.push(...index.update(uri));

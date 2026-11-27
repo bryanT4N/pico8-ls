@@ -12,9 +12,10 @@ import { NO_OUTLINE_OPTIONS } from '../parser/outline/model';
 import { outlineLines } from '../parser/test/outline-utils';
 import { ALL_OUTLINE_OPTIONS, formatError } from '../parser/test/test-utils';
 import {
-  FolderReader, forgetWatched, isScanned, isTrackedPath, isWatched, listCartFiles, makeFileResolver, nearCart,
-  ProjectDocument, ProjectIndex, scansFolder,
+  DISK_OPERATIONS, FolderReader, forgetWatched, isScanned, isTrackedPath, isWatched, listCartFiles, makeFileResolver, nearCart, onDisk,
+  ProjectDocument, ProjectIndex, ScanBudget, scansFolder, setExcludes, smallFoldersFirst,
 } from '../projects';
+import { excludeOf } from '../files-exclude';
 import { callContextAt } from '../signature-help';
 
 describe('isTrackedPath', () => {
@@ -156,6 +157,60 @@ describe('listCartFiles', () => {
       realpath: file => Promise.resolve(file),
     };
     deepStrictEqual(sortedUnder(ws, await listCartFiles(ws, ws, reader)), [ 'lib.lua', 'main.p8' ]);
+  });
+});
+
+describe('files.exclude in the scan', () => {
+  const ws = path.resolve('/ws');
+  const other = path.resolve('/other');
+  afterEach(() => setExcludes(new Map()));
+
+  it('leaves out of the scan what a workspace folder\'s files.exclude hides, a folder with all it holds, and nothing else', async () => {
+    setExcludes(new Map([[ ws, excludeOf({ '**/runs': true, 'old.lua': true })! ]]));
+    deepStrictEqual([ 'main.p8', 'runs/a/main.p8', 'b/runs/main.p8', 'old.lua', 'b/old.lua' ].map(file => isScanned(path.join(ws, file), [ ws ])),
+      [ true, false, false, false, true ]);
+    deepStrictEqual([ 'b', 'runs', 'b/runs/x' ].map(folder => scansFolder(path.join(ws, folder), [ ws ])), [ true, false, false ]);
+    eq(isScanned(path.join(other, 'runs', 'main.p8'), [ other ]), true);
+    // Whether a .lua file opens as PICO-8 Lua does not depend on it.
+    eq(nearCart(path.join(ws, 'runs', 'lib.lua'), [ ws ], folder => folder === path.join(ws, 'runs')), true);
+    const entry = (name: string, kind: 'file' | 'folder') => ({ name, isFile: () => kind === 'file', isDirectory: () => kind === 'folder', isSymbolicLink: () => false });
+    const listed: string[] = [];
+    const reader: FolderReader = {
+      readdir: folder => {
+        listed.push(folder);
+        return Promise.resolve(folder === ws ? [ entry('main.p8', 'file'), entry('old.lua', 'file'), entry('runs', 'folder') ] : [ entry('x.p8', 'file') ]);
+      },
+      stat: () => Promise.reject(new Error('no links here')),
+      realpath: file => Promise.resolve(file),
+    };
+    deepStrictEqual(await listCartFiles(ws, ws, reader), [ path.join(ws, 'main.p8') ]);
+    deepStrictEqual(listed, [ ws ]);
+  });
+
+  it('reads the files of the smallest folders first', () => {
+    const files = [ 'big/1/main.p8', 'big/2/main.p8', 'big/3/main.p8', 'small/main.p8', 'main.p8', 'mid/a.p8', 'mid/b.p8' ].map(file => path.join(ws, file));
+    deepStrictEqual(smallFoldersFirst(files).map(file => path.relative(ws, file).split(path.sep).join('/')),
+      [ 'main.p8', 'small/main.p8', 'mid/a.p8', 'mid/b.p8', 'big/1/main.p8', 'big/2/main.p8', 'big/3/main.p8' ]);
+  });
+
+  it('takes files within the budget, each at least 256 characters, and none once one did not fit', () => {
+    const budget = new ScanBudget(1000);
+    deepStrictEqual([ 400, 10, 300, 100, 10 ].map(length => budget.take(length)), [ true, true, true, false, false ]);
+    deepStrictEqual([ budget.files, budget.reached ], [ 3, true ]);
+    budget.restart([ 600 ]);
+    deepStrictEqual([ budget.reached, budget.take(100), budget.take(1), budget.files ], [ false, true, false, 2 ]);
+  });
+
+  it('runs at most DISK_OPERATIONS disk operations at once, every scan together', async () => {
+    let running = 0;
+    let most = 0;
+    const operation = () => onDisk(async () => {
+      most = Math.max(most, ++running);
+      await new Promise(resolve => setTimeout(resolve, 1));
+      running--;
+    });
+    await Promise.all(Array.from({ length: 3 * DISK_OPERATIONS }, operation));
+    deepStrictEqual([ most, running ], [ DISK_OPERATIONS, 0 ]);
   });
 });
 

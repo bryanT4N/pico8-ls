@@ -18,6 +18,7 @@ import { hoverMarkdown } from './hover';
 import { rangeOf } from './ranges';
 import { CallContext, signatureHelpFor } from './signature-help';
 import { searchSymbols, SymbolItem, symbolItems, toSymbolInformation } from './workspace-symbols';
+import { Exclude } from './files-exclude';
 
 export type ProjectDocument = { textDocument: TextDocument, chunk: Chunk, errors: ParseError[] };
 
@@ -30,11 +31,11 @@ export function isTrackedPath(filePath: string, roots: string[]): boolean {
   const normalizedFile = path.normalize(filePath);
   const holding = roots.map(r => path.normalize(r))
     .filter(r => isUnder(normalizedFile, r) || normalizedFile === r);
-  return holding.length === 0 || holding.some(root => reaches(root, path.dirname(normalizedFile)));
+  return holding.length === 0 || holding.some(root => reaches(root, path.dirname(normalizedFile)) && !isExcluded(root, normalizedFile));
 }
 
 export function scansFolder(folder: string, roots: string[]): boolean {
-  return roots.some(root => (isUnder(folder, root) || path.relative(root, folder) === '') && reaches(root, folder));
+  return roots.some(root => (isUnder(folder, root) || path.relative(root, folder) === '') && reaches(root, folder) && !isExcluded(root, folder));
 }
 
 export function isScanned(filePath: string, roots: string[]): boolean {
@@ -65,6 +66,27 @@ export function nearCart(filePath: string, roots: string[], hasCart: (folder: st
 // The scan of a workspace folder does not go into folders whose names start with a dot; folder is root or under it.
 function reaches(root: string, folder: string): boolean {
   return path.relative(root, folder).split(path.sep).every(part => !part.startsWith('.'));
+}
+
+// The files.exclude of each workspace folder, by its path, path.normalize'd. The scans leave out what it hides; whether
+// a file opens as PICO-8 Lua does not depend on it.
+const excludes = new Map<string, Exclude>();
+
+export function setExcludes(byRoot: Map<string, Exclude>): void {
+  excludes.clear();
+  for (const [ root, exclude ] of byRoot) {
+    excludes.set(path.normalize(root), exclude);
+  }
+}
+
+// Whether the workspace folder's files.exclude hides the file or folder, or a folder above it.
+function isExcluded(root: string, fullPath: string): boolean {
+  const exclude = excludes.get(path.normalize(root));
+  if (exclude === undefined) {
+    return false;
+  }
+  const parts = path.relative(root, fullPath).split(path.sep).filter(part => part !== '');
+  return parts.some((_, i) => exclude(parts.slice(0, i + 1).join('/'), path.join(root, ...parts.slice(0, i + 1))));
 }
 
 // A drive or share root, such as c:\ or \\server\share\, already ends in a separator.
@@ -113,14 +135,40 @@ export type FolderReader = {
   realpath: (file: string) => Promise<string>,
 };
 
+// The scans read and list the disk with at most this many operations at once, all of them together: thousands at once
+// run out of file handles (EMFILE).
+export const DISK_OPERATIONS = 64;
+let diskOperations = 0;
+const waitingForDisk: (() => void)[] = [];
+
+// An operation that ends hands its turn to the first that waits.
+export async function onDisk<T>(operation: () => Promise<T>): Promise<T> {
+  if (diskOperations < DISK_OPERATIONS) {
+    diskOperations++;
+  } else {
+    await new Promise<void>(resolve => waitingForDisk.push(resolve));
+  }
+  try {
+    return await operation();
+  } finally {
+    const next = waitingForDisk.shift();
+    if (next) {
+      next();
+    } else {
+      diskOperations--;
+    }
+  }
+}
+
 const DISK: FolderReader = {
-  readdir: folder => fs.promises.readdir(folder, { withFileTypes: true }),
-  stat: file => fs.promises.stat(file),
-  realpath: file => new Promise((resolve, reject) => fs.realpath.native(file, (e, real) => e ? reject(e) : resolve(real))),
+  readdir: folder => onDisk(() => fs.promises.readdir(folder, { withFileTypes: true })),
+  stat: file => onDisk(() => fs.promises.stat(file)),
+  realpath: file => onDisk(() => new Promise((resolve, reject) => fs.realpath.native(file, (e, real) => e ? reject(e) : resolve(real)))),
 };
 
 // Links, junctions among them, are followed, as VS Code's search does, but not a link back to a folder the listing
-// came through from the workspace folder `from`, which would never end.
+// came through from the workspace folder `from`, which would never end. What the folder's files.exclude hides is left
+// out.
 export async function listCartFiles(folder: string, from = folder, reader: FolderReader = DISK): Promise<string[]> {
   const between = path.relative(from, folder).split(path.sep).filter(part => part !== '');
   const above = between.map((_, i) => path.join(from, ...between.slice(0, i)));
@@ -150,16 +198,74 @@ export async function listCartFiles(folder: string, from = folder, reader: Folde
         }
       }
       if (kind.isDirectory()) {
-        if (!entry.name.startsWith('.') && !realDirs.includes(real)) {
+        if (!entry.name.startsWith('.') && !realDirs.includes(real) && !isExcluded(from, entryPath)) {
           await list(entryPath, [ ...realDirs, real ]);
         }
-      } else if (kind.isFile() && /\.(p8|lua)$/i.test(entry.name)) {
+      } else if (kind.isFile() && /\.(p8|lua)$/i.test(entry.name) && !isExcluded(from, entryPath)) {
         found.push(entryPath);
       }
     }));
   };
   await list(folder, chain);
   return found;
+}
+
+// The order the scan reads files in, so that a budget it stops at leaves out the largest folders: of two files, the one
+// whose folder, where their paths part, holds fewer of the files comes first.
+export function smallFoldersFirst(files: string[]): string[] {
+  const sizes = new Map<string, number>();
+  const parts = new Map(files.map(file => [ file, path.normalize(file).split(path.sep) ]));
+  for (const fileParts of parts.values()) {
+    for (let i = 1; i < fileParts.length; i++) {
+      const folder = fileParts.slice(0, i).join(path.sep);
+      sizes.set(folder, (sizes.get(folder) ?? 0) + 1);
+    }
+  }
+  const sizeAt = (fileParts: string[], i: number) => i === fileParts.length - 1 ? 1 : sizes.get(fileParts.slice(0, i + 1).join(path.sep))!;
+  return [ ...files ].sort((a, b) => {
+    const aParts = parts.get(a)!;
+    const bParts = parts.get(b)!;
+    let i = 0;
+    while (i < aParts.length - 1 && i < bParts.length - 1 && aParts[i] === bParts[i]) {
+      i++;
+    }
+    return sizeAt(aParts, i) - sizeAt(bParts, i) || compareStrings(aParts[i], bParts[i]);
+  });
+}
+
+// What the scans read for the project-wide features, workspace symbols, the diagnostics of files that are not open and
+// membership: the text of the files, each counting at least FILE_MINIMUM characters. Measured on real carts, the index
+// keeps 14 to 43 bytes for each character of text, and 2 to 6 KB more for each file.
+export class ScanBudget {
+  static readonly FILE_MINIMUM = 256;
+  private used = 0;
+  // The files taken, and whether one did not fit, after which none is taken.
+  files = 0;
+  reached = false;
+
+  constructor(readonly limit: number) {}
+
+  take(length: number): boolean {
+    const cost = Math.max(length, ScanBudget.FILE_MINIMUM);
+    if (this.reached || this.used + cost > this.limit) {
+      this.reached = true;
+      return false;
+    }
+    this.used += cost;
+    this.files++;
+    return true;
+  }
+
+  // For a scan again from what the index holds.
+  restart(lengths: number[]): void {
+    this.used = 0;
+    this.files = 0;
+    this.reached = false;
+    for (const length of lengths) {
+      this.used += Math.max(length, ScanBudget.FILE_MINIMUM);
+      this.files++;
+    }
+  }
 }
 
 export type ParsedDocumentsMap = Map<string, ProjectDocument>;
