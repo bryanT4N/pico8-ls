@@ -13,8 +13,8 @@ import { builtinInfo } from './parser/builtins';
 import ResolvedFile, { fileText, hasP8Extension, pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
 import {
-  DISK_OPERATIONS, forgetWatched, isScanned, isUnder, isWatched, listCartFiles, makeFileResolver, nearCart, onDisk, ProjectDocument, ProjectIndex, ScanBudget,
-  scansFolder, setExcludes, smallFoldersFirst,
+  DISK_OPERATIONS, forgetWatched, isScanned, isUnder, isWatched, listP8AndLuaFiles, makeFileResolver, nearP8File, onDisk, ProjectDocument,
+  ProjectIndex, ScanBudget, scansFolder, setExcludes, smallFoldersFirst,
 } from './projects';
 import { Exclude, excludeOf } from './files-exclude';
 import * as url from 'url';
@@ -41,27 +41,28 @@ const diskText = new Map<string, string>();
 
 let workspaceRoots: string[] = [];
 
-// The index asks whether a file belongs for every file it settles, so the folders that hold a cart are kept as a set.
-const carts = new Set<string>();
-let cartFolders: Set<string> | undefined;
+// The index asks whether a file belongs for every file it settles, so the folders that hold a .p8 file are kept as a
+// set.
+const p8Files = new Set<string>();
+let p8Folders: Set<string> | undefined;
 
-function addCart(filePath: string) {
-  carts.add(path.normalize(filePath));
-  cartFolders = undefined;
+function addP8File(filePath: string) {
+  p8Files.add(path.normalize(filePath));
+  p8Folders = undefined;
 }
 
-function deleteCart(filePath: string) {
-  carts.delete(path.normalize(filePath));
-  cartFolders = undefined;
+function deleteP8File(filePath: string) {
+  p8Files.delete(path.normalize(filePath));
+  p8Folders = undefined;
 }
 
-function hasCart(folder: string): boolean {
-  cartFolders ??= new Set([ ...carts ].map(cart => path.dirname(cart)));
-  return cartFolders.has(folder);
+function hasP8File(folder: string): boolean {
+  p8Folders ??= new Set([ ...p8Files ].map(p8File => path.dirname(p8File)));
+  return p8Folders.has(folder);
 }
 
 // Reads the disk, for a file the scan has not seen yet, or one outside the workspace folders.
-function folderHasCart(folder: string): boolean {
+function folderHasP8File(folder: string): boolean {
   try {
     return fs.readdirSync(folder).some(name => hasP8Extension(name) && isFile(path.join(folder, name)));
   } catch {
@@ -93,21 +94,23 @@ function isMember(uri: string): boolean {
 function isScanMember(uri: string): boolean {
   const filePath = pathOf(uri);
   return filePath !== undefined && isScanned(filePath, workspaceRoots)
-    && (hasP8Extension(filePath) || nearCart(filePath, workspaceRoots, hasCart));
+    && (hasP8Extension(filePath) || nearP8File(filePath, workspaceRoots, hasP8File));
 }
 
-// The carts a file can belong to, the .p8 files of its folder and the folders above it that the scans found, which the
+// The .p8 files a file can belong to, those of its folder and the folders above it that the scans found, which the
 // index does not hold.
-function cartsNotReadFor(filePath: string): string[] {
-  return [ ...carts ].filter(cart => isUnder(filePath, path.dirname(cart))).map(cart => pathToFileURL(cart)).filter(uri => !index.document(uri));
+function p8FilesNotReadFor(filePath: string): string[] {
+  return [ ...p8Files ].filter(p8File => isUnder(filePath, path.dirname(p8File))).map(p8File => pathToFileURL(p8File))
+    .filter(uri => !index.document(uri));
 }
 
 const fileResolver = makeFileResolver(uri => documents.get(uri)?.getText(), diskText);
 
 const index = new ProjectIndex(parseFile, isMember);
 
-// The client asks again whether its open lua documents belong to a cart, and switches those that do to PICO-8 Lua.
-function notifyCartFiles() {
+// The client asks again whether its open lua documents belong to a .p8 file, and switches those that do to PICO-8
+// Lua.
+function notifyMembershipChanged() {
   connection.sendNotification('pico-8-ls/didChangeCartFiles');
 }
 
@@ -160,9 +163,9 @@ connection.onInitialized(() => {
       const removed = event.removed.map(folder => url.fileURLToPath(folder.uri));
       const added = event.added.map(folder => url.fileURLToPath(folder.uri));
       workspaceRoots = [ ...workspaceRoots.filter(root => !removed.includes(root)), ...added ];
-      for (const cart of [ ...carts ]) {
-        if (!isScanned(cart, workspaceRoots)) {
-          deleteCart(cart);
+      for (const p8File of [ ...p8Files ]) {
+        if (!isScanned(p8File, workspaceRoots)) {
+          deleteP8File(p8File);
         }
       }
       // The file watcher reports nothing under a removed folder, so an includer reads such a file from the disk from
@@ -182,9 +185,9 @@ connection.onInitialized(() => {
       if (resend.length > 0 || index.joins() > joined) {
         publish([ ...index.uris(), ...resend ]);
       }
-      // A file under a removed folder and in a dot-folder of it can now belong to a cart in its own folder.
+      // A file under a removed folder and in a dot-folder of it can now belong to a .p8 file in its own folder.
       if (removed.length > 0 || index.joins() > joined) {
-        notifyCartFiles();
+        notifyMembershipChanged();
       }
       void fetchExcludes();
       Promise.all(event.added.map(scanWorkspaceFolder)).catch(e => {
@@ -238,25 +241,25 @@ async function scanFolder(folderPath: string, onlyNew = false, alsoPublish: stri
     // A folder inside a workspace folder is listed as the scan of the outermost one that reaches it would list it.
     const from = workspaceRoots.filter(root => scansFolder(folderPath, [ root ]))
       .reduce((outer, root) => path.normalize(root).length < path.normalize(outer).length ? root : outer, folderPath);
-    const allFiles = await listCartFiles(folderPath, from);
+    const allFiles = await listP8AndLuaFiles(folderPath, from);
 
     // The folder can have been removed while it was being listed.
     for (const filePath of allFiles) {
       if (hasP8Extension(filePath) && isScanned(filePath, workspaceRoots)) {
-        addCart(filePath);
+        addP8File(filePath);
       }
     }
-    // A .lua file that belongs to no cart is not read at all, so a folder of plain Lua costs only its listing. One that
-    // an #include waits for is read, as it is when the file watcher reports it.
+    // A .lua file that belongs to no .p8 file is not read at all, so a folder of plain Lua costs only its listing. One
+    // that an #include waits for is read, as it is when the file watcher reports it.
     const members = smallFoldersFirst(allFiles).map(filePath => pathToFileURL(filePath))
       .filter(uri => (isMember(uri) || index.isAwaited(uri)) && !(onlyNew && index.document(uri)));
     scansTookFiles = true;
     const read = await readWithinBudget(members);
     if (budget.reached) {
-      // Past the budget the files open in the editor still get every feature, with their carts.
+      // Past the budget the files open in the editor still get every feature, with the .p8 files they belong to.
       for (const document of documents.all()) {
         const filePath = pathOf(document.uri);
-        read.push(...filePath === undefined ? [] : cartsNotReadFor(filePath));
+        read.push(...filePath === undefined ? [] : p8FilesNotReadFor(filePath));
       }
       tellBudgetReached();
     }
@@ -279,7 +282,7 @@ async function scanFolder(folderPath: string, onlyNew = false, alsoPublish: stri
     if (!published) {
       publish(alsoPublish);
     }
-    notifyCartFiles();
+    notifyMembershipChanged();
     scansRunning--;
     if (rescanWanted !== undefined && scansRunning === 0) {
       rescan();
@@ -367,9 +370,9 @@ async function fetchExcludes(): Promise<void> {
 function rescan(): void {
   const list = rescanWanted === 'list';
   rescanWanted = undefined;
-  for (const cart of [ ...carts ]) {
-    if (!isScanned(cart, workspaceRoots)) {
-      deleteCart(cart);
+  for (const p8File of [ ...p8Files ]) {
+    if (!isScanned(p8File, workspaceRoots)) {
+      deleteP8File(p8File);
     }
   }
   const joined = index.joins();
@@ -377,7 +380,7 @@ function rescan(): void {
   budget.restart(index.uris().map(uri => index.document(uri)!.textDocument.getText().length));
   publish(resend);
   if (index.joins() > joined || resend.length > 0) {
-    notifyCartFiles();
+    notifyMembershipChanged();
   }
   for (const root of list ? workspaceRoots : []) {
     void scanFolder(root, true).catch(e => {
@@ -440,7 +443,7 @@ function publish(uris: string[]) {
   for (const diagnostics of index.diagnostics(uris, globalSettings.maxNumberOfProblems)) {
     connection.sendDiagnostics(diagnostics);
   }
-  // The file watcher skips a file that belongs to no cart, so the text of one that left would not be kept current.
+  // The file watcher skips a file that belongs to no .p8 file, so the text of one that left would not be kept current.
   for (const uri of uris) {
     if (!index.document(uri)) {
       diskText.delete(uri);
@@ -473,11 +476,11 @@ function takeSettings(given: PicoSettings) {
   }
 }
 
-// Past the budget a file opened in the editor still gets every feature, with its carts; the file itself joins as its
-// content comes.
+// Past the budget a file opened in the editor still gets every feature, with the .p8 files it belongs to; the file
+// itself joins as its content comes.
 documents.onDidOpen(({ document }) => {
   const filePath = pathOf(document.uri);
-  const unread = budget.reached && filePath !== undefined ? cartsNotReadFor(filePath) : [];
+  const unread = budget.reached && filePath !== undefined ? p8FilesNotReadFor(filePath) : [];
   if (unread.length > 0) {
     publish(index.scan(unread));
   }
@@ -487,7 +490,7 @@ documents.onDidChangeContent(change => {
   const joined = index.joins();
   publish(index.update(change.document.uri));
   if (index.joins() > joined) {
-    notifyCartFiles();
+    notifyMembershipChanged();
   }
 });
 
@@ -516,7 +519,7 @@ documents.onDidClose(e => {
   }
   // The text on the disk can #include files that the text in the editor did not.
   if (index.joins() > joined) {
-    notifyCartFiles();
+    notifyMembershipChanged();
   }
 });
 
@@ -545,13 +548,13 @@ connection.onWorkspaceSymbol(guarded('give workspace symbols', () => [], (params
 }));
 
 // The client asks for a lua document, uri in VS Code's form, to give it the PICO-8 Lua language. True when a project
-// root of the index #includes it, whatever its name, as PICO-8 does; or when it is a .lua file and a cart is in its
-// folder or a folder above it, so that a file such as notes.txt that the user shows as Lua keeps that language. Only
-// the search for a cart reads the disk, so that the answer does not wait for the scan to find the carts.
-connection.onRequest('pico-8-ls/belongsToCart', guarded('tell whether a file belongs to a cart', () => false, (params: { uri: string }) => {
+// root of the index #includes it, whatever its name, as PICO-8 does; or when it is a .lua file and a .p8 file is in
+// its folder or a folder above it, so that a file such as notes.txt that the user shows as Lua keeps that language.
+// Only the search for a .p8 file reads the disk, so that the answer does not wait for the scan to find the .p8 files.
+connection.onRequest('pico-8-ls/belongsToCart', guarded('tell whether a file belongs to a .p8 file', () => false, (params: { uri: string }) => {
   const filePath = pathOf(params.uri);
   return filePath !== undefined
-    && (index.isIncluded(params.uri) || (/\.lua$/i.test(filePath) && nearCart(filePath, workspaceRoots, folderHasCart)));
+    && (index.isIncluded(params.uri) || (/\.lua$/i.test(filePath) && nearP8File(filePath, workspaceRoots, folderHasP8File)));
 }));
 
 function offsetOf(params: TextDocumentPositionParams): number | undefined {
@@ -574,9 +577,9 @@ connection.onDidChangeWatchedFiles(change => {
   }
   const joined = index.joins();
   const uris: string[] = [];
-  const newCarts: string[] = [];
+  const newP8Files: string[] = [];
   const newFolders: string[] = [];
-  let cartDeleted = false;
+  let p8FileDeleted = false;
   for (const { uri, type } of change.changes) {
     const filePath = pathOf(uri);
     if (filePath === undefined) {
@@ -585,12 +588,12 @@ connection.onDidChangeWatchedFiles(change => {
     if (type === FileChangeType.Deleted) {
       // A folder that is deleted or renamed is reported alone, without the files under it. A tool that deletes a folder
       // file by file can send an event for each, when its deletes span the watcher's batches, so the files the server
-      // keeps are matched as text, without converting or normalizing each: a cart by its path, spelled as filePath is,
-      // any other file by its URI, in VS Code's form as the event's is.
+      // keeps are matched as text, without converting or normalizing each: a .p8 file by its path, spelled as filePath
+      // is, any other file by its URI, in VS Code's form as the event's is.
       const gone = (other: string, folder: string, separator: string) => other === folder || other.startsWith(folder + separator);
-      for (const cart of [ ...carts ].filter(cart => gone(cart, filePath, path.sep))) {
-        deleteCart(cart);
-        cartDeleted = true;
+      for (const p8File of [ ...p8Files ].filter(p8File => gone(p8File, filePath, path.sep))) {
+        deleteP8File(p8File);
+        p8FileDeleted = true;
       }
       for (const cached of [ ...diskText.keys() ].filter(cached => gone(cached, uri, '/'))) {
         diskText.delete(cached);
@@ -610,7 +613,7 @@ connection.onDidChangeWatchedFiles(change => {
         uris.push(...index.scan(awaited));
       }
       const toScan = scansFolder(filePath, workspaceRoots) && !newFolders.some(folder => isUnder(filePath, folder));
-      // A folder can have a name like a cart's or a .lua file's, such as json.lua.
+      // A folder can have a name like a .p8 file's or a .lua file's, such as json.lua.
       if ((toScan || named) && isFolder(filePath)) {
         if (toScan) {
           newFolders.push(filePath);
@@ -628,8 +631,8 @@ connection.onDidChangeWatchedFiles(change => {
       continue;
     }
     if (type === FileChangeType.Created && hasP8Extension(filePath) && isScanned(filePath, workspaceRoots)) {
-      addCart(filePath);
-      newCarts.push(filePath);
+      addP8File(filePath);
+      newP8Files.push(filePath);
     }
     if (!known && !isMember(uri) && !index.isAwaited(uri)) {
       continue;
@@ -652,25 +655,25 @@ connection.onDidChangeWatchedFiles(change => {
       uris.push(...index.update(uri));
     }
   }
-  if (cartDeleted) {
-    // The files near the deleted carts that nothing #includes leave; a file that one of them included can now be the
-    // root of its own project, and a file whose parse failed before can join.
+  if (p8FileDeleted) {
+    // The files near the deleted .p8 files that nothing #includes leave; a file that one of them included can now be
+    // the root of its own project, and a file whose parse failed before can join.
     const joinedBefore = index.joins();
     const resend = index.prune();
     if (resend.length > 0 || index.joins() > joinedBefore) {
       uris.push(...index.uris(), ...resend);
     }
   }
-  // The scan of a new cart's folder sends the problems of every file when it parses any, so this batch's go with it,
-  // not before.
-  if (newCarts.length === 0) {
+  // The scan of a new .p8 file's folder sends the problems of every file when it parses any, so this batch's go with
+  // it, not before.
+  if (newP8Files.length === 0) {
     publish(uris);
   }
-  // A new cart brings in the .lua files of its folder and the folders below, which the scan left out while no cart was
-  // near them.
-  newCarts.forEach((cart, i) => {
-    void scanFolder(path.dirname(cart), true, i === 0 ? uris : []).catch(e => {
-      console.error('Error scanning the folder of ' + cart, e);
+  // A new .p8 file brings in the .lua files of its folder and the folders below, which the scan left out while no .p8
+  // file was near them.
+  newP8Files.forEach((p8File, i) => {
+    void scanFolder(path.dirname(p8File), true, i === 0 ? uris : []).catch(e => {
+      console.error('Error scanning the folder of ' + p8File, e);
     });
   });
   for (const folder of newFolders) {
@@ -679,7 +682,7 @@ connection.onDidChangeWatchedFiles(change => {
     });
   }
   if (index.joins() > joined) {
-    notifyCartFiles();
+    notifyMembershipChanged();
   }
 });
 

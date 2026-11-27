@@ -12,7 +12,7 @@ import { NO_OUTLINE_OPTIONS } from '../parser/outline/model';
 import { outlineLines } from '../parser/test/outline-utils';
 import { ALL_OUTLINE_OPTIONS, formatError } from '../parser/test/test-utils';
 import {
-  DISK_OPERATIONS, FolderReader, forgetWatched, isScanned, isTrackedPath, isWatched, listCartFiles, makeFileResolver, nearCart, onDisk,
+  DISK_OPERATIONS, FolderReader, forgetWatched, isScanned, isTrackedPath, isWatched, listP8AndLuaFiles, makeFileResolver, nearP8File, onDisk,
   ProjectDocument, ProjectIndex, ScanBudget, scansFolder, setExcludes, smallFoldersFirst,
 } from '../projects';
 import { excludeOf } from '../files-exclude';
@@ -76,52 +76,52 @@ describe('scansFolder', () => {
   });
 });
 
-describe('nearCart', () => {
+describe('nearP8File', () => {
   const ws = path.resolve('/ws');
-  const carts = new Set([ path.join(ws, 'MoleMole'), path.join(ws, 'pico8-ls', 'testfiles') ]);
-  const hasCart = (folder: string) => carts.has(folder);
+  const p8Folders = new Set([ path.join(ws, 'MoleMole'), path.join(ws, 'pico8-ls', 'testfiles') ]);
+  const hasP8File = (folder: string) => p8Folders.has(folder);
 
-  it('finds a cart in the file\'s folder or a folder above it', () => {
-    eq(nearCart(path.join(ws, 'MoleMole', 'mole_mole.lua'), [ ws ], hasCart), true);
-    eq(nearCart(path.join(ws, 'pico8-ls', 'testfiles', 'beetrootpaul-dart-07', 'game.lua'), [ ws ], hasCart), true);
-    eq(nearCart(path.join(ws, 'pico8-ls', 'client', 'x.lua'), [ ws ], hasCart), false);
+  it('finds a .p8 file in the file\'s folder or a folder above it', () => {
+    eq(nearP8File(path.join(ws, 'MoleMole', 'mole_mole.lua'), [ ws ], hasP8File), true);
+    eq(nearP8File(path.join(ws, 'pico8-ls', 'testfiles', 'beetrootpaul-dart-07', 'game.lua'), [ ws ], hasP8File), true);
+    eq(nearP8File(path.join(ws, 'pico8-ls', 'client', 'x.lua'), [ ws ], hasP8File), false);
   });
 
   it('looks up to the outermost workspace folder that scans the file, and no further', () => {
     const a = path.join(ws, 'a');
     const atWs = (folder: string) => folder === ws;
-    eq(nearCart(path.join(a, 'x.lua'), [ a ], atWs), false);
-    eq(nearCart(path.join(a, 'x.lua'), [ ws, a ], atWs), true);
+    eq(nearP8File(path.join(a, 'x.lua'), [ a ], atWs), false);
+    eq(nearP8File(path.join(a, 'x.lua'), [ ws, a ], atWs), true);
   });
 
-  it('takes no cart through a dot-folder', () => {
-    eq(nearCart(path.join(ws, 'pico8-ls', 'testfiles', '.hidden', 'x.lua'), [ ws ], hasCart), false);
+  it('takes no .p8 file through a dot-folder', () => {
+    eq(nearP8File(path.join(ws, 'pico8-ls', 'testfiles', '.hidden', 'x.lua'), [ ws ], hasP8File), false);
     const root = path.parse(process.cwd()).root;
     const game = path.join(root, '.proj', 'game');
-    eq(nearCart(path.join(game, 'x.lua'), [ root, game ], folder => folder === game), true);
-    eq(nearCart(path.join(game, 'x.lua'), [ root, game ], folder => folder === path.join(root, '.proj')), false);
+    eq(nearP8File(path.join(game, 'x.lua'), [ root, game ], folder => folder === game), true);
+    eq(nearP8File(path.join(game, 'x.lua'), [ root, game ], folder => folder === path.join(root, '.proj')), false);
   });
 
   it('looks only in its own folder for a file under no workspace folder', () => {
     const game = path.resolve('/elsewhere/game');
-    eq(nearCart(path.join(game, 'x.lua'), [ ws ], folder => folder === game), true);
-    eq(nearCart(path.join(game, 'src', 'x.lua'), [ ws ], folder => folder === game), false);
+    eq(nearP8File(path.join(game, 'x.lua'), [ ws ], folder => folder === game), true);
+    eq(nearP8File(path.join(game, 'src', 'x.lua'), [ ws ], folder => folder === game), false);
   });
 
   it('looks up to a drive root that is a workspace folder', () => {
     const root = path.parse(process.cwd()).root;
     const file = path.join(root, 'games', 'src', 'x.lua');
     const asked: string[] = [];
-    eq(nearCart(file, [ root ], folder => {
+    eq(nearP8File(file, [ root ], folder => {
       asked.push(folder);
       return folder === root;
     }), true);
     deepStrictEqual(asked, [ path.join(root, 'games', 'src'), path.join(root, 'games'), root ]);
-    eq(nearCart(file, [ root ], () => false), false);
+    eq(nearP8File(file, [ root ], () => false), false);
   });
 });
 
-describe('listCartFiles', () => {
+describe('listP8AndLuaFiles', () => {
   const sortedUnder = (dir: string, files: string[]) => files.map(file => path.relative(dir, file).split(path.sep).join('/')).sort();
 
   it('follows a junction, but not one back to a folder it came through from the workspace folder or one whose name starts with a dot', async () => {
@@ -137,10 +137,10 @@ describe('listCartFiles', () => {
       fs.symlinkSync(outside, path.join(ws, '.hidden'), 'junction');
       fs.symlinkSync(ws, path.join(ws, 'loop'), 'junction');
       fs.symlinkSync(ws, path.join(outside, 'back'), 'junction');
-      deepStrictEqual(sortedUnder(ws, await listCartFiles(ws)), [ 'linked/lib.lua', 'main.p8' ]);
+      deepStrictEqual(sortedUnder(ws, await listP8AndLuaFiles(ws)), [ 'linked/lib.lua', 'main.p8' ]);
       // A junction made while the workspace is open, which the server lists as a new folder.
-      deepStrictEqual(sortedUnder(ws, await listCartFiles(path.join(ws, 'linked'), ws)), [ 'linked/lib.lua' ]);
-      deepStrictEqual(await listCartFiles(path.join(ws, 'loop'), ws), []);
+      deepStrictEqual(sortedUnder(ws, await listP8AndLuaFiles(path.join(ws, 'linked'), ws)), [ 'linked/lib.lua' ]);
+      deepStrictEqual(await listP8AndLuaFiles(path.join(ws, 'loop'), ws), []);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -156,7 +156,7 @@ describe('listCartFiles', () => {
       stat: file => path.basename(file) === 'gone.lua' ? Promise.reject(new Error(`ENOENT: ${file}`)) : Promise.resolve(entry(path.basename(file), 'file')),
       realpath: file => Promise.resolve(file),
     };
-    deepStrictEqual(sortedUnder(ws, await listCartFiles(ws, ws, reader)), [ 'lib.lua', 'main.p8' ]);
+    deepStrictEqual(sortedUnder(ws, await listP8AndLuaFiles(ws, ws, reader)), [ 'lib.lua', 'main.p8' ]);
   });
 });
 
@@ -172,7 +172,7 @@ describe('files.exclude in the scan', () => {
     deepStrictEqual([ 'b', 'runs', 'b/runs/x' ].map(folder => scansFolder(path.join(ws, folder), [ ws ])), [ true, false, false ]);
     eq(isScanned(path.join(other, 'runs', 'main.p8'), [ other ]), true);
     // Whether a .lua file opens as PICO-8 Lua does not depend on it.
-    eq(nearCart(path.join(ws, 'runs', 'lib.lua'), [ ws ], folder => folder === path.join(ws, 'runs')), true);
+    eq(nearP8File(path.join(ws, 'runs', 'lib.lua'), [ ws ], folder => folder === path.join(ws, 'runs')), true);
     const entry = (name: string, kind: 'file' | 'folder') => ({ name, isFile: () => kind === 'file', isDirectory: () => kind === 'folder', isSymbolicLink: () => false });
     const listed: string[] = [];
     const reader: FolderReader = {
@@ -183,7 +183,7 @@ describe('files.exclude in the scan', () => {
       stat: () => Promise.reject(new Error('no links here')),
       realpath: file => Promise.resolve(file),
     };
-    deepStrictEqual(await listCartFiles(ws, ws, reader), [ path.join(ws, 'main.p8') ]);
+    deepStrictEqual(await listP8AndLuaFiles(ws, ws, reader), [ path.join(ws, 'main.p8') ]);
     deepStrictEqual(listed, [ ws ]);
   });
 

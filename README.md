@@ -58,16 +58,16 @@ PICO-8 reports loading, `#include` and token errors before the compiler's errors
 
 ## Which `.lua` files are PICO-8 Lua
 
-A `.lua` file opens as PICO-8 Lua when it belongs to a cart:
+A `.lua` file opens as PICO-8 Lua when it belongs to a `.p8` file:
 
 - a `.p8` file is in its folder, or in a folder above it inside the workspace folder (a folder whose name starts with a dot does not count; folders reached through links, such as Windows junctions, do), or
-- a cart in the workspace (outside folders whose names start with a dot), a `.lua` file there that the rule above counts, or any file you have open as PICO-8 or PICO-8 Lua `#include`s it directly, wherever it is. As in PICO-8, an `#include` in an included file is not followed, unless that file is a cart of this list, which PICO-8 runs on its own. When files of this list include one another and no other `#include` that is followed reaches them, each of them counts as not included.
+- a `.p8` file in the workspace (outside folders whose names start with a dot), a `.lua` file there that the rule above counts, or any file you have open as PICO-8 or PICO-8 Lua `#include`s it directly, wherever it is. As in PICO-8, an `#include` in an included file is not followed, unless that file is a `.p8` file of this list, as PICO-8 runs a cart on its own. When files of this list include one another and no other `#include` that is followed reaches them, each of them counts as not included.
 
-Only `#include` in lower case and followed by a space, with nothing but spaces or tabs before it on its line, is an `#include`, and, as in PICO-8, only where the cart's own text is outside a long string or comment: one that an included file leaves open does not count.
+Only `#include` in lower case and followed by a space, with nothing but spaces or tabs before it on its line, is an `#include`, and, as in PICO-8, only where the including file's own text is outside a long string or comment: one that an included file leaves open does not count.
 
 Other `.lua` files open as plain Lua, and the language server leaves them alone. A file you switch to PICO-8 Lua yourself, with Change Language Mode, is PICO-8 Lua while it is open.
 
-When you switch a file from PICO-8 Lua to a language other than PICO-8, the extension does not switch it back to PICO-8 Lua in this workspace, also after a reload, until you choose PICO-8 Lua for it again. So a `.lua` file near a cart that is not PICO-8 code, such as a build script, can be kept as plain Lua, and it then shows no PICO-8 warnings. Nor does the extension switch a file that `files.associations` gives a language; when that language is not PICO-8 or PICO-8 Lua, the file shows no PICO-8 warnings either, open or closed.
+When you switch a file from PICO-8 Lua to a language other than PICO-8, the extension does not switch it back to PICO-8 Lua in this workspace, also after a reload, until you choose PICO-8 Lua for it again. So a `.lua` file near a `.p8` file that is not PICO-8 code, such as a build script, can be kept as plain Lua, and it then shows no PICO-8 warnings. Nor does the extension switch a file that `files.associations` gives a language; when that language is not PICO-8 or PICO-8 Lua, the file shows no PICO-8 warnings either, open or closed.
 
 A change of `files.associations` also sets the open files whose language you have not chosen yourself back to the language it gives them, the file you are in too, for example when settings.json is saved as you click into a `.lua` file. So a change of language less than a second before or after a change of `files.associations`, to the language it gives the file, is taken as caused by it, not as your choice.
 
@@ -81,7 +81,7 @@ To open every `.lua` file as PICO-8 Lua, as versions before 0.6.0 did, add this 
 
 ## Large workspaces
 
-The language server reads the carts of the workspace and their `.lua` files, leaving out what `files.exclude` hides, also after you change it. It reads small folders first, and once the files it has read hold about 20 million characters it reads no more and says so once, so that a large folder is what is left out: Go to Symbol in Workspace and the problems of files that are not open then leave out the rest. A file you open still gets every feature, with the carts in its folder and the folders above it. To have everything read, exclude the large folders you do not work on, such as generated or test output, with `files.exclude`.
+The language server reads the `.p8` files of the workspace and the `.lua` files that belong to them, leaving out what `files.exclude` hides, also after you change it. It reads small folders first, and once the files it has read hold about 20 million characters it reads no more and says so once, so that a large folder is what is left out: Go to Symbol in Workspace and the problems of files that are not open then leave out the rest. A file you open still gets every feature, with the `.p8` files in its folder and the folders above it. To have everything read, exclude the large folders you do not work on, such as generated or test output, with `files.exclude`.
 
 ## Support for other platforms
 

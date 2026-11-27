@@ -42,9 +42,9 @@ export function isScanned(filePath: string, roots: string[]): boolean {
   return roots.some(root => isUnder(filePath, root)) && isTrackedPath(filePath, roots);
 }
 
-// A cart takes in the .lua files of its folder and the folders below, as a tsconfig.json does. hasCart gets folders as
-// path.dirname gives them.
-export function nearCart(filePath: string, roots: string[], hasCart: (folder: string) => boolean): boolean {
+// A .p8 file takes in the .lua files of its folder and the folders below, as a tsconfig.json does. hasP8File gets
+// folders as path.dirname gives them.
+export function nearP8File(filePath: string, roots: string[], hasP8File: (folder: string) => boolean): boolean {
   const holding = roots.filter(root => isUnder(filePath, root));
   const tracking = holding.filter(root => reaches(root, path.dirname(filePath)));
   if (holding.length > 0 && tracking.length === 0) {
@@ -54,7 +54,7 @@ export function nearCart(filePath: string, roots: string[], hasCart: (folder: st
     ? path.dirname(filePath)
     : tracking.reduce((outer, root) => path.normalize(root).length < path.normalize(outer).length ? root : outer);
   for (let folder = path.dirname(filePath); ; folder = path.dirname(folder)) {
-    if (hasCart(folder)) {
+    if (hasP8File(folder)) {
       return true;
     }
     if (path.relative(top, folder) === '' || path.dirname(folder) === folder) {
@@ -169,7 +169,7 @@ const DISK: FolderReader = {
 // Links, junctions among them, are followed, as VS Code's search does, but not a link back to a folder the listing
 // came through from the workspace folder `from`, which would never end. What the folder's files.exclude hides is left
 // out.
-export async function listCartFiles(folder: string, from = folder, reader: FolderReader = DISK): Promise<string[]> {
+export async function listP8AndLuaFiles(folder: string, from = folder, reader: FolderReader = DISK): Promise<string[]> {
   const between = path.relative(from, folder).split(path.sep).filter(part => part !== '');
   const above = between.map((_, i) => path.join(from, ...between.slice(0, i)));
   const chain = await Promise.all([ ...above, folder ].map(dir => reader.realpath(dir).catch(() => dir)));
@@ -234,7 +234,7 @@ export function smallFoldersFirst(files: string[]): string[] {
 }
 
 // What the scans read for the project-wide features, workspace symbols, the diagnostics of files that are not open and
-// membership: the text of the files, each counting at least FILE_MINIMUM characters. Measured on real carts, the index
+// membership: the text of the files, each counting at least FILE_MINIMUM characters. Measured on real files, the index
 // keeps 14 to 43 bytes for each character of text, and 2 to 6 KB more for each file.
 export class ScanBudget {
   static readonly FILE_MINIMUM = 256;
@@ -400,8 +400,8 @@ export class ProjectIndex {
     return unique([ ...this.documents.keys(), ...uris, ...dropped, ...left ]);
   }
 
-  // After what the server counts as a member changed, as when a cart that another cart includes stops being a member,
-  // every file's diagnostics are to be sent again.
+  // After what the server counts as a member changed, as when a .p8 file that another .p8 file includes stops being a
+  // member, every file's diagnostics are to be sent again.
   prune(): string[] {
     const { left, regrouped } = this.settle();
     this.analyseChanged();
@@ -481,7 +481,7 @@ export class ProjectIndex {
   }
 
   // The warnings of the file's own project when it is a root, as its outline comes from there; otherwise only the
-  // warnings every project containing uri gives: in a file that several carts include, a warning that one cart's code
+  // warnings every project containing uri gives: in a file that several roots include, a warning that one root's code
   // proves wrong is not shown. A project whose analysis failed gives an empty list; intersecting with it would remove
   // all warnings from other projects, so failed projects are skipped, as the outline of such a file skips them.
   warnings(uri: string): Warning[] {

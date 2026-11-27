@@ -38,10 +38,10 @@ export type DiagnosticsFilter = {
   refresh: (client: LanguageClient) => void,
 };
 
-// A .lua file near a cart stays in the cart's project whatever language its editor has, as a file stays in its tsconfig
-// project, so the server goes on sending its warnings, from its text on the disk. A file the user moved away from a
-// PICO-8 language, or that files.associations gives a language other than PICO-8 and PICO-8 Lua, shows none, as a file
-// that the TypeScript extension no longer has open as TypeScript shows no errors.
+// A .lua file near a .p8 file stays in that file's project whatever language its editor has, as a file stays in its
+// tsconfig project, so the server goes on sending its warnings, from its text on the disk. A file the user moved away
+// from a PICO-8 language, or that files.associations gives a language other than PICO-8 and PICO-8 Lua, shows none, as
+// a file that the TypeScript extension no longer has open as TypeScript shows no errors.
 export function diagnosticsFilter(kept: Set<string>): DiagnosticsFilter {
   // A change of the kept languages or of files.associations shows or hides what the server sent before, which it has
   // no reason to send again: for a closed file it does not know about the change at all.
@@ -80,7 +80,7 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
       await client.onReady();
       belongs = await client.sendRequest<boolean>('pico-8-ls/belongsToCart', { uri: document.uri.toString() });
     } catch (e) {
-      console.log('Failed to ask whether a lua document belongs to a cart', e);
+      console.log('Failed to ask whether a lua document belongs to a .p8 file', e);
       return;
     }
     // Asked again because things change during the round trip: the document can be closed or given another language,
@@ -151,7 +151,7 @@ export function switchLuaDocuments(context: ExtensionContext, client: LanguageCl
   }));
 
   // A server that restarts after a crash comes with a new connection, which has none of the old one's handlers, and
-  // carts and #includes can have changed while it was down.
+  // .p8 files and #includes can have changed while it was down.
   context.subscriptions.push(client.onDidChangeState(({ newState }) => {
     if (newState === State.Running) {
       client.onNotification('pico-8-ls/didChangeCartFiles', checkAll);
