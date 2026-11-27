@@ -15,7 +15,7 @@ import {
   TableConstructorExpression,
   VarargLiteral,
 } from './expressions';
-import ResolvedFile, { FileResolver, RealFileResolver, resolveIncludeFile } from './file-resolver';
+import ResolvedFile, { FileResolver, hasP8Extension, RealFileResolver, resolveIncludeFile } from './file-resolver';
 import { characterCount, Code, joined, readCode, tabsOf } from './code';
 import Lexer, { countTokens, includeLinesOf, lineEnd, lineFeeds, onOneLine, OpenBracket } from './lexer';
 import Marker from './marker';
@@ -143,10 +143,6 @@ export default class Parser {
     this.lexerStack = [ this.lexer ];
   }
 
-  isCart(): boolean {
-    return /\.p8$/i.test(this.mainFile.path);
-  }
-
   isInIncludedFile(): boolean {
     return this.lexerStack.length > 1;
   }
@@ -267,7 +263,7 @@ export default class Parser {
     const body = this.parseBlock(flowContext, isEndOfFile);
     if (this.token.type !== TokenType.EOF) {
       this.errors.push(errors.createErrForToken(this.token, errMessages.expected, '<eof>', tokenText(this.token)));
-    } else if (this.isCart()) {
+    } else if (this.code.cart) {
       // PICO-8 rejects a return in a cart's outermost block, also as its last statement (4.return.end-bare), and a
       // goto there past a local to a label at the end, which Lua allows at the end of a block
       // (4.goto.end-of-chunk-local).
@@ -294,7 +290,7 @@ export default class Parser {
     if (this.code.cart) {
       this.checkCharacters();
       this.checkTokens();
-    } else if (this.isCart() && !/\.lua/i.test(this.mainFile.path)) {
+    } else if (hasP8Extension(this.mainFile.path) && !/\.lua/i.test(this.mainFile.path)) {
       // PICO-8 does not load such a file, whatever it holds, so this error comes before any other; it reads one whose
       // path has .lua in it as Lua (5.load.*).
       const start = { index: 0, line: 1, column: 0, filename: this.mainFile };

@@ -34,6 +34,11 @@ export default class ResolvedFile {
   }
 }
 
+// Whether a path or URI names a .p8 file. Whether the file is a cart is up to its text (readCode).
+export function hasP8Extension(name: string): boolean {
+  return /\.p8$/i.test(name);
+}
+
 export function fileURLToPath(fileUrl: string): string {
   return url.fileURLToPath(fileUrl);
 }

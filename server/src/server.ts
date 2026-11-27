@@ -10,7 +10,7 @@ import Parser from './parser/parser';
 import { boundsToString } from './parser/types';
 import { isParseError } from './parser/errors';
 import { builtinInfo } from './parser/builtins';
-import ResolvedFile, { fileText, pathToFileURL } from './parser/file-resolver';
+import ResolvedFile, { fileText, hasP8Extension, pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
 import { forgetWatched, isScanned, isUnder, isWatched, listCartFiles, makeFileResolver, nearCart, ProjectDocument, ProjectIndex, scansFolder } from './projects';
 import * as url from 'url';
@@ -59,7 +59,7 @@ function hasCart(folder: string): boolean {
 // Reads the disk, for a file the scan has not seen yet, or one outside the workspace folders.
 function folderHasCart(folder: string): boolean {
   try {
-    return fs.readdirSync(folder).some(name => /\.p8$/i.test(name) && isFile(path.join(folder, name)));
+    return fs.readdirSync(folder).some(name => hasP8Extension(name) && isFile(path.join(folder, name)));
   } catch {
     return false;
   }
@@ -80,7 +80,7 @@ function isMember(uri: string): boolean {
   }
   const filePath = pathOf(uri);
   return filePath !== undefined && isScanned(filePath, workspaceRoots)
-    && (/\.p8$/i.test(filePath) || nearCart(filePath, workspaceRoots, hasCart));
+    && (hasP8Extension(filePath) || nearCart(filePath, workspaceRoots, hasCart));
 }
 
 const fileResolver = makeFileResolver(uri => documents.get(uri)?.getText(), diskText);
@@ -210,7 +210,7 @@ async function scanFolder(folderPath: string, onlyNew = false, alsoPublish: stri
 
     // The folder can have been removed while it was being listed.
     for (const filePath of allFiles) {
-      if (/\.p8$/i.test(filePath) && isScanned(filePath, workspaceRoots)) {
+      if (hasP8Extension(filePath) && isScanned(filePath, workspaceRoots)) {
         addCart(filePath);
       }
     }
@@ -487,7 +487,7 @@ connection.onDidChangeWatchedFiles(change => {
     if (!known && !isScanned(filePath, workspaceRoots) && !index.isAwaited(uri)) {
       continue;
     }
-    if (type === FileChangeType.Created && /\.p8$/i.test(filePath) && isScanned(filePath, workspaceRoots)) {
+    if (type === FileChangeType.Created && hasP8Extension(filePath) && isScanned(filePath, workspaceRoots)) {
       addCart(filePath);
       newCarts.push(filePath);
     }

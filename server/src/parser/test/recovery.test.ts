@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as path from 'path';
 import { Identifier } from '../expressions';
 import { AssignmentStatement, DoStatement, FunctionDeclaration } from '../statements';
 import { Bounds } from '../types';
@@ -460,5 +461,15 @@ describe('statements as PICO-8 reads them', () => {
     assert.deepStrictEqual(cartErrors(lines('do return end', 'if (a) return', 'do', 'goto l', 'local q', '::l::', 'end', 'function f()', 'goto m', 'local r', '::m::', 'end')), []);
     assert.deepStrictEqual(errorsOf(lines('printh("ok")', 'return')), []);
     assert.deepStrictEqual(errorsOf(lines('goto l', 'local q', '::l::')), []);
+  });
+
+  it('takes a file for a cart by its header, whatever its name, for the return and goto rules too', () => {
+    const errorsIn = (filename: string, code: string) => parse(code, { filename }).errors.map(formatError);
+    const header = lines('pico-8 cartridge // http://www.pico-8.com', 'version 42', '__lua__');
+    assert.deepStrictEqual(errorsIn('main.lua', lines(header, 'printh("ok")', 'return 1')),
+      [ 'main.lua 5:0 PICO-8 does not accept a return in the cart\'s outermost block' ]);
+    assert.deepStrictEqual(errorsIn('main.lua', lines(header, 'goto l', 'local q', '::l::')), [ 'main.lua 4:0 <goto l> jumps into the scope of local \'q\'' ]);
+    // PICO-8 runs a .p8 file without the header whose path has .lua in it as Lua.
+    assert.deepStrictEqual(errorsIn(path.join('a.lua', 'main.p8'), lines('printh("ok")', 'return 1')), []);
   });
 });

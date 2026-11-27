@@ -5,7 +5,7 @@ import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ParseError, Warning } from './parser/errors';
-import ResolvedFile, { FileResolver, RealFileResolver } from './parser/file-resolver';
+import ResolvedFile, { FileResolver, hasP8Extension, RealFileResolver } from './parser/file-resolver';
 import { analyze, emptyAnalysis } from './parser/analysis/binder';
 import { Analysis, Reference } from './parser/analysis/model';
 import { definitionsAt, referenceAt, referencesOf, warningsOf } from './parser/analysis/queries';
@@ -512,7 +512,7 @@ export class ProjectIndex {
     this.awaited = undefined;
   }
 
-  // The roots of the projects: every member cart, which PICO-8 runs on its own, and every other member that no root
+  // The roots of the projects: every member .p8 file, which PICO-8 runs on its own, and every other member that no root
   // #includes, as PICO-8 follows no #include in an included file. Members that #include one another in a cycle that no
   // root #includes are roots each, and the members they #include are then placed as below any other root.
   private findRoots(): string[] {
@@ -525,7 +525,7 @@ export class ProjectIndex {
         }
       }
     }
-    const roots = new Set(members.filter(isCartUri));
+    const roots = new Set(members.filter(hasP8Extension));
     const included = new Set<string>();
     const undecided = () => members.filter(member => !roots.has(member) && !included.has(member));
     const place = () => {
@@ -683,10 +683,6 @@ export class ProjectIndex {
     }
     return [ ...places.values() ].sort(byPlace).map(toLocation);
   }
-}
-
-function isCartUri(uri: string): boolean {
-  return /\.p8$/i.test(uri);
 }
 
 function includedUris(document: ProjectDocument | undefined): Set<string> {
