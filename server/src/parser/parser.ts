@@ -42,7 +42,7 @@ import {
   Statement,
   WhileStatement,
 } from './statements';
-import { Token, tokenText, TokenType } from './tokens';
+import { isSymbol, Token, tokenText, TokenType } from './tokens';
 import * as path from 'path';
 import { ASTNode, Bounds, boundsClone, CodeLocation } from './types';
 import Operators from './operators';
@@ -408,7 +408,7 @@ export default class Parser {
           this.takeComments(lexer);
           continue;
         }
-      } else if (token.type === TokenType.Punctuator && token.value === '#' && lexer.includeLines?.has(lexer.tokenStart)) {
+      } else if (isSymbol(token, '#') && lexer.includeLines?.has(lexer.tokenStart)) {
         this.paste(lexer.readIncludeLine(lexer.tokenStart));
         continue;
       }
@@ -618,7 +618,7 @@ export default class Parser {
     this.placeIncludes(block);
 
     // A label right before `until` is not at the end of its block for Lua, which checks the gotos to it there.
-    if (this.token.type === TokenType.Keyword && this.token.value === 'until') {
+    if (isSymbol(this.token, 'until')) {
       flowContext.raiseDeferredErrors(this.token);
     }
 
@@ -685,7 +685,7 @@ export default class Parser {
       this.errors.push(this.blockEndError(closer, opener, word));
       return false;
     }
-    if (this.token.type !== TokenType.Keyword || this.token.value !== closer) {
+    if (!isSymbol(this.token, closer)) {
       throw this.blockEndError(closer, opener, word);
     }
     this.lexerNext();
@@ -811,7 +811,7 @@ export default class Parser {
     let body: Block | undefined;
     let closed = true;
 
-    const startsWithParen = this.token.value === '(';
+    const startsWithParen = isSymbol(this.token, '(');
     const condition = this.parseExpectedExpression(flowContext);
 
     if (this.lexer.consume('do')) {
@@ -835,7 +835,7 @@ export default class Parser {
   // while, unless the condition ends with a ) that is not the one after c: (a)(f)() and (a) or f() need their then
   // (4.if.paren-body, 4.if.paren-or-call), (a).x and (f)"s" do not (4.if.paren-field, 4.if.paren-string-call).
   private isOneLineBody(condition: Expression, keyword: Token): boolean {
-    const endsWithParen = this.previousToken.type === TokenType.Punctuator && this.previousToken.value === ')';
+    const endsWithParen = isSymbol(this.previousToken, ')');
     return this.token.type !== TokenType.EOF && this.token.type !== TokenType.Newline && onOneLine(keyword, this.token)
       && (!endsWithParen || !!condition.parens);
   }
@@ -878,17 +878,13 @@ export default class Parser {
   parseReturnStatement(flowContext: FlowContext): ReturnStatement {
     const expressions = [];
 
-    if ('end' !== this.token.value) {
-      let expression = this.parseExpression(flowContext);
-      if (null != expression) {
-        expressions.push(expression);
-      }
-      while (this.lexer.consume(',')) {
-        expression = this.parseExpectedExpression(flowContext);
-        expressions.push(expression);
-      }
-      this.lexer.consume(';'); // grammar tells us ; is optional here.
+    // As in Lua, there are values unless the block ends or a ; comes next; the end of its line ends a one-line block.
+    if (!isEndOfLine(this.token) && !isSymbol(this.token, ';')) {
+      do {
+        expressions.push(this.parseExpectedExpression(flowContext));
+      } while (this.lexer.consume(','));
     }
+    this.lexer.consume(';'); // grammar tells us ; is optional here.
     return this.finishNode(AST.returnStatement(expressions));
   }
 
@@ -909,7 +905,7 @@ export default class Parser {
     let marker = this.locations[this.locations.length - 1];
     this.pushLocation(marker);
 
-    const startsWithParen = this.token.value === '(';
+    const startsWithParen = isSymbol(this.token, '(');
 
     condition = this.parseExpectedExpression(flowContext);
 
@@ -928,7 +924,7 @@ export default class Parser {
           clauses.push(this.finishNode(AST.ifClause(condition, block)));
           this.expectEndOfLine();
 
-          while (this.token.value === 'elseif') {
+          while (isSymbol(this.token, 'elseif')) {
             this.pushLocation(this.createLocationMarker());
             this.lexerNext();
             const elseifCondition = this.parseExpectedExpression(flowContext);
@@ -1006,10 +1002,11 @@ export default class Parser {
     let variable = this.parseIdentifier();
     let body;
 
-    // Lua declares the 3 hidden variables of either loop and its first name here.
-    if ([ '=', ',', 'in' ].includes(this.token.value as string)) {
-      this.checkVariables(flowContext, 4);
+    if (!isSymbol(this.token, '=') && !isSymbol(this.token, ',') && !isSymbol(this.token, 'in')) {
+      errors.raiseUnexpectedToken('\'=\' or \'in\'', this.token);
     }
+    // Lua declares the 3 hidden variables of either loop and its first name here.
+    this.checkVariables(flowContext, 4);
 
     // If the first expression is followed by a `=` punctuator, this is a
     // Numeric For Statement.
@@ -1136,7 +1133,7 @@ export default class Parser {
         base = this.parseIdentifier();
         this.useName(flowContext, base.name);
         lvalue = true;
-      } else if ('(' === this.token.value) {
+      } else if (isSymbol(this.token, '(')) {
         this.lexerNext();
         base = this.parseExpectedExpression(flowContext);
         this.lexer.expect(')');
@@ -1170,7 +1167,7 @@ export default class Parser {
         this.tooManyLevels();
       }
 
-      if (',' !== this.token.value) {
+      if (!isSymbol(this.token, ',')) {
         break;
       }
 
@@ -1309,7 +1306,7 @@ export default class Parser {
           this.errors.push(errors.createErrForToken(this.token, errMessages.expectedToken, '<name> or \'...\'', tokenText(this.token)));
 
           // Discard tokens until we get a ')' or ','
-          while (this.token.value !== ')' && this.token.value !== ',' && !endsParameterList(this.token)) {
+          while (!isSymbol(this.token, ')') && !isSymbol(this.token, ',') && !endsParameterList(this.token)) {
             this.lexerNext();
           }
 
@@ -1320,7 +1317,7 @@ export default class Parser {
         this.errors.push(errors.createErrForToken(this.token, errMessages.expected, ')', tokenText(this.token)));
 
         // Discard tokens until we get a ')'
-        while (this.token.value !== ')' && !endsParameterList(this.token)) {
+        while (!isSymbol(this.token, ')') && !endsParameterList(this.token)) {
           this.lexerNext();
         }
         this.lexer.consume(')');
@@ -1380,7 +1377,7 @@ export default class Parser {
         value = this.parseExpectedExpression(flowContext);
         fields.push(this.finishNode(AST.tableKey(key, value)));
       } else if (this.token.type === TokenType.Identifier) {
-        if ('=' === this.lexer.lookahead!.value) {
+        if (isSymbol(this.lexer.lookahead!, '=')) {
           key = this.parseIdentifier();
           this.lexerNext();
           value = this.parseExpectedExpression(flowContext);
@@ -1391,7 +1388,7 @@ export default class Parser {
         }
       } else {
         if (null == (value = this.parseExpression(flowContext))) {
-          if (this.token.type === TokenType.Punctuator && (this.token.value === ',' || this.token.value === ';')) {
+          if (isSymbol(this.token, ',') || isSymbol(this.token, ';')) {
             errors.raiseUnexpectedToken('<expression>', this.token);
           }
           this.popLocation();
@@ -1399,7 +1396,7 @@ export default class Parser {
         }
         fields.push(this.finishNode(AST.tableValue(value)));
       }
-      if (',;'.indexOf(this.token.value as string) >= 0) {
+      if (isSymbol(this.token, ',') || isSymbol(this.token, ';')) {
         this.lexerNext();
         continue;
       }
@@ -1763,7 +1760,7 @@ export default class Parser {
         let expression = this.parseExpression(flowContext);
         if (null != expression) {
           expressions.push(expression);
-        } else if (',' === this.token.value as string) {
+        } else if (isSymbol(this.token, ',')) {
           errors.raiseUnexpectedToken('<expression>', this.token);
         }
         while (this.lexer.consume(',')) {

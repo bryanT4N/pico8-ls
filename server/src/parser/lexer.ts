@@ -5,7 +5,7 @@ import { errMessages } from './errors';
 import { Comment_ } from './expressions';
 import ResolvedFile from './file-resolver';
 import { firstByteText, P8SCII_TEXT, pico8Text } from './p8scii';
-import { Token, tokenText, TokenType, TokenValue } from './tokens';
+import { isSymbol, Token, tokenText, TokenType, TokenValue } from './tokens';
 import { Bounds, CodeLocation } from './types';
 
 // The escapes of one letter or sign, by the byte PICO-8 holds for each (4.str.esc-*, 4.str.p8-*).
@@ -976,21 +976,21 @@ export default class Lexer {
     return this.makeToken(TokenType.Raw, this.input.slice(from, this.index));
   }
 
-  // Consume a token if its value matches. Once consumed or not, return the
-  // success of the operation.
+  // Consume the token if it is the punctuator or keyword value. Once consumed or not, return the success of the
+  // operation.
 
-  consume(value: TokenValue) {
-    if (value === this.token?.value) {
+  consume(value: string) {
+    if (isSymbol(this.token!, value)) {
       this.next();
       return true;
     }
     return false;
   }
 
-  // Expect the next token value to match. If not, throw an exception.
+  // Expect the token to be the punctuator or keyword value. If not, throw an exception.
 
-  expect(value: TokenValue) {
-    if (value === this.token?.value) {
+  expect(value: string) {
+    if (isSymbol(this.token!, value)) {
       this.next();
     } else {
       errors.raiseErrForToken(this.token!, errMessages.expected, value, tokenText(this.token!));

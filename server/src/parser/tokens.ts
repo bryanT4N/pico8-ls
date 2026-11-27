@@ -30,6 +30,11 @@ export type Token = {
   line?: number,
 };
 
+// Whether the token is the punctuator or keyword value: a string is neither, whatever text it holds.
+export function isSymbol(token: Token, value: string): boolean {
+  return (token.type === TokenType.Punctuator || token.type === TokenType.Keyword) && token.value === value;
+}
+
 // How messages quote a token, as PICO-8 does: a string up to its first byte 0 (4.strtext.dec-0), and a name as the text
 // of the bytes PICO-8 holds for it (4.strtext.name-e).
 export function tokenText(token: Token): string {

@@ -997,6 +997,58 @@ __music__
         'main_test_file 1:0 no visible label \'\u308c\u305f\' for <goto>',
       ]);
     });
+
+    it('takes a string for no punctuator or keyword, whatever its text, as PICO-8 does', () => {
+      deepEquals([ 'function f()\nreturn "end"\nend', 'function f()\nrepeat\nreturn "until"\nuntil true\nend', 'function f()\nreturn ";"\nend' ]
+        .map(code => parse(code).errors), [[], [], []]);
+      const firstOf = (code: string) => parse(code).errors.map(formatError)[0];
+      deepEquals([ 'local a "=" 1', 'x = 1 ";"', 'for i=1,2 "do" x=1 end', 'for i "=" 1,2 do end', 'for k "in" pairs(t) do end', 'x = {1 "" 2}',
+        'x = {1 ",;" 2}', 'x = {a "=" 1}', 'x = {1 "}"', 'if 1 "then" x=1 end', 'if a then elseif 1 "then" x=1 end', '::a "::"',
+        'function f "(" ) end', 'function a "." b() end', 'function f(a "," b) end', 'function f(a ")" end', 'f(1 ")"', 'f(1 "," 2)',
+        'x = t[1 "]"', 'x = (1 ")"', 'while "(" x()', 'if "(" x()', '"(" f)()' ].map(firstOf), [
+        'main_test_file 1:8 unexpected string \'"="\' near \'1\'',
+        'main_test_file 1:6 unexpected string \'";"\' near \'<eof>\'',
+        'main_test_file 1:10 \'do\' expected near \'"do"\'',
+        'main_test_file 1:6 \'=\' or \'in\' expected near \'"="\'',
+        'main_test_file 1:6 \'=\' or \'in\' expected near \'"in"\'',
+        'main_test_file 1:7 \'}\' expected near \'""\'',
+        'main_test_file 1:7 \'}\' expected near \'",;"\'',
+        'main_test_file 1:11 \'}\' expected near \'1\'',
+        'main_test_file 1:7 \'}\' expected near \'"}"\'',
+        'main_test_file 1:5 \'then\' expected near \'"then"\'',
+        'main_test_file 1:19 \'then\' expected near \'"then"\'',
+        'main_test_file 1:4 \'::\' expected near \'"::"\'',
+        'main_test_file 1:11 \'(\' expected near \'"("\'',
+        'main_test_file 1:11 \'(\' expected near \'"."\'',
+        'main_test_file 1:13 \')\' expected near \'","\'',
+        'main_test_file 1:13 \')\' expected near \'")"\'',
+        'main_test_file 1:4 \')\' expected near \'")"\'',
+        'main_test_file 1:4 \')\' expected near \'","\'',
+        'main_test_file 1:8 \']\' expected near \'"]"\'',
+        'main_test_file 1:7 \')\' expected near \'")"\'',
+        'main_test_file 1:10 \'do\' expected near \'x\'',
+        'main_test_file 1:7 \'then\' expected near \'x\'',
+        'main_test_file 1:0 unexpected string \'"("\' near \'f\'',
+      ]);
+    });
+
+    it('reads values after a return unless its block ends or a ; follows, as Lua does', () => {
+      const messagesOf = (code: string) => parse(code).errors.map(formatError);
+      deepEquals([ 'function f()\nreturn )\nend', 'function f()\nreturn\nlocal x\nend', 'function f() if (a) return\nend', 'do return; end',
+        'function f() if (a) return else return 1 end' ].map(messagesOf), [
+        [ 'main_test_file 2:7 <expression> expected near \')\'' ],
+        [ 'main_test_file 3:0 <expression> expected near \'local\'' ],
+        [], [], [],
+      ]);
+    });
+
+    it('says what a for loop takes after its first name, as Lua does', () => {
+      const firstOf = (code: string) => parse(code).errors.map(formatError)[0];
+      deepEquals([ 'for i x', 'for k, v x' ].map(firstOf), [
+        'main_test_file 1:6 \'=\' or \'in\' expected near \'x\'',
+        'main_test_file 1:9 \'in\' expected near \'x\'',
+      ]);
+    });
   });
 
   describe('lexical errors', () => {
