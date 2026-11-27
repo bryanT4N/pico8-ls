@@ -194,9 +194,9 @@ const GLYPHS = new Set([ ...'¹²³⁴⁵⁶⁷⁸ᵇᶜᵉᶠ▮■□⁙⁘‖
 const BEFORE_VARIATION_SELECTOR = new Set([ 0x2b05, 0x2b06, 0x2b07, 0x27a1, 0x1f17e ]);
 
 // PICO-8's count of the characters of code: a line break is one, a CRLF too, a glyph one, and any other character that
-// is not ASCII its bytes in UTF-8 (5.chars.*). U+FFFD, which stands for bytes that are not UTF-8, counts one, which they
-// are at the least.
-export function characterCount(code: string): number {
+// is not ASCII its bytes in UTF-8 (5.chars.*). Undefined when the code has a U+FFFD: the text has one for each byte of
+// the file that is not UTF-8, which PICO-8 counts one, and for the character itself, which it counts 3.
+export function characterCount(code: string): number | undefined {
   let count = 0;
   for (let i = 0; i < code.length; i++) {
     const c = code.charCodeAt(i);
@@ -208,11 +208,14 @@ export function characterCount(code: string): number {
     if (point > 0xffff) {
       i++;
     }
+    if (point === 0xfffd) {
+      return undefined;
+    }
     if (BEFORE_VARIATION_SELECTOR.has(point) && code.charCodeAt(i + 1) === 0xfe0f) {
       i++;
       count++;
     } else {
-      count += GLYPHS.has(point) || point === 0xfffd ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+      count += GLYPHS.has(point) ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
     }
   }
   return count;

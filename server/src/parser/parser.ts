@@ -17,7 +17,7 @@ import {
 } from './expressions';
 import ResolvedFile, { FileResolver, RealFileResolver, resolveIncludeFile } from './file-resolver';
 import { characterCount, Code, joined, readCode, tabsOf } from './code';
-import Lexer, { countTokens, onOneLine, OpenBracket } from './lexer';
+import Lexer, { countTokens, includeLinesOf, lineEnd, onOneLine, OpenBracket } from './lexer';
 import Marker from './marker';
 import {
   AssignmentStatement,
@@ -98,8 +98,8 @@ export default class Parser {
   private readonly pasteLines: number[] = [];
 
   // Each #include line whose file is pasted in, in order: where its # is in the main file's code and where the line
-  // ends, the file's lexer, and the characters PICO-8 counts for the file there (pastedCharacters).
-  private readonly pastes: { hash: number, end: number, lexer: Lexer, characters: number }[] = [];
+  // ends, the file's lexer, and what PICO-8 counts for the file besides its code's characters, when known (includedCode).
+  private readonly pastes: { hash: number, end: number, lexer: Lexer, more?: number }[] = [];
 
   // The #include lines not yet placed in a block, each with the token that came after it (placeIncludes).
   private unplaced: { statement: IncludeStatement, next?: Token }[] = [];
@@ -273,7 +273,7 @@ export default class Parser {
     const flowContext = new FlowContext(this.gotoErrors, found => this.stoppedBefore(found));
     flowContext.allowVararg = true;
     flowContext.pushScope();
-    if (this.isCart()) {
+    if (this.code.cart) {
       this.addVariables(flowContext, PICO8_MAIN_LOCALS);
     }
     const body = this.parseBlock(flowContext, isEndOfFile);
@@ -302,7 +302,7 @@ export default class Parser {
       this.errors.push(error);
     }
     // PICO-8 checks these before Lua reads the code, so they come after the errors that stoppedBefore looks at.
-    if (this.isCart()) {
+    if (this.code.cart) {
       this.checkCharacters();
       this.checkTokens();
     }
@@ -448,7 +448,7 @@ export default class Parser {
       this.pasted.set(resolvedInclude, { lexer, line: line.bounds, start: lexer.getCurrentBounds().end });
       this.pasteLines.push(line.bounds.start.index);
       // The main file's lexer has read the line, from its #.
-      this.pastes.push({ hash: this.lexer.tokenStart, end: this.lexer.index, lexer, characters: pasted.characters });
+      this.pastes.push({ hash: this.lexer.tokenStart, end: this.lexer.index, lexer, more: pasted.more });
     }
   }
 
@@ -632,10 +632,9 @@ export default class Parser {
     return this.finishNode(AST.block(block), true);
   }
 
-  // The code that an #include pastes in, with the characters PICO-8 counts for it in a cart, or undefined when there is
-  // none, with the error saying why.
+  // The code that an #include pastes in (includedCode), or undefined when there is none, with the error saying why.
   private codeToPaste(statement: IncludeStatement, written: string, name: string, resolvedInclude: ResolvedFile, tabSuffix?: string)
-    : { code: Code, characters: number } | undefined {
+    : { code: Code, more?: number } | undefined {
     if (this.includeParses >= MAX_INCLUDE_PARSES) {
       if (!this.reportedTooManyIncludeParses) {
         this.reportedTooManyIncludeParses = true;
@@ -672,15 +671,13 @@ export default class Parser {
     }
 
     this.includes.push({ stmt: statement, resolvedFile: resolvedInclude });
-    const file = readCode(fileContents);
-    const tab = tabSuffix !== undefined ? tabIndex(tabSuffix) : undefined;
-    const code = includedCode(file, resolvedInclude.path, tab);
-    if (typeof code === 'number') {
-      this.errors.push(this.getIncludeStatementError(statement, written, `${path.basename(resolvedInclude.path)} has no tab ${code}`));
+    const included = includedCode(readCode(fileContents), resolvedInclude.path, tabSuffix !== undefined ? tabIndex(tabSuffix) : undefined);
+    if (typeof included === 'number') {
+      this.errors.push(this.getIncludeStatementError(statement, written, `${path.basename(resolvedInclude.path)} has no tab ${included}`));
       return undefined;
     }
     this.includeParses++;
-    return { code, characters: this.isCart() ? pastedCharacters(file, code, resolvedInclude.path, tab) : 0 };
+    return included;
   }
 
   private unresolvedInclude(statement: IncludeStatement, written: string, resolvedInclude: ResolvedFile, reason: string): undefined {
@@ -1498,23 +1495,19 @@ export default class Parser {
   }
 
   // A name that is not a local of this function is an upvalue of it and of each function between it and the one that
-  // declares the name, or the main function, whose _ENV holds the globals (lparser.c, singlevaraux). Lua makes the
-  // outermost one first, and stops there when it is one too many. Only counted in a function nested in others with
-  // enough locals to take it past the limit.
+  // declares the name. A global is found through the name _ENV in the same way: a local _ENV, or else the main
+  // function's _ENV, which holds the globals (lparser.c, singlevar). Lua makes the outermost upvalue first, and stops
+  // there when it is one too many. Only counted in a function nested in others with enough locals to take it past the
+  // limit.
   private useName(flowContext: FlowContext, name: string): void {
-    if (flowContext.upvalues === null || flowContext.variableNamed(name)) {
+    if (flowContext.upvalues === null) {
       return;
     }
-    const below: FlowContext[] = [ flowContext ];
-    let upvalue: LocalVariable | 'ENV' = 'ENV';
-    for (let outer = flowContext.parent; outer; outer = outer.parent) {
-      const variable = outer.variableNamed(name);
-      if (variable) {
-        upvalue = variable;
-        break;
-      }
-      below.push(outer);
+    let { variable, below } = declaration(flowContext, name);
+    if (!variable && name !== '_ENV') {
+      ({ variable, below } = declaration(flowContext, '_ENV'));
     }
+    const upvalue: LocalVariable | 'ENV' = variable ?? 'ENV';
     let reported = false;
     for (let i = below.length - 1; i >= 0; i--) {
       const context = below[i];
@@ -1534,14 +1527,15 @@ export default class Parser {
   }
 
   // The hidden locals PICO-8 holds to the end of the block for a compound assignment such as t[k] += 1: one for a call,
-  // one for the table of a field unless it is a local or an upvalue, and one for a key that is not a local and cannot
-  // be a constant. A key of only literals and operators can be, as 1+1 is folded and ~1 is not, and none is counted for
-  // it, nor for a target in brackets (2.compound.*).
+  // one for the table of a field when it is a global, a call, a field or an index, and one for a key that is not a
+  // local and cannot be a constant (2.compound.*). _ENV is a local or the main function's upvalue. Not measured, and
+  // counted none: a table of another kind, as a table constructor; a key of only literals and operators, which can be
+  // a constant, as 1+1 is folded and ~1 is not; a target in brackets.
   private compoundVariables(flowContext: FlowContext, target: Expression): number {
     if (target.parens) {
       return 0;
     }
-    const table = (base: Expression) => (base.type === 'Identifier' ? !this.isLocalOrUpvalue(flowContext, base.name)
+    const table = (base: Expression) => (base.type === 'Identifier' ? base.name !== '_ENV' && !declaration(flowContext, base.name).variable
       : [ 'MemberExpression', 'IndexExpression', 'CallExpression', 'StringCallExpression', 'TableCallExpression' ].includes(base.type)) ? 1 : 0;
     switch (target.type) {
     case 'CallExpression': case 'StringCallExpression': case 'TableCallExpression':
@@ -1558,23 +1552,18 @@ export default class Parser {
     }
   }
 
-  private isLocalOrUpvalue(flowContext: FlowContext, name: string): boolean {
-    for (let context: FlowContext | null = flowContext; context; context = context.parent) {
-      if (context.variableNamed(name)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   // A cart whose code has more characters than PICO-8 loads, or, when it loads, whose code with its #include files pasted
   // in has more than PICO-8 runs. PICO-8 names no place in the code: the error is on its first token.
   private checkCharacters(): void {
     const { code: main, end, lostLineBreak } = this.code;
+    const own = characterCount(main);
+    if (own === undefined) {
+      return;
+    }
     const first = this.first!;
     // PICO-8 counts the line break that the code is read without, before a section or a CR that ends the file, and 2 more
     // when the code ends without one (5.chars.gfx, 5.chars.cr-end-*, 5.chars.no-final-newline).
-    const loaded = characterCount(main) + (end !== undefined || lostLineBreak ? 1 : main.endsWith('\n') ? 0 : 2);
+    const loaded = own + (end !== undefined || lostLineBreak ? 1 : main.endsWith('\n') ? 0 : 2);
     if (loaded > MAX_CHARACTERS) {
       this.errors.push(errors.createErrForToken(first, errMessages.codeTooLong, loaded, MAX_CHARACTERS));
       return;
@@ -1584,20 +1573,28 @@ export default class Parser {
       return;
     }
     // PICO-8 counts the lines of the code with a line break between each two, each #include line replaced by the
-    // characters it counts for the file, and one more when the last line is an #include line (5.chars.include-*).
-    const linesEnd = end === undefined && main.endsWith('\n') ? main.length - (main.endsWith('\r\n') ? 2 : 1) : main.length;
-    let lastLine = linesEnd;
+    // characters it counts for the file, and one more when the last line is an #include line (5.chars.include-*). The
+    // count is left out when that of a file is not known, or a file is not pasted in.
+    const files = new Map(this.pastes.map(({ hash, lexer, more }) => {
+      const code = more === undefined ? undefined : characterCount(lexer.input);
+      return [ hash, code === undefined || more === undefined ? undefined : code + more ];
+    }));
+    const lastBreak = end === undefined && main.endsWith('\n');
+    let lastLine = lastBreak ? main.length - (main.endsWith('\r\n') ? 2 : 1) : main.length;
     while (lastLine > 0 && main.charCodeAt(lastLine - 1) !== 10 && main.charCodeAt(lastLine - 1) !== 13) {
       lastLine--;
     }
-    const pasted = new Map(this.pastes.map(({ hash, characters }) => [ hash, characters ]));
-    let characters = characterCount(main.slice(0, linesEnd));
+    let characters = own - (lastBreak ? 1 : 0);
     for (const hash of includeLines) {
+      const file = files.get(hash);
+      if (file === undefined) {
+        return;
+      }
       let lineStart = hash;
       while (lineStart > 0 && (main.charCodeAt(lineStart - 1) === 32 || main.charCodeAt(lineStart - 1) === 9)) {
         lineStart--;
       }
-      characters += (pasted.get(hash) ?? 0) - characterCount(main.slice(lineStart, lineEnd(main, hash))) + (lineStart === lastLine ? 1 : 0);
+      characters += file - characterCount(main.slice(lineStart, lineEnd(main, hash)))! + (lineStart === lastLine ? 1 : 0);
     }
     if (characters > MAX_CHARACTERS) {
       this.errors.push(errors.createErrForToken(first, errMessages.programTooLong, characters, MAX_CHARACTERS));
@@ -1948,117 +1945,18 @@ function mayBeConstant(expression: Expression): boolean {
   }
 }
 
-// The characters PICO-8 counts for the code an #include pastes, in place of the line's: of a cart, the code; of a .lua,
-// the code and 2 more when it takes the file's last tab (5.chars.include-*). PICO-8's count for any other file is not
-// known, and none are counted, which can only count fewer.
-function pastedCharacters(file: Code, pasted: Code, filePath: string, tab: number | undefined): number {
-  if (file.cart && /\.p8$/i.test(filePath)) {
-    return characterCount(pasted.code);
-  }
-  if (!/\.lua$/i.test(filePath)) {
-    return 0;
-  }
-  const tabs = tabsOf(file).length;
-  return characterCount(pasted.code) + ((tab === undefined ? tabs <= 16 : tab < 16 && tab === tabs - 1) ? 2 : 0);
-}
-
-// Where the # of each #include line that PICO-8 reads is in the code, or undefined for none.
-// PICO-8 finds them in the cart's own text before Lua reads the code: at the start of a line, in lower case and followed
-// by a space (3.after-code, 3.upper, 3.tab-after-include, 3.nested), and only outside a long string or comment of that
-// text, whatever a pasted file leaves open (3.alone-str-cart-comment-level, 3.alone-code-real-comment). Its scan is not
-// Lua's: it reads short strings, which \ and a line break take on to the next line, -- comments, long or not, and //
-// line comments, //[[ too (3.scan-dq-string, 3.dq-cont-include, 3.scan-line-comment-space, 3.scan-slash-long), but a
-// \z does not take a string past a line break (3.z-include), and it skips the rest of an #include line
-// (3.scan-name-brackets). Elsewhere the # is the length operator. The scan stops at the last #include line.
-function includeLinesOf(input: string): Set<number> | undefined {
-  let hash = input.indexOf('#include ');
-  if (hash < 0) {
-    return undefined;
-  }
-  const lines = new Set<number>();
-  let at = 0;
-  for (; hash >= 0; hash = input.indexOf('#include ', Math.max(at, hash + 1))) {
-    let lineStart = hash;
-    while (lineStart > 0 && (input.charCodeAt(lineStart - 1) === 32 || input.charCodeAt(lineStart - 1) === 9)) {
-      lineStart--;
+// The local a name refers to, and the functions it is an upvalue of: from this one out to the one that declares it, or
+// to the main function when none does.
+function declaration(flowContext: FlowContext, name: string): { variable?: LocalVariable, below: FlowContext[] } {
+  const below: FlowContext[] = [];
+  for (let context: FlowContext | null = flowContext; context; context = context.parent) {
+    const variable = context.variableNamed(name);
+    if (variable) {
+      return { variable, below };
     }
-    if (lineStart > 0 && input.charCodeAt(lineStart - 1) !== 10 && input.charCodeAt(lineStart - 1) !== 13) {
-      continue;
-    }
-    at = scanCodeTo(input, at, hash);
-    if (at === hash) {
-      lines.add(hash);
-      at = lineEnd(input, hash);
-    }
+    below.push(context);
   }
-  return lines;
-}
-
-const OPENS = /["'[]|--|\/\//g;
-
-// From i on in code, past each string and comment, to the place to, or past the string or comment that holds it.
-function scanCodeTo(input: string, i: number, to: number): number {
-  for (;;) {
-    OPENS.lastIndex = i;
-    const open = OPENS.exec(input);
-    if (!open || open.index >= to) {
-      return to;
-    }
-    i = open.index;
-    let end: number;
-    if (open[0] === '"' || open[0] === '\'') {
-      end = shortStringEnd(input, i);
-    } else if (open[0] === '[') {
-      end = longBracketEnd(input, i) ?? i + 1;
-    } else {
-      end = (open[0] === '--' ? longBracketEnd(input, i + 2) : undefined) ?? lineEnd(input, i);
-    }
-    if (end > to) {
-      return end;
-    }
-    i = end;
-  }
-}
-
-function shortStringEnd(input: string, i: number): number {
-  const quote = input.charCodeAt(i);
-  for (let j = i + 1; j < input.length; j++) {
-    const c = input.charCodeAt(j);
-    if (c === quote) {
-      return j + 1;
-    }
-    if (c === 10 || c === 13) {
-      return j;
-    }
-    if (c === 92) {
-      // A line break as the lexer reads one: \r\n and \n\r are one (Lexer.consumeEOL).
-      const next = input.charCodeAt(j + 1);
-      const after = input.charCodeAt(j + 2);
-      j += (next === 10 && after === 13) || (next === 13 && after === 10) ? 2 : 1;
-    }
-  }
-  return input.length;
-}
-
-// After a long bracket that opens at i, or undefined when none opens there.
-function longBracketEnd(input: string, i: number): number | undefined {
-  let j = i + 1;
-  while (input.charCodeAt(j) === 61) {
-    j++;
-  }
-  if (input.charCodeAt(i) !== 91 || input.charCodeAt(j) !== 91) {
-    return undefined;
-  }
-  const close = ']' + '='.repeat(j - i - 1) + ']';
-  const at = input.indexOf(close, j + 1);
-  return at < 0 ? input.length : at + close.length;
-}
-
-function lineEnd(input: string, i: number): number {
-  while (i < input.length && input.charCodeAt(i) !== 10 && input.charCodeAt(i) !== 13) {
-    i++;
-  }
-  return i;
+  return { below };
 }
 
 // An #include line is no statement to Lua, which reads the file's code in its place.
@@ -2088,21 +1986,24 @@ function tabIndex(suffix: string): number | undefined {
   return tab === -1 ? undefined : tab;
 }
 
-// What an #include pastes from a file, or the number of the tab that the file does not have. PICO-8 takes tabs of a
-// cart, and of a file whose path has .lua in it in any case, and any other file whole (3.colon-txt, si.t28.ext-folder,
-// si.t28.ext-alua). Whole, a file of tabs is its first 16 tabs with nothing between them (si.tab.t18.whole,
-// si.t28.join.tabs-fuse); a number that is not one of the 16 tabs a cart can have gives nothing (3.p8-tab-11,
-// 3.p8-tab-minus-2).
-function includedCode(code: Code, filePath: string, tab: number | undefined): Code | number {
+// What an #include pastes from a file, with how many characters PICO-8 counts for it besides those of that code when
+// this is known, or the number of the tab that the file does not have. PICO-8 takes tabs of a cart, and of a file
+// whose path has .lua in it in any case, and any other file whole (3.colon-txt, si.t28.ext-folder, si.t28.ext-alua).
+// Whole, a file of tabs is its first 16 tabs with nothing between them (si.tab.t18.whole, si.t28.join.tabs-fuse); a
+// number that is not one of the 16 tabs a cart can have gives nothing (3.p8-tab-11, 3.p8-tab-minus-2). It counts 2 more
+// for the last tab of a .lua that is not a cart, and 1 more for any other file (5.chars.include-*). Not known: its count
+// of more than 16 tabs, of a number that is not a tab, and of any other file that has a line -->8.
+function includedCode(code: Code, filePath: string, tab: number | undefined): { code: Code, more?: number } | number {
   if (!code.cart && !/\.lua/i.test(filePath)) {
-    return code;
+    return { code, more: /(?:^|\n)-->8/.test(code.code) ? undefined : 1 };
   }
   const tabs = tabsOf(code);
+  const last = code.cart ? 0 : 2;
   if (tab === undefined) {
-    return joined(tabs.slice(0, 16));
+    return { code: joined(tabs.slice(0, 16)), more: tabs.length > 16 ? undefined : last };
   }
   if (tab < 0 || tab >= 16) {
-    return readCode('');
+    return { code: readCode('') };
   }
-  return tab < tabs.length ? tabs[tab] : tab;
+  return tab < tabs.length ? { code: tabs[tab], more: tab === tabs.length - 1 ? last : 0 } : tab;
 }

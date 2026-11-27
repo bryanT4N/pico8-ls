@@ -1018,9 +1018,108 @@ export function onOneLine(a: Token | undefined, b: Token): boolean {
   return a !== undefined && a.bounds.start.filename === b.bounds.start.filename && (a.line ?? a.bounds.start.line) === (b.line ?? b.bounds.start.line);
 }
 
-// PICO-8 counts the tokens of a cart with its #include files pasted in, with a lexer of its own, before Lua reads the
-// code. Its tokens are Lua's, but a short string ends at a line break also after a \z, a character that is no token is
-// one, and "#include " outside a string or comment hides the rest of its line (5.tok.*). Each token counts one but for
+// Where the # of each #include line that PICO-8 reads is in the code, or undefined for none.
+// PICO-8 finds them in the cart's own text before Lua reads the code: at the start of a line, in lower case and followed
+// by a space (3.after-code, 3.upper, 3.tab-after-include, 3.nested), and only outside a long string or comment of that
+// text, whatever a pasted file leaves open (3.alone-str-cart-comment-level, 3.alone-code-real-comment). Its scan is not
+// Lua's: it reads short strings, which \ and a line break take on to the next line, -- comments, long or not, and //
+// line comments, //[[ too (3.scan-dq-string, 3.dq-cont-include, 3.scan-line-comment-space, 3.scan-slash-long), but a
+// \z does not take a string past a line break (3.z-include), and it skips the rest of an #include line
+// (3.scan-name-brackets). Elsewhere the # is the length operator. The scan stops at the last #include line.
+export function includeLinesOf(input: string): Set<number> | undefined {
+  let hash = input.indexOf('#include ');
+  if (hash < 0) {
+    return undefined;
+  }
+  const lines = new Set<number>();
+  let at = 0;
+  for (; hash >= 0; hash = input.indexOf('#include ', Math.max(at, hash + 1))) {
+    let lineStart = hash;
+    while (lineStart > 0 && (input.charCodeAt(lineStart - 1) === 32 || input.charCodeAt(lineStart - 1) === 9)) {
+      lineStart--;
+    }
+    if (lineStart > 0 && input.charCodeAt(lineStart - 1) !== 10 && input.charCodeAt(lineStart - 1) !== 13) {
+      continue;
+    }
+    at = scanCodeTo(input, at, hash);
+    if (at === hash) {
+      lines.add(hash);
+      at = lineEnd(input, hash);
+    }
+  }
+  return lines;
+}
+
+const OPENS = /["'[]|--|\/\//g;
+
+// From i on in code, past each string and comment, to the place to, or past the string or comment that holds it.
+function scanCodeTo(input: string, i: number, to: number): number {
+  for (;;) {
+    OPENS.lastIndex = i;
+    const open = OPENS.exec(input);
+    if (!open || open.index >= to) {
+      return to;
+    }
+    i = open.index;
+    let end: number;
+    if (open[0] === '"' || open[0] === '\'') {
+      end = shortStringEnd(input, i);
+    } else if (open[0] === '[') {
+      end = longBracketEnd(input, i) ?? i + 1;
+    } else {
+      end = (open[0] === '--' ? longBracketEnd(input, i + 2) : undefined) ?? lineEnd(input, i);
+    }
+    if (end > to) {
+      return end;
+    }
+    i = end;
+  }
+}
+
+function shortStringEnd(input: string, i: number): number {
+  const quote = input.charCodeAt(i);
+  for (let j = i + 1; j < input.length; j++) {
+    const c = input.charCodeAt(j);
+    if (c === quote) {
+      return j + 1;
+    }
+    if (c === 10 || c === 13) {
+      return j;
+    }
+    if (c === 92) {
+      // A line break as the lexer reads one: \r\n and \n\r are one (Lexer.consumeEOL).
+      const next = input.charCodeAt(j + 1);
+      const after = input.charCodeAt(j + 2);
+      j += (next === 10 && after === 13) || (next === 13 && after === 10) ? 2 : 1;
+    }
+  }
+  return input.length;
+}
+
+// After a long bracket that opens at i, or undefined when none opens there.
+function longBracketEnd(input: string, i: number): number | undefined {
+  let j = i + 1;
+  while (input.charCodeAt(j) === 61) {
+    j++;
+  }
+  if (input.charCodeAt(i) !== 91 || input.charCodeAt(j) !== 91) {
+    return undefined;
+  }
+  const close = ']' + '='.repeat(j - i - 1) + ']';
+  const at = input.indexOf(close, j + 1);
+  return at < 0 ? input.length : at + close.length;
+}
+
+export function lineEnd(input: string, i: number): number {
+  while (i < input.length && input.charCodeAt(i) !== 10 && input.charCodeAt(i) !== 13) {
+    i++;
+  }
+  return i;
+}
+
+// PICO-8 counts the tokens of a cart with its #include files pasted in before Lua reads the code, with a lexer of its own
+// that reads strings and comments as its scan for #include lines does (includeLinesOf). A character that is no token is
+// one, and "#include " where a token can start hides the rest of its line (5.tok.*). Each token counts one but for
 // these:
 const FREE_TOKENS = new Set([ ',', '.', ':', ';', '::', ')', ']', '}', 'local', 'end' ]);
 // and a - or ~ right before a number after one of these, which counts with the number.
@@ -1045,21 +1144,6 @@ export function countTokens(code: string, limit: number): { count: number, over?
   let beforeEnd = 0;
   let joined: number | undefined;
   const length = code.length;
-  const longBracket = (at: number) => {
-    let level = 0;
-    while (code.charCodeAt(at + 1 + level) === 61) {
-      level++;
-    }
-    return code.charCodeAt(at) === 91 && code.charCodeAt(at + 1 + level) === 91 ? level : -1;
-  };
-  const afterClose = (from: number, level: number) => {
-    const close = code.indexOf(']' + '='.repeat(level) + ']', from);
-    return close < 0 ? length : close + level + 2;
-  };
-  const lineEnd = (from: number) => {
-    const at = code.indexOf('\n', from);
-    return at < 0 ? length : at;
-  };
   for (let i = 0; i < length;) {
     const c = code.charCodeAt(i);
     if (c === 32 || c === 9 || c === 13 || c === 10) {
@@ -1067,25 +1151,20 @@ export function countTokens(code: string, limit: number): { count: number, over?
       continue;
     }
     if ((c === 45 || c === 47) && code.charCodeAt(i + 1) === c) {
-      const level = c === 45 ? longBracket(i + 2) : -1;
-      i = level >= 0 ? afterClose(i + 2, level) : lineEnd(i);
+      i = (c === 45 ? longBracketEnd(code, i + 2) : undefined) ?? lineEnd(code, i);
       continue;
     }
     if (c === 35 && code.startsWith('include ', i + 1)) {
-      i = lineEnd(i);
+      i = lineEnd(code, i);
       continue;
     }
     const start = i;
     let free = false;
+    const longString = c === 91 ? longBracketEnd(code, i) : undefined;
     if (c === 34 || c === 39) {
-      for (i++; i < length && code.charCodeAt(i) !== c && code.charCodeAt(i) !== 10; i++) {
-        if (code.charCodeAt(i) === 92) {
-          i += code.charCodeAt(i + 1) === 13 && code.charCodeAt(i + 2) === 10 ? 2 : 1;
-        }
-      }
-      i = Math.min(i + (code.charCodeAt(i) === c ? 1 : 0), length);
-    } else if (c === 91 && longBracket(i) >= 0) {
-      i = afterClose(i, longBracket(i));
+      i = shortStringEnd(code, i);
+    } else if (longString !== undefined) {
+      i = longString;
     } else if (isDecDigit(c) || (c === 46 && isDecDigit(code.charCodeAt(i + 1)))) {
       // A number takes its digits and every dot: 1..2 is one.
       const next = code.charCodeAt(i + 1) | 32;
