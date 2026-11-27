@@ -1,4 +1,5 @@
 import { strictEqual as eq } from 'assert';
+import { CallExpression } from '../expressions';
 import { Statement } from '../statements';
 import { analyzeCode, bounds, deepEquals, deepEqualsAST, formatError, getTestFileContents, MockFileResolver, parse, parseInChild, TestFilesResolver, warningsIn } from './test-utils';
 
@@ -769,6 +770,21 @@ function debug_draw()
 end`;
       const { errors } = parse(code);
       deepEquals(errors, []);
+    });
+
+    it('takes nothing for a ? with nothing after it on its line, as PICO-8 does', () => {
+      const argumentsOf = (code: string) => {
+        const { block: { body }, errors } = parse(code);
+        return [ errors.map(formatError), body.map(s => s.type === 'CallStatement' ? (s.expression as CallExpression).arguments.length : s.type) ];
+      };
+      eq(JSON.stringify(argumentsOf('printh("ok")\n?')), JSON.stringify([[], [ 1, 0 ]]));
+      eq(JSON.stringify(argumentsOf('? \nprinth("ok")')), JSON.stringify([[], [ 0, 1 ]]));
+      eq(JSON.stringify(argumentsOf('? -- c\nprinth("ok")')), JSON.stringify([[], [ 0, 1 ]]));
+      eq(JSON.stringify(argumentsOf('if (true) ?\nprinth("ok")')), JSON.stringify([[], [ 'IfStatement', 1 ]]));
+      eq(JSON.stringify(argumentsOf('x = ?\nprinth("ok")')), JSON.stringify([[], [ 'AssignmentStatement', 1 ]]));
+      eq(JSON.stringify(argumentsOf('?\n"a"')), JSON.stringify([[ 'main_test_file 2:0 unexpected string \'a\' near \'<eof>\'' ], [ 0 ]]));
+      const { block: { body } } = parse('?\nx = 1');
+      deepEquals(body[0].loc, bounds(1, 0, 1, 1));
     });
   });
 

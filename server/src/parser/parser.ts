@@ -1172,7 +1172,7 @@ export default class Parser {
 
   // Special PICO-8 print statement: ? expression '\n'
   parseSpecialPrint(flowContext: FlowContext): CallStatement {
-    const startMarker = this.createLocationMarker();
+    const startMarker = this.printsNothing() ? new Marker(this.previousToken) : this.createLocationMarker();
 
     const args = this.parsePrintArguments(flowContext);
 
@@ -1186,9 +1186,13 @@ export default class Parser {
     return this.finishNode(AST.callStatement(callExpression));
   }
 
-  // PICO-8's ? takes the rest of its line, as a statement or as a value.
+  // PICO-8's ? takes the rest of its line, as a statement or as a value, and the rest can be empty
+  // (si.pin.print.alone-eof, si.pin.print.alone-next-value).
   private parsePrintArguments(flowContext: FlowContext): Expression[] {
     const args: Expression[] = [];
+    if (this.printsNothing()) {
+      return args;
+    }
     this.lexer.withSignificantNewline(() => {
       do {
         args.push(this.parseExpectedExpression(flowContext));
@@ -1198,6 +1202,13 @@ export default class Parser {
       }
     });
     return args;
+  }
+
+  // Whether nothing comes after the ? just read on its line; the token read after it can be on a later line.
+  private printsNothing(): boolean {
+    const question = this.previousToken.bounds.start;
+    const { type, bounds: { start } } = this.token;
+    return type === TokenType.Newline || type === TokenType.EOF || start.filename !== question.filename || start.line !== question.line;
   }
 
   getIncludeStatementError(statement: IncludeStatement, errorMessage: string) {
