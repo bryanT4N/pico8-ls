@@ -172,7 +172,7 @@ describe('#include', function () {
     }
   });
 
-  it('finds #include lines past a string\'s \\ and any line break, and past its \\z, as PICO-8 does, and goes on with the string a \\z takes into the file of one', () => {
+  it('finds #include lines past a string\'s \\z, and past its \\ and an LF or a CRLF, as PICO-8 does, and past its \\ and an LF CR or a CR as the lexer reads them; a string that a \\z takes past an #include line or the end of a pasted file goes on in the text that comes next', () => {
     const read = (code: string, files: Record<string, string>): [string[], unknown] => {
       const chunk = parseWith(code, files);
       const assignment = chunk.block.body.find((s): s is AssignmentStatement => s.type === 'AssignmentStatement');

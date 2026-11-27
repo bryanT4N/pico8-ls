@@ -86,7 +86,7 @@ export default class Parser {
   // The end-of-file token of each lexer that has read to its end.
   private readonly ends = new Map<ResolvedFile, Token>();
 
-  // The nodes that end in another file than the one they start in, or that hold an #include line (finishNode).
+  // The nodes that end in another file than they start in, or hold the #include line of a file pasted in (finishNode).
   private readonly spanning: ASTNode[] = [];
 
   // Locations are stored in a stack as a `Marker` object consisting of both

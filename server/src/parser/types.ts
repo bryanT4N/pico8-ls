@@ -95,6 +95,6 @@ export type ASTNode = {
   included?: boolean,
 
   // The node's text in the files after the one it starts in, which loc leaves out, for a node that runs from one file
-  // into another or holds an #include line.
+  // into another or holds the #include line of a file pasted in.
   elsewhere?: Bounds[],
 };
