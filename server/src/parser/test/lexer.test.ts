@@ -535,7 +535,7 @@ __music__
       assertNoMoreTokens(tokens);
       assert.deepStrictEqual(errors.map(formatLexError), [
         '1:0 invalid escape sequence near \'\\\'',
-        '1:0 unfinished string near \'"a\\\'',
+        '1:0 unfinished string near \'"a\'',
       ]);
     });
 

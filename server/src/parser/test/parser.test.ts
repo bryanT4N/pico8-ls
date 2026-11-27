@@ -782,7 +782,7 @@ end`;
       eq(JSON.stringify(argumentsOf('? -- c\nprinth("ok")')), JSON.stringify([[], [ 0, 1 ]]));
       eq(JSON.stringify(argumentsOf('if (true) ?\nprinth("ok")')), JSON.stringify([[], [ 'IfStatement', 1 ]]));
       eq(JSON.stringify(argumentsOf('x = ?\nprinth("ok")')), JSON.stringify([[], [ 'AssignmentStatement', 1 ]]));
-      eq(JSON.stringify(argumentsOf('?\n"a"')), JSON.stringify([[ 'main_test_file 2:0 unexpected string \'a\' near \'<eof>\'' ], [ 0 ]]));
+      eq(JSON.stringify(argumentsOf('?\n"a"')), JSON.stringify([[ 'main_test_file 2:0 unexpected string \'"a"\' near \'<eof>\'' ], [ 0 ]]));
       const { block: { body } } = parse('?\nx = 1');
       deepEquals(body[0].loc, bounds(1, 0, 1, 1));
     });
@@ -950,6 +950,30 @@ __music__
         [ 'main_test_file 1:4 \')\' expected near \'nil\'' ],
         [ 'main_test_file 1:6 unexpected symbol \'nil\' near \'<eof>\'' ],
         [ 'main_test_file 1:6 unexpected symbol \'...\' near \'<eof>\'' ],
+      ]);
+    });
+
+    it('quotes a string as PICO-8 holds it, in its quotes or long brackets, and an unfinished one as far as it is read', () => {
+      const messagesOf = (code: string) => parse(code).errors.map(formatError);
+      deepEquals([ 'f(1 \'\')', 'f(1 "")', 'f(1 "a\'b")', 'f(1 "\\65\\x42\\z  c")', 'f(1 "\\*\\139")', 'f(1 [[a]])', 'f(1 [==[a]]b]==])',
+        'x = 1 [[\r\na\r\nb]]', 'x = 1 "a"', 'x = "a\\65\\*\ny = 1', 'x = "\\x4"', 'x = "\\xZ"' ].map(messagesOf), [
+        [ 'main_test_file 1:4 \')\' expected near \'\'\'\'' ],
+        [ 'main_test_file 1:4 \')\' expected near \'""\'' ],
+        [ 'main_test_file 1:4 \')\' expected near \'"a\'b"\'' ],
+        [ 'main_test_file 1:4 \')\' expected near \'"ABc"\'' ],
+        [ 'main_test_file 1:4 \')\' expected near \'"\u00b9\u2b05\ufe0f"\'' ],
+        [ 'main_test_file 1:4 \')\' expected near \'[[a]]\'' ],
+        [ 'main_test_file 1:4 \')\' expected near \'[==[a]]b]==]\'' ],
+        [ 'main_test_file 1:6 unexpected string \'[[a\nb]]\' near \'<eof>\'' ],
+        [ 'main_test_file 1:6 unexpected string \'"a"\' near \'<eof>\'' ],
+        [ 'main_test_file 1:4 unfinished string near \'"aA\u00b9\'' ],
+        [ 'main_test_file 1:4 hexadecimal digit expected near \'\\x4"\'' ],
+        [ 'main_test_file 1:4 hexadecimal digit expected near \'\\xZ\'' ],
+      ]);
+      // PICO-8 quotes a string up to a byte 0, and reads a line break after the code.
+      deepEquals([ 'f(1 "a\\0b")', 'x = "\\x4' ].map(messagesOf), [
+        [ 'main_test_file 1:4 \')\' expected near \'"a\'' ],
+        [ 'main_test_file 1:4 hexadecimal digit expected near \'\\x4\n\'', 'main_test_file 1:4 unfinished string near \'"x4\'' ],
       ]);
     });
   });

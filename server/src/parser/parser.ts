@@ -455,20 +455,24 @@ export default class Parser {
   private goOnInBracket(lexer: Lexer): Token | undefined {
     const open = this.open!;
     let reached: 'close' | 'unfinished' | 'end' | 'include';
+    let read: string | null = null;
+    let close: string;
     if ('quote' in open) {
-      const read = lexer.readShortString(open.quote, true);
-      reached = read.reached;
-      if (read.value !== null && open.token.value !== null) {
-        open.token.value = open.token.value + read.value;
-      }
+      ({ reached, value: read } = lexer.readShortString(open.quote, true));
+      close = String.fromCharCode(open.quote);
     } else {
       const from = lexer.index;
       reached = lexer.closeLongBracket(open.level);
-      if (!open.isComment && open.token.value !== null) {
-        const read = lexer.input.slice(from, reached === 'close' ? lexer.index - open.level - 2 : lexer.index);
+      close = ']' + '='.repeat(open.level) + ']';
+      if (!open.isComment) {
         const breaks = reached === 'end' && lexer !== this.lexer ? '\n\n' : '';
-        open.token.value = open.token.value + lexer.encodingMode.fixup(lexer.getLocation(), lineFeeds(read) + breaks);
+        read = lexer.encodingMode.fixup(lexer.getLocation(),
+          lineFeeds(lexer.input.slice(from, reached === 'close' ? lexer.index - open.level - 2 : lexer.index)) + breaks);
       }
+    }
+    if (read !== null && open.token.value !== null) {
+      open.token.value = open.token.value + read;
+      open.token.quoted = open.token.quoted + read + (reached === 'close' ? close : '');
     }
     if (reached === 'include') {
       this.paste(lexer.readIncludeLine(lexer.index));
@@ -483,7 +487,9 @@ export default class Parser {
       if (open.unfinished.bounds.start.filename === lexer.filename) {
         open.unfinished.bounds.end = lexer.getCurrentBounds().end;
       }
-      this.errors.push(open.unfinished);
+      // A short string is quoted as far as it is read, in each file it runs through.
+      this.errors.push('quote' in open && open.token.quoted !== undefined
+        ? errors.createErr(open.unfinished.bounds, errMessages.unfinishedString, tokenText(open.token)) : open.unfinished);
     }
     if ('isComment' in open && open.isComment) {
       return undefined;

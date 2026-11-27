@@ -490,13 +490,16 @@ export default class Lexer {
     // which quote, either single or double quote
     const delimiter = this.input.charCodeAt(this.index++);
     const { value, reached } = this.readShortString(delimiter, false);
+    const token = this.makeToken(TokenType.StringLiteral, value);
+    // An unfinished string is quoted as far as it is read, without a closing quote (4.strtext.unf-*).
+    token.quoted = String.fromCharCode(delimiter) + (value ?? '') + (reached === 'close' ? String.fromCharCode(delimiter) : '');
     if (reached === 'include' || (reached === 'end' && this.pasted)) {
-      const unfinished = errors.createErr(this.getCurrentBounds(), errMessages.unfinishedString, this.input.slice(this.tokenStart, this.index));
+      const unfinished = errors.createErr(this.getCurrentBounds(), errMessages.unfinishedString, tokenText(token));
       this.openBracket = { quote: delimiter, unfinished, include: reached === 'include' ? this.index : undefined };
     } else if (reached !== 'close') {
-      this.addError(errMessages.unfinishedString, this.input.slice(this.tokenStart, this.index));
+      this.addError(errMessages.unfinishedString, tokenText(token));
     }
-    return this.makeToken(TokenType.StringLiteral, value);
+    return token;
   }
 
   // Reads a short string on to its delimiter and past it: 'close'; or to the line break or end of the text that leaves
@@ -567,10 +570,13 @@ export default class Lexer {
       return this.makeToken(TokenType.Punctuator, '[');
     }
 
-    return this.makeToken(
-      TokenType.StringLiteral,
-      this.encodingMode.discardStrings ? null : this.encodingMode.fixup(this.getLocation(), lineFeeds(string)),
-    );
+    const value = this.encodingMode.discardStrings ? null : this.encodingMode.fixup(this.getLocation(), lineFeeds(string));
+    const token = this.makeToken(TokenType.StringLiteral, value);
+    const level = this.input.indexOf('[', this.tokenStart + 1) - this.tokenStart - 1;
+    const close = ']' + '='.repeat(level) + ']';
+    const closed = this.index - this.tokenStart >= 2 * level + 4 && this.input.startsWith(close, this.index - close.length);
+    token.quoted = '[' + '='.repeat(level) + '[' + (value ?? '') + (closed ? close : '');
+    return token;
   }
 
   scanNumericLiteral(): Token {
@@ -597,7 +603,7 @@ export default class Lexer {
     }
 
     const token = this.makeToken(TokenType.NumericLiteral, literal.value);
-    token.raw = this.input.slice(this.tokenStart, this.index);
+    token.quoted = this.input.slice(this.tokenStart, this.index);
     return token;
   }
 
@@ -755,15 +761,19 @@ export default class Lexer {
       this.consumeEOL();
       return '\n';
 
-    case 'x':
+    case 'x': {
       // \xXX, where XX is a sequence of exactly two hexadecimal digits
       if (isHexDigit(this.input.charCodeAt(this.index + 1)) &&
           isHexDigit(this.input.charCodeAt(this.index + 2))) {
         this.index += 3;
         return P8SCII_TEXT[parseInt(this.input.slice(sequenceStart + 1, this.index), 16)];
       }
-      this.addError(errMessages.hexadecimalDigitExpected, '\\' + this.input.slice(sequenceStart, this.index + 2));
+      // Up to the first character that is not a hexadecimal digit, as PICO-8 quotes it, which at the end of the code is
+      // the line break PICO-8 reads after it (4.strtext.bad-hex1, 4.strtext.eof-hex).
+      const end = this.index + (isHexDigit(this.input.charCodeAt(this.index + 1)) ? 3 : 2);
+      this.addError(errMessages.hexadecimalDigitExpected, '\\' + this.input.slice(sequenceStart, end) + (end > this.length ? '\n' : ''));
       return this.input.charAt(this.index++);
+    }
 
     case '\\': case '"': case '\'':
       return this.input.charAt(this.index++);

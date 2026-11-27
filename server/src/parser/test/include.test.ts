@@ -179,12 +179,12 @@ describe('#include', function () {
       return [ chunk.errors.map(formatError), (assignment?.init[0] as StringLiteral | undefined)?.value ];
     };
     assert.deepStrictEqual(read('s="a\\z\n#include b.lua\n"\nprinth(s)', { 'b.lua': 'printh("in b")\n' }), [[
-      'main_test_file 3:0 unfinished string near \'"\'', 'main_test_file 3:0 unexpected string \'\' near \'printh\'',
+      'main_test_file 3:0 unfinished string near \'"\'', 'main_test_file 3:0 unexpected string \'"\' near \'printh\'',
       'b.lua 1:8 unexpected keyword \'in\' near \'b\'', 'b.lua 1:12 unfinished string near \'")\'',
     ], 'aprinth(' ]);
     assert.deepStrictEqual(read('s="a\\z\n[["\n#include nope.lua\nprinth("ok")', {}), [[ 'main_test_file 3:0 unexpected symbol \'#\' near \'include\'' ], 'a[[' ]);
     assert.deepStrictEqual(read('s="a\\z\n#include nope.lua"\nprinth(s)', {})[0], [
-      'main_test_file 1:2 unfinished string near \'"a\\z\n\'', 'main_test_file 2:0 Can\'t #include "nope.lua"" from main_test_file: File does not exist',
+      'main_test_file 1:2 unfinished string near \'"aprinth(s)\'', 'main_test_file 2:0 Can\'t #include "nope.lua"" from main_test_file: File does not exist',
     ]);
     assert.deepStrictEqual(read('s="a\\\n#include nope.lua\\\n"\nprinth(s)', {}), [[], 'a\n#include nope.lua\n' ]);
     for (const lineBreak of [ '\n', '\r\n', '\n\r' ]) {
@@ -643,7 +643,7 @@ describe('#include', function () {
 
     it('takes a \\ at the end of a pasted file into a string with the first line break after the file, as PICO-8 does', () => {
       assert.deepStrictEqual(parseWith('#include a.lua\nprinth(s)', { 'a.lua': 's = "a\\' }).errors.map(formatError),
-        [ 'a.lua 1:4 unfinished string near \'"a\\\'' ]);
+        [ 'a.lua 1:4 unfinished string near \'"a\n\'' ]);
     });
   });
 });
