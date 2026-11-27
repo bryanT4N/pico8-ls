@@ -64,11 +64,11 @@ export default class Lexer {
   // PICO-8 one-line if statement.
   newlineSignificant: boolean = false;
 
-  // Set for a file that the parser pastes in, where a long string or comment can go on past the end of the text
-  // (openBracket).
+  // Set for a file that the parser pastes in, where a long string or comment, or a short string in the blanks after a
+  // \z, can go on past the end of the text (openBracket).
   pasted = false;
-  // Set for the main file: where the # of each #include line that PICO-8 reads is. A long string or comment stops at
-  // one, for the parser to paste the file in and go on in it (openBracket).
+  // Set for the main file: where the # of each #include line that PICO-8 reads is. A long string or comment, or a short
+  // string in the blanks after a \z, stops at one, for the parser to paste the file in and go on in it (openBracket).
   includeLines?: Set<number>;
   // A long string or comment, or a short string in the blanks after a \z, that goes on past the end of a pasted file, or
   // past an #include line of the main file that PICO-8 reads, whose # is at include: its level or quote, and the error
