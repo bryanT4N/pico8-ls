@@ -20,7 +20,7 @@ jobs:
         node-version: '26'
     - name: Install modules
       run: npm install
-    # VSCE_PAT must be an organization-scoped PAT: https://dev.azure.com/PollywogGames/_usersSettings/tokens
+    # VSCE_PAT: a Personal Access Token with the Marketplace (Manage) scope
     - name: VSCE package and publish
       env:
         VSCE_PAT: ${{ secrets.VSCE_PAT }}

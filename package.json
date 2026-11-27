@@ -1,15 +1,18 @@
 {
 	"name": "pico-8-ls",
-	"displayName": "PICO-8-LS",
+	"displayName": "PICO-8 Lua Language Server",
 	"description": "A personal fork of PICO-8 LS that provides a language server for PICO-8 Lua in .p8 carts and .lua files.",
 	"icon": "img/icon.png",
-	"author": "JanPaul Bergeson",
+	"author": "Bryan Tan",
+	"contributors": [
+		"JanPaul Bergeson"
+	],
 	"publisher": "bryanT4N",
 	"license": "MIT",
 	"version": "0.8.0",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/bryanT4N/pico8-ls"
+		"url": "https://github.com/bryanT4N/pico-8-ls"
 	},
 	"engines": {
 		"vscode": "^1.63.0"
@@ -27,7 +30,7 @@
 	"contributes": {
 		"configuration": {
 			"type": "object",
-			"title": "PICO-8-LS configuration",
+			"title": "PICO-8 Lua Language Server",
 			"properties": {
 				"pico-8-ls.maxNumberOfProblems": {
 					"scope": "window",

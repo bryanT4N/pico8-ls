@@ -1,6 +1,6 @@
-# PICO-8-LS
+# PICO-8 Lua Language Server
 
-PICO-8-LS is a Visual Studio Code extension with a language server for the Lua dialect of PICO-8. It works on `.p8` carts and on the `.lua` files that belong to them. Its reference for valid code is PICO-8 0.2.7. PICO-8-LS is a personal fork of [PICO-8 LS](https://github.com/japhib/pico8-ls) by JanPaul Bergeson.
+PICO-8 Lua Language Server (PICO-8-LS) is a Visual Studio Code extension with a language server for the Lua dialect of PICO-8. It works on `.p8` carts and on the `.lua` files that belong to them. Its reference for valid code is PICO-8 0.2.7. PICO-8-LS is a personal fork of [PICO-8 LS](https://github.com/japhib/pico8-ls) by JanPaul Bergeson.
 
 ## Features
 

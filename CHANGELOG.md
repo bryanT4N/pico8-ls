@@ -1,6 +1,6 @@
 # Changelog
 
-This file lists the main changes in each version of PICO-8-LS, in the style of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). These versions are built locally and are not published. Version 0.1.0 starts from PICO-8 LS 0.8.0, whose history is in the [PICO-8 LS changelog](https://github.com/japhib/pico8-ls/blob/master/CHANGELOG.md).
+This file lists the main changes in each version of PICO-8 Lua Language Server (PICO-8-LS), in the style of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions 0.1.0 to 0.7.1 were built locally and not published. Version 0.8.0 is the first version published to the Visual Studio Marketplace. Version 0.1.0 starts from PICO-8 LS 0.8.0, whose history is in the [PICO-8 LS changelog](https://github.com/japhib/pico8-ls/blob/master/CHANGELOG.md).
 
 ## 0.8.0
 
@@ -12,6 +12,7 @@ This file lists the main changes in each version of PICO-8-LS, in the style of [
 
 ### Changed
 
+- The extension is named PICO-8 Lua Language Server and has its own icon.
 - Errors follow PICO-8 0.2.7. The first error is at the token where PICO-8 stops reading.
 - Error messages quote code as PICO-8 does.
 - PICO-8's additions to Lua, such as one-line `if (...)`, compound assignments like `+=`, and `?`, are read as PICO-8 0.2.7 reads them.
