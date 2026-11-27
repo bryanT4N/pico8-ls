@@ -91,8 +91,8 @@ export type CallStatement = ASTNode & {
 export type IncludeStatement = ASTNode & {
   type: 'IncludeStatement',
   filename: string,
-  // The file the parser resolved it to. The binder takes it rather than resolving the name again, since the included
-  // file's nodes carry this path, spelled as the disk does.
+  // The binder takes this rather than resolving the name again: the included file's nodes carry this path, which
+  // resolveIncludeFile can spell otherwise than the name is written.
   resolvedFile?: ResolvedFile,
 };
 
@@ -160,8 +160,7 @@ export type Chunk = {
   block: Block,
   errors: ParseError[],
   comments?: Comment_[],
-  // The comments of the #included files, kept apart: the formatter, folding and outline regions take `comments` as the
-  // main file's own.
+  // Kept out of `comments`, which the formatter, folding and outline regions take as the main file's own.
   includedComments?: Comment_[],
   includes?: Include[],
   // The files that the main file's #includes could not find or read. A file that appears later can be one of them.

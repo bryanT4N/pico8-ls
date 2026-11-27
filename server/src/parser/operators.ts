@@ -2,7 +2,7 @@
 // Return the precedence priority of the operator.
 //
 // As unary `-` can't be distinguished from binary `-`, unary precedence
-// isn't described in this table but in `Parser.parseSubExpression()` itself.
+// isn't described in this table but in `Parser.parseSubExpressionInLevel()` itself.
 //
 // As this gets hit on every expression it's been optimized due to
 // the expensive CompareICStub which took ~8% of the parse time.

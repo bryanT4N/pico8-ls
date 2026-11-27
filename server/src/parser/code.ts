@@ -2,8 +2,8 @@
 // kept as runs of the file's text, so that each place in the code has its place in the file. The text is the file's as
 // an editor has it, without the BOM it may start with (fileText).
 
-// The code from at on is the text from from on, up to the next run; a line break PICO-8 reads in place of a lone CR in a
-// cart is at the CR.
+// The code from at on is the text from from on, up to the next run; a line break PICO-8 reads in place of a lone CR in
+// a cart is at the CR.
 export type Run = { at: number, from: number };
 
 export type Code = {
@@ -21,9 +21,9 @@ export type Code = {
 const SECTIONS = [ '__lua__', '__gfx__', '__gff__', '__label__', '__map__', '__sfx__', '__music__', '__meta:' ];
 
 // PICO-8 takes a file as a cart, whatever its name, when its first line, from its first p on, starts with
-// "pico-8 cartridge" (si.pin.kind.txt.text-before-header.0, si.pin.head.blank-first, si.pin.kind.p8.header-mid-line1.1).
-// In any other file it drops each CR that no LF follows: "--<CR>x = = 1" is a comment, and "pri<CR>nth()" calls printh
-// (si.t28.cr-dropped.*).
+// "pico-8 cartridge" (si.pin.kind.txt.text-before-header.0, si.pin.head.blank-first,
+// si.pin.kind.p8.header-mid-line1.1). In any other file it drops each CR that no LF follows: "--<CR>x = = 1" is a
+// comment, and "pri<CR>nth()" calls printh (si.t28.cr-dropped.*).
 export function readCode(text: string): Code {
   let p = 0;
   while (p < text.length && text[p] !== 'p' && text[p] !== '\n' && text[p] !== '\r') {
@@ -81,7 +81,6 @@ export function codeIndexOf(code: Code, index: number): number | undefined {
 function cartCode(text: string): Code {
   // The runs of the text that the code is made of, each with an LF after it when it ends at a lone CR.
   const pieces: { from: number, to: number, lf: boolean }[] = [];
-  // Where the text of the last line of code ends, before its line break.
   let lastLineEnd = 0;
   let lastWasCode = false;
   let end: Code['end'];
@@ -93,8 +92,8 @@ function cartCode(text: string): Code {
     while (j < text.length && text.charCodeAt(j) !== 10 && text.charCodeAt(j) !== 13) {
       j++;
     }
-    // The text of the line ends at to, and the code takes it up to taken: with its line break, or with an LF in place of
-    // a lone CR (lf), and then the next line starts past the character after the CR.
+    // The text of the line ends at to, and the code takes it up to taken: with its line break, or with an LF in place
+    // of a lone CR (lf), and then the next line starts past the character after the CR.
     let to = j;
     let taken = j;
     let after = j;
@@ -165,9 +164,10 @@ function cartCode(text: string): Code {
   return { text, code, runs, cart: true, end, lostLineBreak };
 }
 
-// PICO-8 splits a cart's code, without its last line break, at each line -->8 between two line breaks, the first first,
-// so that of two such lines in a row only the first is one (si.tab.spot.twice.2, si.tab.spot.last.1); it splits the text
-// of any other file as if it ended in a line break (si.t28.tabs-of-lua.last-no-lf, si.t28.tabs-of-lua.two-at-end).
+// PICO-8 splits a cart's code, without its last line break, at each line -->8 between two line breaks, the first
+// first, so that of two such lines in a row only the first is one (si.tab.spot.twice.2, si.tab.spot.last.1); it splits
+// the text of any other file as if it ended in a line break (si.t28.tabs-of-lua.last-no-lf,
+// si.t28.tabs-of-lua.two-at-end).
 export function tabsOf(code: Code): Code[] {
   let body = code.code;
   if (code.cart) {
@@ -221,7 +221,6 @@ export function characterCount(code: string): number | undefined {
   return count;
 }
 
-// The code of the tabs one after the other, with nothing between them.
 export function joined(tabs: Code[]): Code {
   let code = '';
   const runs: Run[] = [];

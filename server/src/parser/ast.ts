@@ -328,7 +328,6 @@ export default class AST {
 // Converts all "Bounds" objects in the AST into more concise, human-readable strings
 export function toReadableObj(body: Statement[]) {
   // Operate on a clone rather than mutating the original
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   body = structuredClone(body);
 
   for (const stmt of body) {

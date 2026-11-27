@@ -7,7 +7,6 @@ export function isTabMarker(comment: Comment_): boolean {
   return comment.startsLine && comment.raw === '-->8';
 }
 
-// Moved here from docs.ts so region markers can use it too.
 export function isLongComment(comment: Comment_): boolean {
   return /^--\[=*\[/.test(comment.raw);
 }

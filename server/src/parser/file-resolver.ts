@@ -48,7 +48,6 @@ export function pathToFileURL(filePath: string): string {
   if (path.sep === '\\') {
     rest = rest.replace(/\\/g, '/');
     if (rest.startsWith('//')) {
-      // A UNC path: \\server\share\...
       const end = rest.indexOf('/', 2);
       authority = (end === -1 ? rest.slice(2) : rest.slice(2, end)).toLowerCase();
       rest = end === -1 ? '/' : rest.slice(end);
@@ -111,8 +110,9 @@ function asWindowsReads(name: string): string {
   }).join('\\');
 }
 
-// A file's text as the editor has it in a document: without one BOM at its start, so that places in it are the editor's.
-// PICO-8 drops the one BOM too, and a second stays a character for both (si.pin.bom.comment, si.line.file.bom-twice).
+// A file's text as the editor has it in a document: without one BOM at its start, so that places in it are the
+// editor's. PICO-8 drops the one BOM too, and a second stays a character for both (si.pin.bom.comment,
+// si.line.file.bom-twice).
 export function fileText(bytes: Buffer): string {
   const text = bytes.toString();
   return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;

@@ -66,7 +66,6 @@ const PICO8_MAIN_LOCALS = [ 'circ', 'ovalfill', 'circfill', 'fget', 'pget', 'col
   'sget', 'sset', 'pal', 'clip', 'mset', 'mget', 'band', 'fset', 'sub', 'rectfill', 'sin', 'memcpy', 'memset', 'flr', 'sspr', 'deli', 'peek',
   'atan2', 'min', 'lshr', 'cos', 'mid', 'tline', 'bnot', 'ceil', 'srand', 'poke', 'shl', 'add', 'rotl', 'del', 'max', 'bor', 'rotr', 'shr',
   'tonum', 'chr', 'bxor', 'ord', 'tostr', 'poke4', 'poke2', 'peek2', 'peek4', 'time', '' ];
-// PICO-8's limits on the tokens of a cart and on the characters of its code.
 const MAX_TOKENS = 8192;
 const MAX_CHARACTERS = 65536;
 
@@ -81,7 +80,6 @@ export default class Parser {
   // (pull).
   readonly lexer: Lexer;
 
-  // The code read from the main file.
   private readonly code: Code;
 
   // The first token of the main file's code, the # of an #include line among them.
@@ -94,11 +92,11 @@ export default class Parser {
   // the lexer, the #include line in the main file, and where the file's code starts.
   private readonly pasted = new Map<ResolvedFile, { lexer: Lexer, line: Bounds, start: CodeLocation }>();
 
-  // Where the #include line of each file pasted in starts, in order.
   private readonly pasteLines: number[] = [];
 
   // Each #include line whose file is pasted in, in order: where its # is in the main file's code and where the line
-  // ends, the file's lexer, and what PICO-8 counts for the file besides its code's characters, when known (includedCode).
+  // ends, the file's lexer, and what PICO-8 counts for the file besides its code's characters, when known
+  // (includedCode).
   private readonly pastes: { hash: number, end: number, lexer: Lexer, more?: number }[] = [];
 
   // The #include lines not yet placed in a block, each with the token that came after it (placeIncludes).
@@ -109,15 +107,10 @@ export default class Parser {
   // a string.
   private open?: OpenBracket & { token: Token };
 
-  // The end-of-file token of each lexer that has read to its end.
   private readonly ends = new Map<ResolvedFile, Token>();
 
-  // The nodes that end in another file than they start in, or hold the #include line of a file pasted in (finishNode).
   private readonly spanning: ASTNode[] = [];
 
-  // Locations are stored in a stack as a `Marker` object consisting of both
-  // `loc` and `range` data. Once a `Marker` is popped off the stack an end
-  // location is pushed and the data is attached to a syntax node.
   locations: Marker[] = [];
 
   // Keep track of all errors that occurred while parsing.
@@ -139,7 +132,6 @@ export default class Parser {
   private levels = 0;
 
   // The text of a file, read as PICO-8 reads it (readCode), or code, such as a text read as code of its own (textCode).
-  // eslint-disable-next-line @typescript-eslint/ban-types
   constructor(filename: ResolvedFile, input: string | Code, options: ParserOptions = {}) {
     this.includeFileResolver = options?.includeFileResolver || new RealFileResolver();
 
@@ -187,8 +179,6 @@ export default class Parser {
     // Pop a `Marker` off the location-array and attach its location data.
     const location = this.popLocation();
 
-    // For "greedy" nodes we take the next token, instead of the previous one
-    // (this is just block nodes atm)
     let endingToken = greedy ? this.token : this.previousToken;
     if (greedy && !endingToken) {
       // If there's no next token, take the previous one instead
@@ -203,7 +193,6 @@ export default class Parser {
       }
     }
 
-    // A node belongs to an included file if it *started* in one.
     node.included = location ?
       !this.mainFile.equals(location.loc.start.filename) :
       this.isInIncludedFile();
@@ -281,7 +270,8 @@ export default class Parser {
       this.errors.push(errors.createErrForToken(this.token, errMessages.expected, '<eof>', this.token.value));
     } else if (this.isCart()) {
       // PICO-8 rejects a return in a cart's outermost block, also as its last statement (4.return.end-bare), and a
-      // goto there past a local to a label at the end, which Lua allows at the end of a block (4.goto.end-of-chunk-local).
+      // goto there past a local to a label at the end, which Lua allows at the end of a block
+      // (4.goto.end-of-chunk-local).
       const last = lastCodeStatement(body.body);
       if (last?.type === 'ReturnStatement') {
         this.errors.push(errors.createErr(last.loc!, errMessages.returnInCart));
@@ -306,8 +296,8 @@ export default class Parser {
       this.checkCharacters();
       this.checkTokens();
     } else if (this.isCart() && !/\.lua/i.test(this.mainFile.path)) {
-      // PICO-8 does not load such a file, whatever it holds, and reads one whose path has .lua in it as Lua (5.load.*).
-      // The error is the first, on its first line.
+      // PICO-8 does not load such a file, whatever it holds, so this error comes before any other; it reads one whose
+      // path has .lua in it as Lua (5.load.*).
       const start = { index: 0, line: 1, column: 0, filename: this.mainFile };
       const firstLineEnd = /[\r\n]|$/.exec(this.code.text)!.index;
       this.errors.unshift(errors.createErr({ start, end: { ...start, index: firstLineEnd, column: firstLineEnd } }, errMessages.notACart));
@@ -321,9 +311,9 @@ export default class Parser {
     chunk.includedComments = this.includedComments;
     chunk.unresolvedIncludes = this.unresolvedIncludes;
 
-    // The outline, folding and the analysis take a node that runs from one file into another to end where its first file
-    // stops being read: at the #include line of the file it runs into, or at the end of the pasted file it starts in,
-    // which has been read to its end by then. Its text in the files after that one is kept apart, for the analysis.
+    // The outline, folding and the analysis take a node that runs from one file into another to end where its first
+    // file stops being read: at the #include line of the file it runs into, or at the end of the pasted file it starts
+    // in, which has been read to its end by then. Its text in the files after that one is kept apart, for the analysis.
     for (const node of this.spanning) {
       const loc = node.loc!;
       const elsewhere = this.partsAfter(loc.start, loc.end);
@@ -458,10 +448,10 @@ export default class Parser {
     }
   }
 
-  // PICO-8 pastes a file's text in with two line breaks after it, and a long string or comment, or a short string in the
-  // blanks after a \z, goes on through the text so pasted together to its close: one that a pasted file leaves open goes
-  // on after its #include line, and one that reaches an #include line that PICO-8 reads (includeLinesOf) goes on in
-  // that file (3.open-long-string, 3.open-long-string-codes, 3.open-long-comment-include-closes,
+  // PICO-8 pastes a file's text in with two line breaks after it, and a long string or comment, or a short string in
+  // the blanks after a \z, goes on through the text so pasted together to its close: one that a pasted file leaves open
+  // goes on after its #include line, and one that reaches an #include line that PICO-8 reads (includeLinesOf) goes on
+  // in that file (3.open-long-string, 3.open-long-string-codes, 3.open-long-comment-include-closes,
   // 3.alone-code-real-comment, 3.z-include-file). Undefined when there is no token yet: a comment, or an #include line
   // read; the end of a pasted file is its end-of-file token, for pull to go on after it.
   private goOnInBracket(lexer: Lexer): Token | undefined {
@@ -638,7 +628,6 @@ export default class Parser {
     return this.finishNode(AST.block(block), true);
   }
 
-  // The code that an #include pastes in (includedCode), or undefined when there is none, with the error saying why.
   private codeToPaste(statement: IncludeStatement, written: string, name: string, resolvedInclude: ResolvedFile, tabSuffix?: string)
     : { code: Code, more?: number } | undefined {
     if (this.includeParses >= MAX_INCLUDE_PARSES) {
@@ -649,8 +638,8 @@ export default class Parser {
       return undefined;
     }
 
-    // PICO-8 does not open these names, whatever is on the disk (si.line.name.leading-slash, si.line.name.trailing-slash,
-    // si.line.name.char.e-acute).
+    // PICO-8 does not open these names, whatever is on the disk (si.line.name.leading-slash,
+    // si.line.name.trailing-slash, si.line.name.char.e-acute).
     const unopened = name.startsWith('/') ? 'PICO-8 does not open a name that starts with / from the cart\'s folder'
       : /[\\/]$/.test(name) ? 'PICO-8 does not open a name that ends with / or \\'
         : /[^\0-\x7f]/.test(name) ? 'PICO-8 does not open a name with a character that is not ASCII' : undefined;
@@ -834,8 +823,6 @@ export default class Parser {
       body = this.parseWhileStatementBody(flowContext);
       closed = this.expectBlockEnd('end', opener, 'while');
     } else if (startsWithParen && this.isOneLineBody(condition, keyword)) {
-      // Handle special one-line while statement
-      // (the body is every statement until the end of the line)
       this.lexer.withSignificantNewline(() => {
         body = this.parseWhileStatementBody(flowContext, isEndOfLine);
         this.expectEndOfLine();
@@ -922,8 +909,6 @@ export default class Parser {
     let condition: Expression;
     let body;
 
-    // IfClauses begin at the same location as the parent IfStatement.
-    // It ends at the start of `end`, `else`, or `elseif`.
     let marker = this.locations[this.locations.length - 1];
     this.pushLocation(marker);
 
@@ -938,8 +923,7 @@ export default class Parser {
         // be added anyway for a one-line if statement
         condition.parens = false;
 
-        // Handle special PICO-8 one-line if statement. Each clause contains every statement up to the end of the line
-        // or the next clause; any of them can be empty, an else at the end of the line too.
+        // In PICO-8 any clause can be empty, an else at the end of the line too.
         this.lexer.withSignificantNewline(() => {
           flowContext.pushScope();
           const block = this.parseBlock(flowContext, isEndOfLine);
@@ -1141,8 +1125,6 @@ export default class Parser {
   //     callexp ::= prefixexp args | prefixexp ':' Name args
 
   parseAssignmentOrCallStatement(flowContext: FlowContext): AssignmentStatement | CallStatement {
-    // Keep a reference to the previous this.token for better error messages in case
-    // of invalid statement
     let marker: Marker;
     let lvalue, base;
 
@@ -1238,15 +1220,11 @@ export default class Parser {
     return this.finishNode(AST.assignmentStatement(targets, operator, values));
   }
 
-  // Special PICO-8 print statement: ? expression '\n'
   parseSpecialPrint(flowContext: FlowContext): CallStatement {
     const startMarker = this.printsNothing() ? new Marker(this.previousToken) : this.createLocationMarker();
 
     const args = this.parsePrintArguments(flowContext);
 
-    // Each part uses the same start marker. One instance of it was already
-    // pushed above. finishNode will consume the top location on the stack so we
-    // have to push 2 more times.
     const base = this.finishNode(AST.identifier('?'));
     this.pushLocation(startMarker);
     const callExpression = this.finishNode(AST.callExpression(base, args));
@@ -1441,9 +1419,6 @@ export default class Parser {
   // Expression parser
   // -----------------
   //
-  // Expressions are evaluated and always return a value. If nothing is
-  // matched null will be returned.
-  //
   //     exp ::= (unop exp | primary | prefixexp ) { binop exp }
   //
   //     primary ::= nil | false | true | Number | String | '...'
@@ -1558,8 +1533,8 @@ export default class Parser {
     }
   }
 
-  // A cart whose code has more characters than PICO-8 loads, or, when it loads, whose code with its #include files pasted
-  // in has more than PICO-8 runs. PICO-8 names no place in the code: the error is on its first token.
+  // A cart whose code has more characters than PICO-8 loads, or, when it loads, whose code with its #include files
+  // pasted in has more than PICO-8 runs. PICO-8 names no place in the code: the error is on its first token.
   private checkCharacters(): void {
     const { code: main, end, lostLineBreak } = this.code;
     const own = characterCount(main);
@@ -1567,8 +1542,8 @@ export default class Parser {
       return;
     }
     const first = this.first!;
-    // PICO-8 counts the line break that the code is read without, before a section or a CR that ends the file, and 2 more
-    // when the code ends without one (5.chars.gfx, 5.chars.cr-end-*, 5.chars.no-final-newline).
+    // PICO-8 counts the line break that the code is read without, before a section or a CR that ends the file, and 2
+    // more when the code ends without one (5.chars.gfx, 5.chars.cr-end-*, 5.chars.no-final-newline).
     const loaded = own + (end !== undefined || lostLineBreak ? 1 : main.endsWith('\n') ? 0 : 2);
     if (loaded > MAX_CHARACTERS) {
       this.errors.push(errors.createErrForToken(first, errMessages.codeTooLong, loaded, MAX_CHARACTERS));
@@ -1607,8 +1582,8 @@ export default class Parser {
     }
   }
 
-  // PICO-8 counts the tokens of a cart with its #include files pasted in, each in place of its line with two line breaks
-  // after it, and reports the count when it is over the limit; the error is on the token one too many.
+  // PICO-8 counts the tokens of a cart with its #include files pasted in, each in place of its line with two line
+  // breaks after it, and reports the count when it is over the limit; the error is on the token one too many.
   private checkTokens(): void {
     const parts: { at: number, lexer: Lexer, from: number, length: number }[] = [];
     let code = '';
@@ -1996,9 +1971,9 @@ function tabIndex(suffix: string): number | undefined {
 // this is known, or the number of the tab that the file does not have. PICO-8 takes tabs of a cart, and of a file
 // whose path has .lua in it in any case, and any other file whole (3.colon-txt, si.t28.ext-folder, si.t28.ext-alua).
 // Whole, a file of tabs is its first 16 tabs with nothing between them (si.tab.t18.whole, si.t28.join.tabs-fuse); a
-// number that is not one of the 16 tabs a cart can have gives nothing (3.p8-tab-11, 3.p8-tab-minus-2). It counts 2 more
-// for the last tab of a .lua that is not a cart, and 1 more for any other file (5.chars.include-*). Not known: its count
-// of more than 16 tabs, of a number that is not a tab, and of any other file that has a line -->8.
+// number that is not one of the 16 tabs a cart can have gives nothing (3.p8-tab-11, 3.p8-tab-minus-2). It counts 2
+// more for the last tab of a .lua that is not a cart, and 1 more for any other file (5.chars.include-*). Not known: its
+// count of more than 16 tabs, of a number that is not a tab, and of any other file that has a line -->8.
 function includedCode(code: Code, filePath: string, tab: number | undefined): { code: Code, more?: number } | number {
   if (!code.cart && !/\.lua/i.test(filePath)) {
     return { code, more: /(?:^|\n)-->8/.test(code.code) ? undefined : 1 };

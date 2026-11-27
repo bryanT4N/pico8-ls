@@ -176,9 +176,7 @@ export type Comment_ = ASTNode & {
   type: 'Comment',
   value: string,
   raw: string,
-  // Only whitespace comes before the comment on the line where it starts.
   startsLine: boolean,
-  // The text of its line before it: empty or blanks when the comment starts its line.
   lineBefore: string,
   // Only whitespace, and comments that end the line, come after the comment on the line where it ends: no code.
   endsLine: boolean,

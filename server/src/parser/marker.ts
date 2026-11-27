@@ -12,8 +12,6 @@ export default class Marker {
     }
   }
 
-  // Complete the location data stored in the `Marker` by adding the location
-  // of the *previous token* as an end location.
   complete(endLocation: CodeLocation) {
     this.loc = boundsClone(this.loc);
     this.loc.end = endLocation;

@@ -33,13 +33,9 @@ export type FlowScope = {
   isLoop: boolean,
 };
 
-// Control flow tracking
-// ---------------------
-// A context object that validates loop breaks and `goto`-based control flow.
-// The errors it finds go into the list it was given, so that the statements
-// around them are still parsed. Lua finds each of them at a later token than
-// the one it names, and stops at the first error it finds, so an error is left
-// out when stoppedBefore says that Lua stops before that token.
+// The errors it finds go into the list it was given, so that the statements around them are still parsed. Lua finds
+// each of them at a later token than the one it names, and stops at the first error it finds, so an error is left out
+// when stoppedBefore says that Lua stops before that token.
 
 export class FlowContext {
   allowVararg: boolean;
@@ -56,7 +52,6 @@ export class FlowContext {
   reportedTooManyVariables = false;
   reportedTooManyUpvalues = false;
 
-  // start: where the function starts, null for the main function.
   constructor(errors: ParseError[], stoppedBefore: (found: Token) => boolean, readonly parent: FlowContext | null = null,
     readonly start: CodeLocation | null = null, maxUpvalues = Infinity) {
     this.outerVariables = parent ? parent.outerVariables + parent.activeVariables() : 0;
@@ -90,7 +85,6 @@ export class FlowContext {
     return count;
   }
 
-  // The variable a name refers to in this function, if it is one of its locals.
   variableNamed(name: string): LocalVariable | undefined {
     for (let i = this.scopes.length - 1; i >= 0; i--) {
       const variables = this.scopes[i].variables;
@@ -168,7 +162,6 @@ export class FlowContext {
   addLabel(name: string, token: Token, found: Token) {
     const scope = this.currentScope();
 
-    // The first label of a name stays the one gotos jump to.
     if (Object.prototype.hasOwnProperty.call(scope.labels, name)) {
       const first = scope.labels[name];
       this.report(found, first.file.equals(token.bounds.start.filename)

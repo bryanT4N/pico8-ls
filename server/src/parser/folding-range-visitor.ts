@@ -75,8 +75,6 @@ export class FoldingRangeVisitor extends ASTVisitor<void> {
       // End one line before the next clause starts
         endLine = nextClause.loc.start.line - 1;
       } else {
-      // This is the last clause, so it ends where the whole IfStatement ends,
-      // which is one line above the final 'end' keyword.
         endLine = node.loc.end.line - 1;
       }
 

@@ -17,14 +17,6 @@ import { Bounds, CodeLocation } from './types';
 // character codes instead of characters as string comparisons was the
 // biggest bottleneck of the parser.
 //
-// If `options.comments` is enabled, all comments encountered will be stored
-// in an array which later will be appended to the chunk object. If disabled,
-// they will simply be disregarded.
-//
-// When the lexer has derived a valid token, it will be returned as an object
-// containing its value and as well as its position in the input string (this
-// is always enabled to provide proper debug messages).
-//
 // `lex()` starts lexing and returns the following token in the stream.
 export type OpenBracket = { unfinished: errors.ParseError, include?: number } & ({ level: number, isComment: boolean } | { quote: number });
 
@@ -77,9 +69,9 @@ export default class Lexer {
   // Set for the main file: where the # of each #include line that PICO-8 reads is. A long string or comment, or a short
   // string in the blanks after a \z, stops at one, for the parser to paste the file in and go on in it (openBracket).
   includeLines?: Set<number>;
-  // A long string or comment, or a short string in the blanks after a \z, that goes on past the end of a pasted file, or
-  // past an #include line of the main file that PICO-8 reads, whose # is at include: its level or quote, and the error
-  // to give when nothing closes it.
+  // A long string or comment, or a short string in the blanks after a \z, that goes on past the end of a pasted file,
+  // or past an #include line of the main file that PICO-8 reads, whose # is at include: its level or quote, and the
+  // error to give when nothing closes it.
   openBracket?: OpenBracket;
 
   filename: ResolvedFile;
@@ -169,7 +161,6 @@ export default class Lexer {
   }
 
   addError(fmtMessage: string, ...rest: any[]) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     this.errors.push(errors.createErr(this.getCurrentBounds(), fmtMessage, ...rest));
   }
 
@@ -411,9 +402,6 @@ export default class Lexer {
     }
   }
 
-  // Whitespace has no semantic meaning in lua so simply skip ahead while
-  // tracking the encounted newlines. Any kind of eol sequence is counted as a
-  // single line.
   consumeEOL() {
     const charCode = this.input.charCodeAt(this.index);
     const peekCharCode = this.input.charCodeAt(this.index + 1);
@@ -507,9 +495,9 @@ export default class Lexer {
   }
 
   // Reads a short string on to its delimiter and past it: 'close'; or to the line break or end of the text that leaves
-  // it unfinished: 'unfinished'. In the blanks and line breaks after a \z, which skipping starts in, it stops at the end
-  // of the text: 'end', or at the # of an #include line of includeLines: 'include'; PICO-8 goes on skipping in the text
-  // that comes next.
+  // it unfinished: 'unfinished'. In the blanks and line breaks after a \z, which skipping starts in, it stops at the
+  // end of the text: 'end', or at the # of an #include line of includeLines: 'include'; PICO-8 goes on skipping in the
+  // text that comes next.
   readShortString(delimiter: number, skipping: boolean): { value: string | null, reached: 'close' | 'unfinished' | 'end' | 'include' } {
     let value = this.encodingMode.discardStrings ? null : '';
     let partStart = this.index;
@@ -545,8 +533,6 @@ export default class Lexer {
         take(this.index - 1);
         return { value, reached: 'close' };
       }
-      // EOF or `\n` terminates a string literal. If we haven't found the
-      // ending delimiter by now, the string is unfinished.
       if (this.index > this.length || isLineTerminator(this.charCode)) {
         take(this.index - 1);
         // Leave the line break to skipWhiteSpace, so that the line gets counted.
@@ -569,13 +555,9 @@ export default class Lexer {
     }
   }
 
-  // Expect a multiline string literal and return it as a regular string
-  // literal, if it doesn't validate into a valid multiline string, return the
-  // `[` on its own.
-
   scanLongStringLiteral(): Token {
     const string = this.readLongString(false);
-    // Not a long string after all, just a `[`. The parser reports what follows.
+    // The parser reports what follows the `[`.
     if (false === string) {
       return this.makeToken(TokenType.Punctuator, '[');
     }
@@ -770,9 +752,7 @@ export default class Lexer {
       if (isHexDigit(this.input.charCodeAt(this.index + 1)) &&
           isHexDigit(this.input.charCodeAt(this.index + 2))) {
         this.index += 3;
-        // TODO use frag again?
-        // eslint-disable-next-line max-len
-        return this.encodingMode.encodeByte(parseInt(this.input.slice(sequenceStart + 1, this.index), 16)); //, '\\' + this.input.slice(sequenceStart, this.index));
+        return this.encodingMode.encodeByte(parseInt(this.input.slice(sequenceStart + 1, this.index), 16));
       }
       this.addError(errMessages.hexadecimalDigitExpected, '\\' + this.input.slice(sequenceStart, this.index + 2));
       return this.input.charAt(this.index++);
@@ -804,17 +784,11 @@ export default class Lexer {
     return this.index < this.length ? this.input.charAt(this.index++) : '';
   }
 
-  // Comments begin with -- after which it will be decided if they are
-  // multiline comments or not.
-  //
-  // The multiline functionality works the exact same way as with string
-  // literals so we reuse the functionality.
-
   scanComment(canBeLongComment: boolean) {
     this.tokenStart = this.index;
     this.tokenStartLine = this.line;
     this.tokenStartLineIdx = this.lineStart;
-    this.index += 2; // --
+    this.index += 2;
 
     const character = this.input.charAt(this.index);
     const commentStart = this.index;
@@ -857,7 +831,6 @@ export default class Lexer {
     node.loc = this.getCurrentBounds();
     this.comments.push(node);
 
-    // A comment, not code, follows: whether this one ends its line waits for the next comment.
     if (this.isCommentStart(after)) {
       this.commentsBeforeComment.push(node);
     } else {
@@ -943,7 +916,7 @@ export default class Lexer {
 
   // ## Lex functions and helpers.
 
-  // Where next() takes each token from: lex(), or, as the parser has it, the cart with the files it pastes in.
+  // Where next() takes each token from: lex(), or, as the parser has it, the main file with the files it pastes in.
   read: () => Token = () => this.lex();
 
   // Read the next token.
@@ -1018,14 +991,15 @@ export function onOneLine(a: Token | undefined, b: Token): boolean {
   return a !== undefined && a.bounds.start.filename === b.bounds.start.filename && (a.line ?? a.bounds.start.line) === (b.line ?? b.bounds.start.line);
 }
 
-// Where the # of each #include line that PICO-8 reads is in the code, or undefined for none.
-// PICO-8 finds them in the cart's own text before Lua reads the code: at the start of a line, in lower case and followed
-// by a space (3.after-code, 3.upper, 3.tab-after-include, 3.nested), and only outside a long string or comment of that
-// text, whatever a pasted file leaves open (3.alone-str-cart-comment-level, 3.alone-code-real-comment). Its scan is not
-// Lua's: it reads short strings, which \ and a line break take on to the next line, -- comments, long or not, and //
-// line comments, //[[ too (3.scan-dq-string, 3.dq-cont-include, 3.scan-line-comment-space, 3.scan-slash-long), but a
-// \z does not take a string past a line break (3.z-include), and it skips the rest of an #include line
-// (3.scan-name-brackets). Elsewhere the # is the length operator. The scan stops at the last #include line.
+// Where the # of each #include line that PICO-8 reads is in the code.
+// PICO-8 finds them in the cart's own text before Lua reads the code: at the start of a line, in lower case and
+// followed by a space (3.after-code, 3.upper, 3.tab-after-include, 3.nested), and only outside a long string or comment
+// of that text, whatever a pasted file leaves open (3.alone-str-cart-comment-level, 3.alone-code-real-comment). Its
+// scan is not Lua's: it reads short strings, which \ and a line break take on to the next line, -- comments, long or
+// not, and // line comments, //[[ too (3.scan-dq-string, 3.dq-cont-include, 3.scan-line-comment-space,
+// 3.scan-slash-long), but a \z does not take a string past a line break (3.z-include), and it skips the rest of an
+// #include line (3.scan-name-brackets). Elsewhere the # is the length operator. The scan stops at the last #include
+// line.
 export function includeLinesOf(input: string): Set<number> | undefined {
   let hash = input.indexOf('#include ');
   if (hash < 0) {
@@ -1096,7 +1070,6 @@ function shortStringEnd(input: string, i: number): number {
   return input.length;
 }
 
-// After a long bracket that opens at i, or undefined when none opens there.
 function longBracketEnd(input: string, i: number): number | undefined {
   let j = i + 1;
   while (input.charCodeAt(j) === 61) {
@@ -1117,10 +1090,10 @@ export function lineEnd(input: string, i: number): number {
   return i;
 }
 
-// PICO-8 counts the tokens of a cart with its #include files pasted in before Lua reads the code, with a lexer of its own
-// that reads strings and comments as its scan for #include lines does (includeLinesOf). A character that is no token is
-// one, and "#include " where a token can start hides the rest of its line (5.tok.*). Each token counts one but for
-// these:
+// PICO-8 counts the tokens of a cart with its #include files pasted in before Lua reads the code, with a lexer of its
+// own that reads strings and comments as its scan for #include lines does (includeLinesOf). A character that is no
+// token is one, and "#include " where a token can start hides the rest of its line (5.tok.*). Each token counts one but
+// for these:
 const FREE_TOKENS = new Set([ ',', '.', ':', ';', '::', ')', ']', '}', 'local', 'end' ]);
 // and a - or ~ right before a number after one of these, which counts with the number.
 const JOINS_AFTER = new Set([ '=', '(', ',', '{', '[', '==', '~=', '!=', '<', '>', '<=', '>=', '+', '-', '*', '/', '\\', '%', '^', '&', '|',

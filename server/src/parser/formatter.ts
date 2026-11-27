@@ -965,7 +965,6 @@ export default class Formatter {
         this.increaseDepth(2);
         ret += this.newline();
 
-        // Check for a comment on the right node so it goes before the newline
         if (link.right.comments) {
           ret += this.commentsBeforeNode(link.right, true);
           link.right.comments = undefined;
@@ -1144,7 +1143,6 @@ export default class Formatter {
       parentOperator &&
       parentOperator === currentOperator &&
       isRightSideOfAnExpression &&
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       Operators.doesNeedParenthesesIfOnTheRightSide(parentOperator)
     ) {
       shouldWrap = true;

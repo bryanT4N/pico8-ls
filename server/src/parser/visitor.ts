@@ -30,8 +30,6 @@ export abstract class ASTVisitor<T> {
   // Parent tracking.
   nodeStack: NodeGettingVisited[] = [];
 
-  // The links of the chains being walked, innermost last. One array serves every chain, since a right operand or an
-  // argument can hold a chain of its own.
   private readonly chain: ChainLink[] = [];
 
   constructor() {}
@@ -209,8 +207,6 @@ export abstract class ASTVisitor<T> {
   }
 
   private visitNode(node: VisitableASTNode) {
-    // console.log('\nvisitNode ' + node.type + ', node stack: [' + this.nodeStack.map(node => node.node.type).join(' | ') + ']');
-    // logObj(node, 'current node');
     this.onVisitNode(node);
     if (isChainLink(node)) {
       this.visitChain(node);

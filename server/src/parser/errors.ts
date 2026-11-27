@@ -72,19 +72,6 @@ export function isParseError(e: any): e is ParseError {
   return !!e && typeof e === 'object' && e.type === 'ParseError';
 }
 
-// #### Raise an exception.
-//
-// Raise an exception by passing a token, a string format and its paramters.
-//
-// The passed tokens location will automatically be added to the error
-// message if it exists, if not it will default to the lexers current
-// position.
-//
-// Example:
-//
-//     // [1:0] expected [ near (
-//     raise(token, "expected %1 near %2", '[', token.value);
-
 export function createErr(bounds: Bounds, fmtMessage: string, ...rest: any[]): ParseError {
   const message = sprintf(fmtMessage, ...rest);
   return new ParseError(message, bounds);
@@ -106,13 +93,6 @@ export function createErrForToken(token: Token, fmtMessage: string, ...rest: any
 export function raiseErrForToken(token: Token, fmtMessage: string, ...rest: any[]): never {
   throw createErrForToken(token, fmtMessage, ...rest);
 }
-
-// #### Raise an unexpected token error.
-//
-// Example:
-//
-//     // expected <name> near '0'
-//     raiseUnexpectedToken('<name>', token);
 
 export function raiseUnexpectedToken(type: string, token: Token): never {
   raiseErrForToken(token, errMessages.expectedToken, type, token.value);
