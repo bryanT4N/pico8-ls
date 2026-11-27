@@ -750,7 +750,7 @@ export default class Parser {
       // special ? print function
       case '?':
         this.lexerNext();
-        return this.parseSpecialPrint(flowContext);
+        return this.finishNode(AST.callStatement(this.parsePrint(new Marker(this.previousToken), flowContext)));
       }
     }
 
@@ -1218,16 +1218,12 @@ export default class Parser {
     return this.finishNode(AST.assignmentStatement(targets, operator, values));
   }
 
-  parseSpecialPrint(flowContext: FlowContext): CallStatement {
-    const startMarker = this.printsNothing() ? new Marker(this.previousToken) : this.createLocationMarker();
-
-    const args = this.parsePrintArguments(flowContext);
-
+  // The ? just read, which the marker is at, as a call of its arguments.
+  private parsePrint(marker: Marker, flowContext: FlowContext): CallExpression {
+    this.pushLocation(marker);
     const base = this.finishNode(AST.identifier('?'));
-    this.pushLocation(startMarker);
-    const callExpression = this.finishNode(AST.callExpression(base, args));
-    this.pushLocation(startMarker);
-    return this.finishNode(AST.callStatement(callExpression));
+    this.pushLocation(marker);
+    return this.finishNode(AST.callExpression(base, this.parsePrintArguments(flowContext)));
   }
 
   // PICO-8's ? takes the rest of its line, as a statement or as a value, and the rest can be empty
@@ -1821,10 +1817,7 @@ export default class Parser {
       this.pushLocation(marker);
       return this.parseTableConstructor(flowContext);
     } else if (this.lexer.consume('?')) {
-      this.pushLocation(marker);
-      const base = this.finishNode(AST.identifier('?'));
-      this.pushLocation(marker);
-      return this.finishNode(AST.callExpression(base, this.parsePrintArguments(flowContext)));
+      return this.parsePrint(marker, flowContext);
     }
 
     return null;

@@ -1,6 +1,6 @@
 import { strictEqual as eq } from 'assert';
 import { CallExpression } from '../expressions';
-import { Statement } from '../statements';
+import { AssignmentStatement, CallStatement, IfStatement, Statement } from '../statements';
 import { analyzeCode, bounds, deepEquals, deepEqualsAST, formatError, getTestFileContents, MockFileResolver, parse, parseInChild, TestFilesResolver, warningsIn } from './test-utils';
 
 describe('Parser', () => {
@@ -785,6 +785,20 @@ end`;
       eq(JSON.stringify(argumentsOf('?\n"a"')), JSON.stringify([[ 'main_test_file 2:0 unexpected string \'a\' near \'<eof>\'' ], [ 0 ]]));
       const { block: { body } } = parse('?\nx = 1');
       deepEquals(body[0].loc, bounds(1, 0, 1, 1));
+    });
+
+    it('takes the call from the ? to the end of its last argument, and the ? alone as its name, as a statement and as a value', () => {
+      const firstOf = (code: string) => parse(code).block.body[0];
+      const rangesOf = (statement: Statement) => {
+        const call = (statement as CallStatement).expression as CallExpression;
+        return [ statement.loc, call.loc, call.base.loc ];
+      };
+      deepEquals(rangesOf(firstOf('? 1, 2')), [ bounds(1, 0, 1, 6), bounds(1, 0, 1, 6), bounds(1, 0, 1, 1) ]);
+      deepEquals(rangesOf(firstOf('?\nx = 1')), [ bounds(1, 0, 1, 1), bounds(1, 0, 1, 1), bounds(1, 0, 1, 1) ]);
+      deepEquals(rangesOf((firstOf('if (a) ?"x", y -- c\nz = 1') as IfStatement).clauses[0].block.body[0]),
+        [ bounds(1, 7, 1, 14), bounds(1, 7, 1, 14), bounds(1, 7, 1, 8) ]);
+      const value = (firstOf('x = ? 1, 2') as AssignmentStatement).init[0] as CallExpression;
+      deepEquals([ value.loc, value.base.loc ], [ bounds(1, 4, 1, 10), bounds(1, 4, 1, 5) ]);
     });
   });
 
