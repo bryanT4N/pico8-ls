@@ -28,7 +28,7 @@ import { builtinSignatureHelp, CallContext, callContextAt } from './signature-he
 import { DEFAULT_SETTINGS, PicoSettings, settingsFrom } from './settings';
 import { guarded } from './guarded';
 
-console.log('PICO-8-LS language server starting.');
+process.stderr.write('PICO-8-LS language server starting.\n');
 
 const connection = createConnection(ProposedFeatures.all);
 
@@ -246,7 +246,7 @@ connection.onInitialized(() => {
       }
       void fetchExcludes();
       Promise.all(event.added.map(scanWorkspaceFolder)).catch(e => {
-        console.log('Error scanning workspace folders', e);
+        console.error('Error scanning workspace folders', e);
       });
     });
   }
@@ -268,7 +268,7 @@ function scanWorkspace() {
     let read: string[] = [];
     try {
       read = (await Promise.all(roots.map(root => listAndRead(root, false).catch(e => {
-        console.log('Error scanning ' + root, e);
+        console.error('Error scanning ' + root, e);
         return [];
       })))).flat();
     } finally {
@@ -276,7 +276,7 @@ function scanWorkspace() {
       endScan(read, index.uris(), roots.length);
     }
   }).catch(reason => {
-    console.log('Failed to get workspace folder(s):', reason);
+    console.error('Failed to get workspace folder(s):', reason);
     started = true;
     publish(index.uris());
   });
@@ -975,5 +975,3 @@ documents.listen(connection);
 
 // Listen on the connection
 connection.listen();
-
-console.log('PICO-8 Language Server launched.');
