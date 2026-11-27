@@ -54,10 +54,6 @@ PICO-8-LS skips the files and folders that `files.exclude` hides. When the PICO-
 - Formatting is turned off, because the formatter could change what code means.
 - While a renamed folder is being scanned, editing an open file can show a false warning for up to about a second.
 
-## Other editors
-
-The language server uses the Language Server Protocol, but it is tested only in VS Code. The PICO-8 LS project has threads on setting up its server in [Neovim](https://github.com/japhib/pico8-ls/issues/34) and [Sublime Text](https://github.com/japhib/pico8-ls/issues/44).
-
 ## Development
 
 Build and test with these commands, run from the repository root:
