@@ -365,9 +365,9 @@ function tellBudgetReached(): void {
   }
   budgetShown = true;
   connection.sendNotification(ShowMessageNotification.type, { type: MessageType.Warning,
-    message: 'PICO-8-LS found more PICO-8 code in this workspace than it analyses at once, so it analyses only the open files, the files '
-      + 'that include them, the files that include those and so on, and what these include. To analyse the whole workspace, exclude large '
-      + 'folders with files.exclude.' });
+    message: 'PICO-8-LS found more text in this workspace\'s PICO-8 files than it analyses at once, so it analyses only the open files, '
+      + 'the files that include them, the files that include those and so on, and what these include. To analyse the whole workspace, '
+      + 'exclude large folders with files.exclude.' });
 }
 
 // Reads the files, DISK_OPERATIONS at a time, and notes the length and #include lines of each PICO-8 file. While the
