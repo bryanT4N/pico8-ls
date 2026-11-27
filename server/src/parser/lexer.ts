@@ -908,27 +908,12 @@ export default class Lexer {
     }
   }
 
-  consumeRestOfLine(fromIdx?: number) {
+  consumeRestOfLine(fromIdx: number) {
     this.previousToken = this.token;
 
-    // Reset index to the number if provided, in case lookahead already ran forward
-    if (fromIdx === undefined) {
-      fromIdx = this.index;
-    } else {
-      // The lookahead is lexed again from the end of this line, so whatever
-      // lexing it did past fromIdx (line breaks, comments, errors, reaching the
-      // end of the code) must be undone, or it counts twice.
-      const start = this.token!.bounds.start;
-      this.index = fromIdx;
-      this.line = start.line;
-      this.lineStart = start.index - start.column;
-      this.tokenStart = fromIdx;
-      this.tokenStartLine = this.line;
-      this.tokenStartLineIdx = this.lineStart;
-      this.reachedEnd = false;
-      this.comments = this.comments.filter(comment => comment.loc!.start.index < fromIdx!);
-      this.errors = this.errors.filter(error => error.bounds.start.index < fromIdx!);
-    }
+    // The lookahead has read on past fromIdx.
+    this.index = fromIdx;
+    this.tokenStart = fromIdx;
 
     let charCode = this.input.charCodeAt(this.index);
     while (this.index < this.length && !isLineTerminator(charCode)) {
