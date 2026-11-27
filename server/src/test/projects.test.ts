@@ -615,6 +615,20 @@ describe('ProjectIndex', () => {
     deepStrictEqual(index.warnings(uriOf('common.lua')).map(formatError), [ 'common.lua 2:8 undefined variable: undefined_thing' ]);
   });
 
+  it('takes the outline, warnings and symbols of a cart whose analysis failed from its own project, though another cart includes it', () => {
+    const other = 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\nfunction f0() end\n-->8\nfunction f1() print(nope) end\n';
+    const { index, logged } = failedAnalysis({ 'main.p8': '#include other.p8:1', 'other.p8': other }, 'other.p8');
+    deepStrictEqual(logged, [ `Failed to analyse the project of ${uriOf('other.p8')}` ]);
+    deepStrictEqual([ index.outline(uriOf('other.p8')), index.warnings(uriOf('other.p8')), brief(index.workspaceSymbols('f')) ], [[], [], []]);
+  });
+
+  it('lists the symbols of a .lua root from its own project, as its outline, though another project includes it', () => {
+    const files = { 'a.lua': 'function g()\n#include b.lua\nend', 'b.lua': '#include a.lua\nfunction fb() end' };
+    const index = scanned(files);
+    deepStrictEqual(outlineLines(index.outline(uriOf('b.lua'))), [ 'fb() [Function]' ]);
+    deepStrictEqual(brief(index.workspaceSymbols('fb')), [[ 'fb()', undefined, 'b.lua' ]]);
+  });
+
   it('takes #include Lib.lua for lib.lua on a disk that ignores case', function () {
     const dir = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'pico8-ls-case-'));
     try {

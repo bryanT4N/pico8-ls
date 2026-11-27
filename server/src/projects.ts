@@ -418,9 +418,11 @@ export class ProjectIndex {
     return [ ...this.documents.keys() ];
   }
 
-  // A failed analysis is empty, so the outline comes from the next project, as the file's Ctrl+T symbols do.
+  // From the file's own project when it is a root, and otherwise from the first project that contains it whose analysis
+  // did not fail, a failed analysis being empty. The file's Ctrl+T symbols come from the same project.
   outline(uri: string, options: OutlineOptions = NO_OUTLINE_OPTIONS): CodeSymbol[] {
-    const project = this.projectsOf(uri).find(({ failed }) => !failed);
+    const containing = this.projectsOf(uri);
+    const project = containing[0]?.root === uri ? containing[0] : containing.find(({ failed }) => !failed);
     return project
       ? outlineFor(project.analysis, ResolvedFile.fromFileURL(uri), options, this.documents.get(uri)?.textDocument.getText() ?? '')
       : [];
@@ -466,14 +468,15 @@ export class ProjectIndex {
     return this.projectsOf(uri).map(project => project.analysis);
   }
 
-  // The warnings of the file's own project when it is a root, as PICO-8 runs a cart on its own; otherwise only the
+  // The warnings of the file's own project when it is a root, as its outline comes from there; otherwise only the
   // warnings every project containing uri gives: in a file that several carts include, a warning that one cart's code
-  // proves wrong is not shown. A project whose analysis failed gives an empty list; intersecting with it removes all
-  // warnings from other projects, so failed projects are skipped, as outline and workspace symbols do.
+  // proves wrong is not shown. A project whose analysis failed gives an empty list; intersecting with it would remove
+  // all warnings from other projects, so failed projects are skipped, as the outline of such a file skips them.
   warnings(uri: string): Warning[] {
-    const containing = this.projectsOf(uri).filter(project => !project.failed);
+    const containing = this.projectsOf(uri);
     const own = containing.filter(project => project.root === uri);
-    const [ first, ...others ] = (own.length > 0 ? own : containing).map(project => project.warnings.filter(warning => inThisFile(uri, warning)));
+    const [ first, ...others ] = (own.length > 0 ? own : containing).filter(project => !project.failed)
+      .map(project => project.warnings.filter(warning => inThisFile(uri, warning)));
     if (!first) {
       return [];
     }
@@ -561,16 +564,17 @@ export class ProjectIndex {
     return rebuilt ? unique([ ...this.documents.keys(), ...dropped ]) : unique([ uri, ...containing.flatMap(project => project.files) ]);
   }
 
-  // Each file once: an indexed cart from its own project, as PICO-8 runs a cart on its own; another indexed file from
-  // the first project that contains it, as its outline comes; a file that only an #include reads, like one in a
-  // dot-folder, from the first project whose analysis has it.
+  // Each file once: an indexed file from the project its outline comes from, a root's own or else the first that contains
+  // it with symbols in it, as a failed analysis has none; a file that only an #include reads, like one in a dot-folder,
+  // from the first project whose analysis has it.
   private symbolItemsOfEachFile(options: OutlineOptions): SymbolItem[] {
     const taken = new Set<string>();
     const lists: SymbolItem[][] = [];
+    const roots = new Set(this.projects.map(project => project.root));
     for (const project of this.projects) {
       const files = new Set(project.files);
       for (const [ uri, items ] of symbolItems(project.analysis, options)) {
-        if (taken.has(uri) || (this.documents.has(uri) && (!files.has(uri) || (isCartUri(uri) && uri !== project.root)))) {
+        if (taken.has(uri) || (this.documents.has(uri) && (!files.has(uri) || (roots.has(uri) && uri !== project.root)))) {
           continue;
         }
         taken.add(uri);
