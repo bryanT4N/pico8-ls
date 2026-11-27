@@ -23,6 +23,12 @@ describe('excludeOf', () => {
       [ true, false, true, true, false, true, false, true, false, true, false ]);
   });
 
+  it('reads an absolute pattern over the whole path', () => {
+    const exclude = excludeOf({ [`${path.resolve('/ws').split(path.sep).join('/')}/gen/**`]: true })!;
+    deepStrictEqual([ 'gen/a.lua', 'b/gen/a.lua' ].map(relativePath => exclude(relativePath, path.join(path.resolve('/ws'), ...relativePath.split('/')))),
+      [ true, false ]);
+  });
+
   it('hides a file by a when clause only when the sibling it names is there', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pico8-ls-exclude-'));
     try {

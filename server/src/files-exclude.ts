@@ -6,28 +6,30 @@ export type Exclude = (relativePath: string, fullPath: string) => boolean;
 
 // A workspace folder's files.exclude, as VS Code applies it to its own file search: each pattern set to true, or to a
 // when clause that names a sibling that exists, hides what it matches, a folder with all it holds. A pattern is a glob
-// over the path relative to the workspace folder: ** for any number of folders, * for any characters within a name, ?
-// for one, {a,b} for either, [a-z] for one of a range. Undefined when nothing is hidden.
+// over the path relative to the workspace folder, or over the whole path when it is absolute, written with /: ** for any
+// number of folders, * for any characters within a name, ? for one, {a,b} for either, [a-z] for one of a range.
+// Undefined when nothing is hidden.
 export function excludeOf(setting: unknown): Exclude | undefined {
   if (typeof setting !== 'object' || setting === null) {
     return undefined;
   }
-  const rules: { pattern: RegExp, when?: string }[] = [];
+  const rules: { pattern: RegExp, absolute: boolean, when?: string }[] = [];
   for (const [ glob, value ] of Object.entries(setting)) {
     const when = typeof value === 'object' && value !== null ? (value as { when?: unknown }).when : undefined;
     if (value === true || typeof when === 'string') {
-      rules.push({ pattern: globPattern(glob), when: typeof when === 'string' ? when : undefined });
+      const written = glob.trim().replace(/\\/g, '/');
+      rules.push({ pattern: globPattern(written), absolute: path.isAbsolute(written), when: typeof when === 'string' ? when : undefined });
     }
   }
   if (rules.length === 0) {
     return undefined;
   }
-  return (relativePath, fullPath) => rules.some(({ pattern, when }) => pattern.test(relativePath)
+  return (relativePath, fullPath) => rules.some(({ pattern, absolute, when }) => pattern.test(absolute ? fullPath.split(path.sep).join('/') : relativePath)
     && (when === undefined || fs.existsSync(path.join(path.dirname(fullPath), when.replace(/\$\(basename\)/g, path.parse(fullPath).name)))));
 }
 
-export function globPattern(glob: string): RegExp {
-  return new RegExp(`^${globSource(glob.trim().replace(/^\.\//, '').replace(/\/+$/, ''))}$`);
+function globPattern(glob: string): RegExp {
+  return new RegExp(`^${globSource(glob.replace(/^\.\//, '').replace(/\/+$/, ''))}$`);
 }
 
 function globSource(glob: string): string {
