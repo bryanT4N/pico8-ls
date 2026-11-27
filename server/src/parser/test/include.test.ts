@@ -285,14 +285,41 @@ describe('#include', function () {
     assert.deepStrictEqual(included('other.p8:A'), [[], [ 't10' ]]);
     assert.deepStrictEqual(included('other.p8:b'), [[ 'other.p8 26:4 <expression> expected near \'=\'' ], []]);
     assert.deepStrictEqual(included('other.p8:c'), [[ 'main_test_file 1:0 Can\'t #include "other.p8:c" from main_test_file: other.p8 has no tab 12' ], []]);
-    for (const name of [ 'other.p8:01', 'other.p8:1x', 'other.p8:0x1', 'other.p8:0X1', 'other.p8: 1', 'other.p8:\t1', 'other.p8:+1' ]) {
-      assert.deepStrictEqual(included(name), [[], [ 't1' ]], JSON.stringify(name));
+    const tab1 = [ 'other.p8:01', 'other.p8:1x', 'other.p8:0x1', 'other.p8:0X1', 'other.p8: 1', 'other.p8:\t1', 'other.p8:+1',
+      'other.p8:-ffffffff', 'other.p8:100000001', 'other.p8:10000000000000001', 'other.p8:a.p8:1' ];
+    for (const name of tab1) {
+      assert.deepStrictEqual(included(name), name === 'other.p8:a.p8:1' ? [[], [ 't10' ]] : [[], [ 't1' ]], JSON.stringify(name));
     }
-    assert.deepStrictEqual(included('other.p8:-0'), [[], [ 't0' ]]);
-    assert.deepStrictEqual([ included('other.p8:11'), included('other.p8:12') ], [[[], []], [[], []]]);
+    assert.deepStrictEqual([ included('other.p8:-0'), included('other.p8:0x0x1') ], [[[], [ 't0' ]], [[], [ 't0' ]]]);
+    for (const name of [ 'other.p8:11', 'other.p8:12', 'other.p8:-2', 'other.p8:-10', 'other.p8:-f', 'other.p8:-80000000', 'other.p8:80000001',
+      'other.p8:fffffff1', 'other.p8:fffffffe', 'other.p8:ffffffff1' ]) {
+      assert.deepStrictEqual(included(name), [[], []], name);
+    }
     const whole = [[ 'other.p8 26:4 <expression> expected near \'=\'' ], Array.from({ length: 11 }, (_, k) => 't' + k) ];
-    for (const name of [ 'other.p8:', 'other.p8:g', 'other.p8:x1', 'other.p8:0x', 'other.p8:0xg', 'other.p8:-1' ]) {
+    for (const name of [ 'other.p8:', 'other.p8:g', 'other.p8:x1', 'other.p8:0x', 'other.p8:0xg', 'other.p8:-1', 'other.p8:-0x1', 'other.p8:ffffffff',
+      'other.p8:fffffffff', 'other.p8:1ffffffff', 'other.p8:ffffffffffffffff' ]) {
       assert.deepStrictEqual(included(name), whole, name);
     }
+  });
+
+  it('takes the name up to its first colon as the file, and the rest as a tab of a cart or a .lua file, as PICO-8 does', () => {
+    const tabs = (name: string) => [ 0, 1, 2 ].map(k => `function ${name}${k}() end`).join('\n-->8\n');
+    const files = {
+      'cart.txt': 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\n' + tabs('c'),
+      'plain.txt': tabs('t'),
+      'plain.p8': tabs('p'),
+      'tabs.lua': tabs('l'),
+      'upper.LUA': tabs('u'),
+      'lib.lua': 'function helper() end',
+    };
+    const included = (name: string) => {
+      const chunk = parseWith('#include ' + name, files);
+      return [ chunk.errors.map(formatError), chunk.block.body.filter(s => s.included).map(s => ((s as FunctionDeclaration).identifier as Identifier).name) ];
+    };
+    assert.deepStrictEqual([ included('cart.txt:1'), included('tabs.lua:2'), included('upper.LUA:1') ], [[[], [ 'c1' ]], [[], [ 'l2' ]], [[], [ 'u1' ]]]);
+    assert.deepStrictEqual([ included('plain.txt:1'), included('plain.txt:5'), included('plain.p8:1') ],
+      [[[], [ 't0', 't1', 't2' ]], [[], [ 't0', 't1', 't2' ]], [[], [ 'p0', 'p1', 'p2' ]]]);
+    assert.deepStrictEqual(included('lib.lua:1'), [[ 'main_test_file 1:0 Can\'t #include "lib.lua:1" from main_test_file: lib.lua has no tab 1' ], []]);
+    assert.deepStrictEqual(included('x:tabs.lua:1'), [[ 'main_test_file 1:0 Can\'t #include "x:tabs.lua:1" from main_test_file: File does not exist' ], []]);
   });
 });

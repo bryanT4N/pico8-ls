@@ -327,15 +327,19 @@ export default class Parser {
         this.levels--;
 
         if (statement?.type === 'IncludeStatement') {
-          const tab = /^(.*\.p8):(.*)$/i.exec(statement.filename);
-          const resolvedInclude = resolveIncludeFile(this.filename, tab ? tab[1] : statement.filename, this.includeFileResolver);
+          // PICO-8 takes the name up to its first colon as the file's, whatever the file is, and the rest as a tab
+          // (3.colon-two-p8, 3.colon-before, 3.colon-lua-p8).
+          const colon = statement.filename.indexOf(':');
+          const fileName = colon < 0 ? statement.filename : statement.filename.slice(0, colon);
+          const resolvedInclude = resolveIncludeFile(this.filename, fileName, this.includeFileResolver);
           statement.resolvedFile = resolvedInclude;
 
           // Pushed on its own so the #include stays when its file throws, and
           // the file's statements one by one, since spreading a huge file's
           // statements as arguments overflows the stack.
           block.push(statement);
-          for (const includedStatement of this.parseIncludedFile(statement, resolvedInclude, flowContext, tab ? tabIndex(tab[2]) : undefined)) {
+          const tab = colon < 0 ? undefined : statement.filename.slice(colon + 1);
+          for (const includedStatement of this.parseIncludedFile(statement, resolvedInclude, flowContext, tab)) {
             block.push(includedStatement);
           }
         } else {
@@ -400,7 +404,7 @@ export default class Parser {
 
   // An #included file is parsed to its own end of file, so a statement or
   // block left open in it can't run on into the file that includes it.
-  parseIncludedFile(statement: IncludeStatement, resolvedInclude: ResolvedFile, flowContext: FlowContext, tab?: number): Statement[] {
+  parseIncludedFile(statement: IncludeStatement, resolvedInclude: ResolvedFile, flowContext: FlowContext, tabSuffix?: string): Statement[] {
     if (this.includeParses >= MAX_INCLUDE_PARSES) {
       if (!this.reportedTooManyIncludeParses) {
         this.reportedTooManyIncludeParses = true;
@@ -427,9 +431,12 @@ export default class Parser {
     }
 
     this.includes.push({ stmt: statement, resolvedFile: resolvedInclude });
+    // PICO-8 takes a tab of a cart or of a .lua file, and includes any other file whole (3.colon-txt, 3.colon-txt-cart).
+    const tabbed = fileContents.startsWith('pico-8 cartridge') || /\.lua$/i.test(resolvedInclude.path);
+    const tab = tabSuffix !== undefined && tabbed ? tabIndex(tabSuffix) : undefined;
     if (tab !== undefined) {
-      // PICO-8 includes nothing from a tab past the 16 a cart can have (3.p8-tab-11).
-      const tabText = tab < 16 ? tabOf(fileContents, tab) : '';
+      // PICO-8 includes nothing for a number that is not one of the 16 tabs a cart can have (3.p8-tab-11, 3.p8-tab-minus-2).
+      const tabText = tab >= 0 && tab < 16 ? tabOf(fileContents, tab) : '';
       if (tabText === undefined) {
         this.errors.push(this.getIncludeStatementError(statement, `${path.basename(resolvedInclude.path)} has no tab ${tab}`));
         return [];
@@ -1544,16 +1551,21 @@ function isEndOfFile(token: Token) {
   return token.type === TokenType.EOF;
 }
 
-// PICO-8 reads the tab after .p8: as a hexadecimal number that the text starts with, after white space and a sign, and
-// with a 0x before its digits only when a digit follows the 0x. With no such number, or a negative one, it includes the
-// whole cart (3.p8-tab-01, 3.p8-tab-1x, 3.p8-tab-lead-space, 3.p8-tab-plus, 3.p8-tab-g, 3.p8-tab-0x, 3.p8-tab-minus).
+// PICO-8 reads the tab after the colon as a hexadecimal number that the text starts with, after white space and a sign,
+// with a 0x before its digits only when a digit follows the 0x. It keeps the number in 32 bits and then applies the
+// sign. No such number, or -1, gives the whole file, undefined here; 0 to 15 give that tab; any other number gives
+// nothing (3.p8-tab-g, 3.p8-tab-0x, 3.p8-tab-minus, 3.p8-tab-ffffffff, 3.p8-tab-100000001, 3.p8-tab-minus-ffffffff).
 function tabIndex(suffix: string): number | undefined {
   const number = /^[ \t\n\v\f\r]*([+-]?)(?:0x([0-9a-f]+)|(?!0x)([0-9a-f]+))/i.exec(suffix);
   if (!number) {
     return undefined;
   }
-  const tab = parseInt(number[2] ?? number[3], 16);
-  return number[1] === '-' && tab > 0 ? undefined : tab;
+  let tab = 0;
+  for (const digit of number[2] ?? number[3]) {
+    tab = (tab * 16 + parseInt(digit, 16)) | 0;
+  }
+  tab = number[1] === '-' ? -tab | 0 : tab;
+  return tab === -1 ? undefined : tab;
 }
 
 // One tab of a cart, with the code of the other tabs blanked out by spaces, so that every position stays where it is in
