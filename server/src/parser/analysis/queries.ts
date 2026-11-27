@@ -7,7 +7,7 @@ import { Analysis, LuaSymbol, Reference, Scope } from './model';
 // The reference whose name covers index. The end counts, so a cursor right after a name still finds it.
 export function referenceAt(analysis: Analysis, file: ResolvedFile, index: number): Reference | undefined {
   const references = analysis.referencesByFile.get(file.path) ?? [];
-  // Count the references that start at or before index; the last of them is the only candidate.
+  // Only the last reference that starts at or before index can cover it: names don't overlap.
   let low = 0;
   let high = references.length;
   while (low < high) {
@@ -35,7 +35,6 @@ export function definitionsAt(analysis: Analysis, reference: Reference): Bounds[
   return uniqueInOrder(targets);
 }
 
-// The members named name that have a function definition, by the place of their first one.
 export function methodsNamed(analysis: Analysis, name: string): LuaSymbol[] {
   return (analysis.membersByKey.get(name) ?? [])
     .flatMap(member => {
@@ -46,9 +45,7 @@ export function methodsNamed(analysis: Analysis, name: string): LuaSymbol[] {
     .map(({ member }) => member);
 }
 
-// A local declared first and given a function later goes to the function, not to its declaration. Anything else goes
-// where the outline lists it, or, for a symbol the outline never lists (a field set through a parameter, say), where it
-// would: its first plain definition in each file, and every function definition.
+// Where the outline lists the symbol, or would list it; an implicit entry only when there is no other.
 export function targetsOf(symbol: LuaSymbol): Bounds[] {
   const functions = symbol.definitions.filter(definition => definition.isFunction).map(definition => definition.nameLoc);
   if (symbol.kind === 'local' && functions.length > 0) {
@@ -76,7 +73,6 @@ export function referencesOf(symbol: LuaSymbol, includeDeclaration: boolean): Bo
 export function warningsOf(analysis: Analysis): Warning[] {
   const warnings: Warning[] = [];
   for (const symbol of analysis.globals.values()) {
-    // self never warns, not even the global one that top-level code reads.
     if (symbol.definitions.length > 0 || isBuiltinName(symbol.name) || symbol.name === 'self') {
       continue;
     }
@@ -86,9 +82,8 @@ export function warningsOf(analysis: Analysis): Warning[] {
   return warnings.sort((a, b) => byPlace(a.bounds, b.bounds));
 }
 
-// The locals, parameters and loop variables declared above index in the scopes around it, innermost and latest first,
-// each name once; then every global that has a definition. A declaration in another file counts if the analysis came
-// to it before index: the parser pastes an #included file in where its #include is.
+// A declaration in another file counts if the analysis came to it before index: the parser pastes an #included file
+// in where its #include is.
 export function visibleAt(analysis: Analysis, file: ResolvedFile, index: number): LuaSymbol[] {
   const order = orderAt(analysis, file, index);
   const visible = new Map<string, LuaSymbol>();
@@ -115,9 +110,7 @@ function innermostScope(scope: Scope, file: ResolvedFile, index: number): Scope 
   return inner ? innermostScope(inner, file, index) : scope;
 }
 
-// Where index falls in the order the analysis came to things: just after the last checkpoint of file at or before
-// index, a reference or the end of an #include, or else where the file's content starts. Where two checkpoints share
-// a place (a file included twice), the first inclusion's counts.
+// Where two checkpoints share a place (a file included twice), the first inclusion's counts.
 function orderAt(analysis: Analysis, file: ResolvedFile, index: number): number {
   let at = -1;
   let order = analysis.includeStarts.get(file.path) ?? 0;
@@ -136,8 +129,6 @@ function orderAt(analysis: Analysis, file: ResolvedFile, index: number): number 
   return order;
 }
 
-// What a.b.c names at index: a as visibleAt finds it, then each member in turn, a self standing for its table.
-// Undefined when one of them is not found.
 export function symbolOfPath(analysis: Analysis, file: ResolvedFile, index: number, path: string[]): LuaSymbol | undefined {
   let symbol = visibleAt(analysis, file, index).find(visible => visible.name === path[0]);
   for (const key of path.slice(1)) {
@@ -146,12 +137,10 @@ export function symbolOfPath(analysis: Analysis, file: ResolvedFile, index: numb
   return symbol;
 }
 
-// The members to offer after `path.` or `path:`: those with a definition, only functions after a colon. When there
-// are none, as for a parameter, the ones used through the same variable, apart from the use being typed at index:
-// only those called, after a colon. Undefined when the path leads nowhere.
-// nothingTyped: no name follows the separator yet, so Lua takes the next name in the file as the member (`p.` above
-// `x = 1` reads as `p.x = 1`). When the first reference from index on is to a member of the table, it doesn't count,
-// nor a definition at the same place.
+// With no definitions, as for a parameter, the members used through the same variable stand in, apart from the use
+// being typed. nothingTyped: no name follows the separator yet, so Lua reads the next name in the file as the member
+// (`p.` above `x = 1` reads as `p.x = 1`); when that reference is to a member of the table, it doesn't count, nor
+// a definition at its place.
 export function membersAt(analysis: Analysis, file: ResolvedFile, index: number, path: string[], colon: boolean,
   nothingTyped = false): LuaSymbol[] | undefined {
   const symbol = symbolOfPath(analysis, file, index, path);

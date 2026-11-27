@@ -12,16 +12,13 @@ type Decl = {
   kind: 'local' | 'param' | 'loopvar',
   symbol: LuaSymbol,
   entry?: OutlineEntry,
-  // Set for locals declared by a LocalStatement; absent for local function and params/loopvars.
-  // While this stmt is on the nodeStack (its initializers are being visited), the decl is hidden.
+  // Lua hides the locals of a LocalStatement in their own initializers, as in local x = x; a local function sees
+  // itself, so it has none.
   stmt?: Statement,
-  // The decl shadowed by this one in the same scope, if any.
   previous?: Decl,
-  // A local declared without a value, or with nil.
   forward?: boolean,
 };
 
-// What a name refers to at some point: its innermost declaration, or else the global.
 type Binding = Decl | { kind: 'global', symbol: LuaSymbol, entry?: OutlineEntry };
 
 // For a deeper method path (e.g. T.a:m), the last intermediate table may not exist yet;
@@ -29,18 +26,17 @@ type Binding = Decl | { kind: 'global', symbol: LuaSymbol, entry?: OutlineEntry 
 // of self's fields count on top of its segments. loc: the range of the method's target.
 type SelfPath = { root: OutlineEntry, segments: Identifier[], loc: Bounds };
 
-// selfSymbol is the table self means in a method, as far as names tell. A flat target's symbol is the member a
-// function defines, or the variable that holds a table. natural: the function or file a function is in, when
+// selfSymbol: the table self means in a method, as far as names tell. A flat target's symbol: the member a function
+// defines, or the variable or member that holds a table. natural: the function or file a function is in, when
 // callbackOwner put it under an entry there instead.
 type ValueTarget =
   | { kind: 'entry', entry: OutlineEntry, selfTable?: OutlineEntry | null, selfPath?: SelfPath, selfSymbol?: LuaSymbol }
-  | { kind: 'flat', owner: Owner, natural?: Owner, name: string, loc?: Bounds, selectionLoc?: Bounds, symbol?: LuaSymbol } // rule 7, unnamed table
+  // a table the outline doesn't list, as a parameter's or one no name holds: its functions are still listed
+  | { kind: 'flat', owner: Owner, natural?: Owner, name: string, loc?: Bounds, selectionLoc?: Bounds, symbol?: LuaSymbol }
   | { kind: 'anonymous', owner: Owner, natural?: Owner };
 
-// order: taken where the goto is, though the label it goes to may come later.
 type PendingGoto = { label: Identifier, blocks: BinderScope[], order: number };
 
-// An #include whose content the analysis is in. file and included are ResolvedFile paths; end is where it ends in file.
 type OpenInclude = { file: string, included: string, end: number };
 
 // The outline leaves out a member path with more keys than this. It nests an entry per key and Ctrl+T names each
@@ -53,7 +49,6 @@ class BinderScope {
   // undefined = inherit from enclosing scope; null = this function binds self but its table is unknown
   selfTable?: OutlineEntry | null;
   selfPath?: SelfPath;
-  // In a function that binds no self, self is a variable of that function whose table is unknown.
   implicitSelf?: Decl;
   readonly labels = new Map<string, LuaSymbol>();
   // A goto may jump to a label further down, so a function, or the file, resolves its gotos when it ends.
@@ -62,7 +57,6 @@ class BinderScope {
   // The block whose condition or iterators are being visited in this scope: the visitor enters a block's scope only
   // after its header.
   header?: OutlineBlock;
-  // analysisScope: the scope the analysis keeps, which a table constructor shares with the scope around it.
   constructor(public owner: Owner, public kind: 'file' | 'function' | 'block', readonly analysisScope: Scope, public block?: Block) {}
 }
 
@@ -76,24 +70,18 @@ class Binder extends ASTVisitor<BinderScope> {
   readonly codeStarts = new Map<string, number>();
   readonly blocks: OutlineBlock[] = [];
   private order = 0;
-  // The chain of #includes whose content the analysis is in, outermost first.
   private readonly openIncludes: OpenInclude[] = [];
   // The first #include of each file that the code includes, other than the file itself, by the file's path, until the
   // file's content starts.
   private readonly includesOfFiles = new Map<string, IncludeStatement>();
-  // The first entry each global name got in each file: by name, then by ResolvedFile.path.
+  // Key: the included file's path.
   private readonly globalEntries = new Map<string, Map<string, OutlineEntry>>();
-  // For each expression value, where to attach it in the outline. The statement hooks fill this in before the
-  // visitor reaches the values (so do function and table constructor hooks for the values inside them); the
-  // whole design relies on that order.
+  // Filled in by the statement, function and table constructor hooks before the visitor reaches the values: the binder
+  // relies on that order.
   private readonly targets = new Map<Expression, ValueTarget>();
   private readonly statementInfo = new Map<Statement, StatementInfo>();
-  // Names and member expressions that a statement hook recorded before the visitor reaches them.
   private readonly recorded = new Set<ASTNode>();
-  // The entry each value was listed with, recorded by the statement and constructor hooks: the callbacks in a value
-  // can go under it.
   private readonly valueEntries = new Map<ASTNode, OutlineEntry>();
-  // The function entries that callbackOwner put under an entry, with the function or file they are in.
   private readonly nestedCallbacks: Array<{ entry: OutlineEntry, natural: Owner }> = [];
   // The node of the first definition that assigns each function, where its doc is read, so that its parameters take
   // their @param from there even when the function starts on a later line, as with `t.on_hit =` on one line and
@@ -199,7 +187,7 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   // Stops at the function or file being analysed: a block around a function holds the function, not what its body
-  // defines. A table constructor's scope has no block and is passed through.
+  // defines.
   private innermostBlock(): OutlineBlock | undefined {
     for (let i = this.scopeStack.length - 1; i >= 0; i--) {
       const { header, kind, outlineBlock } = this.scopeStack[i];
@@ -216,17 +204,15 @@ class Binder extends ASTVisitor<BinderScope> {
     return undefined;
   }
 
-  // The block an entry is created in decides which block node it goes under when the outline shows blocks. members.ts
-  // does not come here: a member stays under its table.
+  // members.ts adds members with no block: a member stays directly under its table.
   private addEntry(parent: Owner, name: string, type: CodeSymbolType, loc: Bounds, selectionLoc: Bounds, detail?: string): OutlineEntry {
     const entry = addEntry(parent, name, type, loc, selectionLoc, detail);
     entry.block = this.innermostBlock();
     return entry;
   }
 
-  // A scope joins the tree when it is entered. A function in a loop header or a condition is entered before the
-  // loop or clause, whose range contains it too, so visibleAt's descent, which takes the first child that contains
-  // the cursor, finds the function.
+  // A function in a loop header or a condition is entered before the loop or clause, whose range contains it too,
+  // so visibleAt's descent, which takes the first child that contains the cursor, finds the function.
   override onEnterScope(scope: BinderScope): void {
     if (scope.outlineBlock) {
       this.topScope(1).header = undefined;
@@ -260,7 +246,7 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   // The content of an #include ends where the analysis next comes to something in a file outside it: the includer,
-  // or a file further up the chain. Its checkpoint gets the order reached by then.
+  // or a file further up the chain.
   private closeIncludes(file?: string): void {
     while (this.openIncludes.length > 0 && this.openIncludes[this.openIncludes.length - 1].included !== file) {
       const { file: includer, end } = this.openIncludes.pop()!;
@@ -275,7 +261,6 @@ class Binder extends ASTVisitor<BinderScope> {
 
   override visitFunctionDeclaration(node: FunctionDeclaration): BinderScope {
     if (node.identifier?.type === 'Identifier' && node.isLocal) {
-      // local function name() end — declare in the enclosing scope before entering body
       const outer = this.topScope();
       const symbol = new LuaSymbol('local', node.identifier.name);
       this.define(symbol, node.identifier, node.loc!, node, node);
@@ -286,11 +271,9 @@ class Binder extends ASTVisitor<BinderScope> {
       this.declare(outer, symbol, node.identifier.loc!.end);
       this.statementInfo.set(node, { about: entry, defines: entry });
     } else if (node.identifier) {
-      // function f() end and function t.f() end — same as f = function() end and t.f = function() end
       this.recordStatement(node, [ this.assign(node.identifier, node, node, node.loc!, false) ]);
     }
 
-    // A function value that nothing gave a target, such as a callback, is listed as anonymous.
     const target: ValueTarget | undefined = this.targets.get(node)
       ?? (node.identifier ? undefined : { kind: 'anonymous', ...this.callbackOwner() });
     let entry: OutlineEntry | undefined;
@@ -331,8 +314,7 @@ class Binder extends ASTVisitor<BinderScope> {
       scope.selfTable = null;
     }
 
-    // The syntax tree has no place for the closing parenthesis, so the parameters count from the end of the last one,
-    // or of the name.
+    // The syntax tree has no place for the closing parenthesis.
     const parametersEnd = (node.parameters[node.parameters.length - 1] ?? node.identifier)?.loc!.end ?? node.loc!.start;
     if (colonMethod) {
       const self = new LuaSymbol('self', 'self');
@@ -527,7 +509,6 @@ class Binder extends ASTVisitor<BinderScope> {
     return new BinderScope(this.topScope().owner, 'block', this.topScope().analysisScope);
   }
 
-  // loc: the range of this target's entries.
   private assign(variable: Expression, value: Expression | undefined, statement: Statement, loc: Bounds, compound: boolean): StatementInfo | undefined {
     // PICO-8 assigns to nothing when the target is a call or in brackets: (a)+=1 leaves a as it is.
     if (variable.parens) {
@@ -552,7 +533,6 @@ class Binder extends ASTVisitor<BinderScope> {
     return entry && { about: entry };
   }
 
-  // A statement is about a table only when all of its targets are.
   private recordStatement(statement: Statement, perTarget: Array<StatementInfo | undefined>): void {
     const about = perTarget[0]?.about;
     if (!about || perTarget.some(info => info?.about !== about)) {
@@ -587,7 +567,6 @@ class Binder extends ASTVisitor<BinderScope> {
         receiveTable(binding.entry, ctor);
         this.targets.set(ctor, { kind: 'entry', entry: binding.entry });
       } else if (unwrapped?.type === 'TableConstructorExpression') {
-        // Listed as an unnamed table, but its keys are still members of the variable.
         this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: this.topScope().owner, name: '', symbol: binding.symbol });
       }
       return binding.entry && { about: binding.entry, defines: binding.entry };
@@ -678,7 +657,8 @@ class Binder extends ASTVisitor<BinderScope> {
       if (value?.type === 'FunctionDeclaration') {
         return this.addMethod(value, root, segments, variable.indexer, undefined, loc, member);
       }
-      this.assignUnknownRoot(root, segments, value, member); // the outline can't know which table was passed in
+      // the outline can't know which table a parameter or loop variable holds
+      this.assignUnknownRoot(root, segments, value, member);
       return undefined;
     }
 
@@ -724,8 +704,6 @@ class Binder extends ASTVisitor<BinderScope> {
     return { about: rootEntry };
   }
 
-  // A method written as its own statement: function a.b(), function a:b() or a.b = function() end. table: the entry
-  // to group the method under; selfTable: the entry self's fields go under.
   private addMethod(fn: FunctionDeclaration, root: Identifier, segments: Identifier[], indexer: Indexer,
     table: OutlineEntry | undefined, loc: Bounds, member: LuaSymbol, selfTable = table): StatementInfo | undefined {
     const key = segments[segments.length - 1];
@@ -771,7 +749,6 @@ class Binder extends ASTVisitor<BinderScope> {
     }
   }
 
-  // A definition, and its name as a reference: written, and for x += 1 read first.
   private define(symbol: LuaSymbol, name: Identifier, loc: Bounds, node: ASTNode, value?: Expression, compound = false): void {
     const isFunction = value?.type === 'FunctionDeclaration';
     symbol.definitions.push({ loc, nameLoc: name.loc!, node, value, isFunction, compound });
@@ -799,7 +776,6 @@ class Binder extends ASTVisitor<BinderScope> {
     this.references.push(reference);
   }
 
-  // For completion: symbol is visible in scope from `from` on, or only past it.
   private declare(scope: BinderScope, symbol: LuaSymbol, from: CodeLocation, past = false): void {
     const order = this.nextOrder(from.filename.path);
     scope.analysisScope.declarations.push({ symbol, file: from.filename, visibleFrom: past ? from.index + 1 : from.index, order });
@@ -813,8 +789,6 @@ class Binder extends ASTVisitor<BinderScope> {
     return entry;
   }
 
-  // The member entries of a table entry stand for the members of the table's symbol. memberEntry is for a member's own
-  // definition, pathEntry for a member a deeper path goes through.
   private memberEntry(table: OutlineEntry, key: string, type: CodeSymbolType, loc: Bounds, selectionLoc: Bounds): OutlineEntry {
     return this.link(defineMember(table, key, type, loc, selectionLoc), table.symbol?.member(key));
   }
@@ -829,10 +803,8 @@ class Binder extends ASTVisitor<BinderScope> {
     }
   }
 
-  // Where a callback or a function listed flat goes: under the innermost entry, in the function being visited, whose
-  // value holds it, as in local co = cocreate(function() end), and then natural is that function, or the root at the top
-  // level; otherwise under the function or the root itself. The entry must be listed under that function too: a global
-  // first assigned in _init is listed at the top level, and a cursor in a callback listed there would no longer find _init.
+  // The entry must be listed under the function being visited: a global first assigned in _init is listed at the
+  // top level, and a cursor in a callback listed there would no longer find _init.
   private callbackOwner(): { owner: Owner, natural?: Owner } {
     const natural = this.topScope().owner;
     for (let i = this.nodeStack.length - 1; i >= 0; i = this.candidateBelow(i)) {
@@ -891,8 +863,6 @@ class Binder extends ASTVisitor<BinderScope> {
     }
   }
 
-  // The entries from entry's parent up to owner, owner left out, nearest first; undefined when owner does not hold entry.
-  // The root, where every chain of parents ends, holds every entry.
   private entriesAbove(entry: OutlineEntry, owner: Owner): OutlineEntry[] | undefined {
     const entries: OutlineEntry[] = [];
     for (let parent = entry.parent; parent !== owner; parent = (parent as OutlineEntry).parent) {
@@ -904,8 +874,8 @@ class Binder extends ASTVisitor<BinderScope> {
     return entries;
   }
 
-  // The symbol whose members base.k names: self stands for its method's table. A base that is not a name or a
-  // path of names (t[i].x, f().x) gets a symbol of its own, so that its keys still have symbols.
+  // A base that is not a path of names, such as t[i] or f(), gets a symbol of its own, so that a method call
+  // elsewhere can still find its methods by key.
   private tableOf(base: Expression): LuaSymbol {
     return this.pathSymbol(base) ?? new LuaSymbol('value', '');
   }
@@ -1015,7 +985,6 @@ class Binder extends ASTVisitor<BinderScope> {
 
   private resolve(name: Identifier): Binding {
     for (let i = this.scopeStack.length - 1; i >= 0; i--) {
-      // Skip any decl whose declaring stmt is still being initialised (LocalStatement on the node stack).
       const decl = this.visibleDecl(this.scopeStack[i], name.name);
       if (decl) {
         return decl;
@@ -1032,8 +1001,6 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 }
 
-// The range of the entries of target i. With several targets, each gets its own name and value, the first from the start
-// of the statement; a target with no value of its own gets just its name.
 function targetRange(statement: AssignmentStatement | LocalStatement, i: number): Bounds {
   const { variables, init } = statement;
   if (variables.length < 2) {
@@ -1046,7 +1013,6 @@ function targetRange(statement: AssignmentStatement | LocalStatement, i: number)
 
 type BlockHeader = { keyword: OutlineBlock['keyword'], headerEnd?: CodeLocation };
 
-// Undefined for a scope that is not a block the outline can show.
 function blockHeader(node: VisitableASTNode): BlockHeader | undefined {
   switch (node.type) {
   case 'ForNumericStatement':

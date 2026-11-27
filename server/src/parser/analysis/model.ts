@@ -15,7 +15,6 @@ export type Definition = { loc: Bounds, nameLoc: Bounds, node: ASTNode, value?: 
 // order: when the analysis came to it, counted together with Declared.order; for a goto, where the goto is.
 export type Reference = { symbol: LuaSymbol, loc: Bounds, read: boolean, write: boolean, isCall: boolean, order: number };
 
-// A local, parameter or loop variable, visible in its scope from index visibleFrom of file on.
 export type Declared = { symbol: LuaSymbol, file: ResolvedFile, visibleFrom: number, order: number };
 
 // For a block whose closing keyword is missing, the end of loc is synthetic: only its index is meaningful. A scope covers
@@ -28,14 +27,11 @@ export class LuaSymbol {
   readonly members = new Map<string, LuaSymbol>();
   readonly definitions: Definition[] = [];
   readonly references: Reference[] = [];
-  // The outline entries that list it, in any file.
   readonly entries: OutlineEntry[] = [];
-  // Kind 'self': the method's table when rule 8 knows it.
+  // Kind 'self' only: the method's table, as far as names tell.
   table?: LuaSymbol;
-  // '(a,b)', from the function definition visited last.
   signature?: string;
 
-  // owner: a member's table symbol.
   constructor(readonly kind: SymbolKind, readonly name: string, readonly owner?: LuaSymbol) {}
 
   member(key: string): LuaSymbol {
@@ -54,9 +50,7 @@ export type Analysis = {
   globals: Map<string, LuaSymbol>,
   // Key: ResolvedFile.path. Sorted by loc.start.index.
   referencesByFile: Map<string, Reference[]>,
-  // Every member symbol that has a reference, by key.
   membersByKey: Map<string, LuaSymbol[]>,
-  // The file scope.
   scope: Scope,
   // Key: ResolvedFile.path of an #included file. The order the analysis had come to at its first #include.
   includeStarts: Map<string, number>,
@@ -67,6 +61,5 @@ export type Analysis = {
   codeStarts: Map<string, number>,
   // chunk.comments, then chunk.includedComments: a file included twice comes twice.
   comments: Comment_[],
-  // Every block of the chunk, in the order the analysis met them.
   blocks: OutlineBlock[],
 };

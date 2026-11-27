@@ -49,8 +49,6 @@ function getOrAddMember(
   return member;
 }
 
-// A member's own definition: the last key of a.b = v, a constructor key, self.b = v. A member that only deeper paths
-// went through so far moves here, as an implicit global does.
 export function defineMember(table: OutlineEntry, key: string, type: CodeSymbolType, loc: Bounds, selectionLoc: Bounds): OutlineEntry {
   const existing = table.members.get(key);
   if (existing?.implicit) {
@@ -62,7 +60,6 @@ export function defineMember(table: OutlineEntry, key: string, type: CodeSymbolT
   return getOrAddMember(table, key, type, loc, selectionLoc);
 }
 
-// A member a deeper path goes through, like the b of a.b.c = 1.
 export function pathMember(table: OutlineEntry, key: string, loc: Bounds, selectionLoc: Bounds): OutlineEntry {
   const existing = table.members.get(key);
   if (existing) {
@@ -83,5 +80,4 @@ export function receiveTable(entry: OutlineEntry, ctor: TableConstructorExpressi
       entry.type = CodeSymbolType.Table;
     }
   }
-  // Table, Function, and Method stay unchanged.
 }

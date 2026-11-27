@@ -3,10 +3,8 @@ import { Bounds, boundsContain } from '../types';
 import { groupBy } from '../util';
 import { CodeSymbol, CodeSymbolType, NO_OUTLINE_OPTIONS, OutlineBlock, OutlineEntry, OutlineOptions } from './model';
 
-// blocks: those of the analysis; text: the file's, which names the blocks.
 export function projectToFile(entries: OutlineEntry[], file: ResolvedFile, blocks: OutlineBlock[] = [], options: OutlineOptions = NO_OUTLINE_OPTIONS,
   text = ''): CodeSymbol[] {
-  // With every option off, the outline is the one from before the options.
   const levels = options.showParameters || options.showLoopVariables || options.showBlocks ? new Levels(file, blocks, options, text) : undefined;
   const { listed, lifted } = project(entries, file, levels);
   const top = inOrder([ ...listed, ...lifted ]);
@@ -49,12 +47,10 @@ function project(entries: OutlineEntry[], file: ResolvedFile, levels?: Levels): 
   return { listed, lifted };
 }
 
-// What the options add to each level of the outline: the level of an entry of this file, or the top, whose owner is
-// undefined, as it is for the blocks there.
+// The top level's owner is undefined, as a block's owner is there.
 class Levels {
   private readonly blocksByOwner: Map<OutlineEntry | undefined, OutlineBlock[]>;
   private readonly ownerOf = new Map<OutlineBlock, OutlineEntry | undefined>();
-  // The block that a symbol made from an entry, or a loop variable, is in.
   private readonly blockOf = new Map<CodeSymbol, OutlineBlock>();
 
   constructor(private readonly file: ResolvedFile, blocks: OutlineBlock[], private readonly options: OutlineOptions, private readonly text: string) {
@@ -130,8 +126,7 @@ function variableSymbol(name: string, loc: Bounds): CodeSymbol {
   return { name, detail: undefined, type: CodeSymbolType.Variable, loc, selectionLoc: loc, children: [] };
 }
 
-// The block's first line up to its do or then. A condition's range leaves out its parentheses, so those that close
-// right after it are taken too.
+// A condition's range leaves out its parentheses, so those that close right after it are taken too.
 function blockName(block: OutlineBlock, text: string): string {
   let header: string = block.keyword;
   if (block.headerEnd) {
@@ -151,7 +146,8 @@ function inOrder(symbols: CodeSymbol[]): CodeSymbol[] {
   return listedOnce(symbols.sort(bySourcePosition));
 }
 
-// Entries defined by the same statement share loc.start, so where their names sit breaks the tie.
+// Another file's table that this file adds members to takes the range of the first of them, and a member that
+// self.k = v makes in function g.b:c() starts where that method does: where their names sit breaks the tie.
 function bySourcePosition(a: CodeSymbol, b: CodeSymbol): number {
   return a.loc.start.index - b.loc.start.index || a.selectionLoc.start.index - b.selectionLoc.start.index;
 }

@@ -28,20 +28,14 @@ export function outlineOptionsFrom(settings: unknown): OutlineOptions {
 
 export type OutlineVariable = { name: string, loc: Bounds };
 
-// A for, while, repeat or do block, or one branch of an if.
 export type OutlineBlock = {
   keyword: 'for' | 'while' | 'repeat' | 'do' | 'if' | 'elseif' | 'else',
-  // A branch followed by another ends where that one starts.
   loc: Bounds,
-  // The keyword.
   selectionLoc: Bounds,
-  // The end of the condition or of the last iterator; none for repeat, do and else.
   headerEnd?: CodeLocation,
-  // The function entry whose body holds it; none at the top of the file.
   owner?: OutlineEntry,
   // The innermost block around it in the same body and the same file.
   parent?: OutlineBlock,
-  // A for's loop variables.
   variables: OutlineVariable[],
 };
 
@@ -64,7 +58,7 @@ export type OutlineEntry = Owner & {
   loc: Bounds,
   selectionLoc: Bounds,
   parent: Owner,
-  // Data members of a table (rule 3), one per key.
+  // Data members only: methods are never in here.
   members: Map<string, OutlineEntry>,
   // Created for a field assignment before the name itself was assigned.
   implicit: boolean,
@@ -73,9 +67,7 @@ export type OutlineEntry = Owner & {
   hidden: boolean,
   // Unset for anonymous functions and the functions of tables that no name holds.
   symbol?: LuaSymbol,
-  // The innermost block of the body being analysed where the entry was created.
   block?: OutlineBlock,
-  // A function's parameters as written, ... left out.
   parameters?: OutlineVariable[],
 };
 

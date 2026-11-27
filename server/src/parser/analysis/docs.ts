@@ -6,7 +6,7 @@ import { ASTNode } from '../types';
 import { Analysis, Definition, LuaSymbol } from './model';
 import { placeOf, targetsOf } from './queries';
 
-// name is 'return' for @return and @returns; only @param has param.
+// name is 'return' for @returns too.
 export type DocTag = { name: string, param?: string, text: string };
 export type Doc = { description: string, tags: DocTag[] };
 // definition: the one the doc comes from; with no doc, the one to show the symbol as.
@@ -36,15 +36,12 @@ export function documentationOf(analysis: Analysis, symbol: LuaSymbol): Document
   return { definition: sites.find(definition => definition.isFunction) ?? sites.find(definition => !definition.compound) ?? sites[0] };
 }
 
-// The definitions Go to Definition goes to, in the order the analysis came to them. An outline entry that no
-// definition made, such as t's in t.k = 1, has none.
+// The definitions Go to Definition goes to.
 export function docSites(symbol: LuaSymbol): Definition[] {
   const targets = new Set(targetsOf(symbol).map(placeOf));
   return symbol.definitions.filter(definition => targets.has(placeOf(definition.nameLoc)));
 }
 
-// The comment block right above the definition, or else, for a variable, table or field, the comment at the end of
-// the line where it ends, with only a , or ; between.
 export function definitionDoc(analysis: Analysis, definition: Definition): Doc | undefined {
   const { node } = definition;
   if (node.type === 'ForNumericStatement' || node.type === 'ForGenericStatement') {
@@ -61,13 +58,10 @@ export function definitionDoc(analysis: Analysis, definition: Definition): Doc |
   return text && !isSeparator(text) && !isCode(text) ? parseDoc(text) : undefined;
 }
 
-// The text of the first @param tag in doc for the parameter name that has any.
 export function paramDoc(doc: Doc | undefined, name: string): string | undefined {
   return doc?.tags.find(tag => tag.name === 'param' && tag.param === name && tag.text !== '')?.text;
 }
 
-// A line starting with @word starts a tag, which runs on to the next tag. The lines before the first tag are the
-// description.
 export function parseDoc(text: string): Doc {
   const description: string[] = [];
   const tags: DocTag[] = [];
@@ -94,12 +88,9 @@ export function parseDoc(text: string): Doc {
   return { description: description.join('\n').trim(), tags };
 }
 
-// A run of comments, each alone on its lines, on consecutive lines. title: the block names the file or a tab.
 type Block = { comments: Comment_[], endLine: number, title: boolean };
-// blocks: by their last line. trailing: the comments after code on their line.
 type FileComments = { blocks: Map<number, Block>, trailing: Comment_[] };
 
-// Built on the first request for a doc, by ResolvedFile.path.
 const indexes = new WeakMap<Analysis, Map<string, FileComments>>();
 
 function commentsIn(analysis: Analysis, path: string): FileComments | undefined {
@@ -130,8 +121,8 @@ function indexComments(analysis: Analysis): Map<string, FileComments> {
   return index;
 }
 
-// A -->8 or #region line ends a block and belongs to none, and so does a long comment with code after it on its last
-// line, as in --[[ old ]] x = 1: the code sits between it and the line below.
+// A long comment with code after it on its last line, as in --[[ old ]] x = 1, ends a block: the code sits between
+// it and the line below.
 function fileComments(analysis: Analysis, path: string, comments: Comment_[]): FileComments {
   const blocks: Block[] = [];
   const trailing: Comment_[] = [];
@@ -157,7 +148,7 @@ function fileComments(analysis: Analysis, path: string, comments: Comment_[]): F
       blocks.push(current);
     }
   }
-  // The title of the file: its first comment, with no code or #include before it. In a .p8, comments start at __lua__.
+  // In a .p8, comments start at __lua__.
   const first = blocks[0];
   if (first && first.comments[0] === comments[0] && first.comments[0].loc!.start.index < (analysis.codeStarts.get(path) ?? Infinity)) {
     first.title = true;
@@ -165,7 +156,6 @@ function fileComments(analysis: Analysis, path: string, comments: Comment_[]): F
   return { blocks: new Map(blocks.map(block => [ block.endLine, block ])), trailing };
 }
 
-// The doc in the block that ends on the line above node.
 function docAbove(analysis: Analysis, node: ASTNode): Doc | undefined {
   const { start } = node.loc!;
   const block = commentsIn(analysis, start.filename.path)?.blocks.get(start.line - 1);
@@ -173,7 +163,6 @@ function docAbove(analysis: Analysis, node: ASTNode): Doc | undefined {
   return text === undefined ? undefined : parseDoc(text);
 }
 
-// The text of a block, unless it is a title, a section heading or commented-out code.
 function blockText(block: Block): string | undefined {
   if (block.title || isBanner(block)) {
     return undefined;
@@ -205,7 +194,6 @@ function linesOf(comment: Comment_): string[] {
   return lines;
 }
 
-// A row of dashes, = signs and the like, as around a section heading.
 function isSeparator(line: string): boolean {
   return /^[\s\-=*#~_+.]*$/.test(line) && line.replace(/\s/g, '').length >= 3;
 }
@@ -229,11 +217,9 @@ function isBanner(block: Block): boolean {
 }
 
 const COMMENT_FILE = new ResolvedFile('comment', 'comment');
-// #include parses as usual, but reads no file.
 const EVERY_FILE_EMPTY: FileResolver = { doesFileExist: () => true, isFile: () => true, loadFileContents: () => '' };
 
-// Lua that parses once a trailing , or ; is dropped, or that parses as the fields of a table constructor. Text the parser
-// throws on, such as thousands of nested brackets, is not code.
+// Text the parser throws on, such as thousands of nested brackets, is not code.
 function isCode(text: string): boolean {
   const t = text.trim().replace(/[,;]$/, '');
   // Not a call with no brackets, such as print "dbg": a one-line doc such as calls "update" parses as one too.

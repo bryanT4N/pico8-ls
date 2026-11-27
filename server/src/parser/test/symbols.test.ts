@@ -1,6 +1,8 @@
 import * as assert from 'assert';
-import { outlineLinesWithRanges, outlineOf } from './outline-utils';
-import { parse, deepEquals, bounds, MockFileResolver } from './test-utils';
+import { outlineLines, outlineLinesWithRanges, outlineOf } from './outline-utils';
+import { analyzeCode, parse, deepEquals, bounds, MockFileResolver, testFile } from './test-utils';
+import { outlineFor } from '../symbols';
+import { NO_OUTLINE_OPTIONS } from '../outline/model';
 
 const lines = (...l: string[]) => l.join('\n');
 
@@ -597,6 +599,17 @@ describe('outline', () => {
     it('handles assignments with missing or extra values', () => {
       assert.strictEqual(outlineOf('a, b = 1\nlocal x, y\nt = {}\nt.a, t.b = function() end'),
         lines('a [Variable]', 'b [Variable]', 'x [Variable]', 'y [Variable]', 't [Table]', '  a() [Method]', '  b [Field]'));
+    });
+
+    it('orders a table from another file before the method that creates it, by where names sit', () => {
+      const a = analyzeCode(
+        'function f()\n  g = function() end\nend\n#include b.lua',
+        { 'b.lua': 'function g.b:c()\n  self.x = 1\nend' },
+      );
+      const bText = a.texts['b.lua'] ?? '';
+      const bSymbols = outlineFor(a.analysis, testFile('b.lua'), NO_OUTLINE_OPTIONS, bText);
+      assert.strictEqual(outlineLines(bSymbols).join('\n'),
+        lines('g [Table]', '  b [Table]', '    x [Field]', 'g.b:c() [Method]'));
     });
   });
 });
