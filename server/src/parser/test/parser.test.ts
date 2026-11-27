@@ -999,6 +999,14 @@ __music__
       deepEquals(statementsOf(block.body), []);
     });
 
+    it('puts the lexical error of a token before the syntax error at it, as Lua reads the token first', () => {
+      deepEquals([ 'x 1..2', 'x.0x1 = 1', 'f(1 0x)' ].map(code => parse(code).errors.map(formatError)), [
+        [ 'main_test_file 1:2 malformed number near \'1..2\'', 'main_test_file 1:2 assignment operator expected near \'1..2\'' ],
+        [ 'main_test_file 1:1 malformed number near \'.0x1\'', 'main_test_file 1:1 assignment operator expected near \'.0x1\'' ],
+        [ 'main_test_file 1:4 malformed number near \'0x\'', 'main_test_file 1:4 \')\' expected near \'0x\'' ],
+      ]);
+    });
+
     it('merges the lexical errors of an included file', () => {
       const { errors, block } = parse('#include inc.lua\nx = 1', {
         includeFileResolver: new TestFilesResolver({ 'inc.lua': 's = "abc' }),

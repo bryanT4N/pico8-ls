@@ -179,7 +179,7 @@ describe('#include', function () {
       return [ chunk.errors.map(formatError), (assignment?.init[0] as StringLiteral | undefined)?.value ];
     };
     assert.deepStrictEqual(read('s="a\\z\n#include b.lua\n"\nprinth(s)', { 'b.lua': 'printh("in b")\n' }), [[
-      'main_test_file 3:0 unexpected string \'\' near \'printh\'', 'main_test_file 3:0 unfinished string near \'"\'',
+      'main_test_file 3:0 unfinished string near \'"\'', 'main_test_file 3:0 unexpected string \'\' near \'printh\'',
       'b.lua 1:8 unexpected keyword \'in\' near \'b\'', 'b.lua 1:12 unfinished string near \'")\'',
     ], 'aprinth(' ]);
     assert.deepStrictEqual(read('s="a\\z\n[["\n#include nope.lua\nprinth("ok")', {}), [[ 'main_test_file 3:0 unexpected symbol \'#\' near \'include\'' ], 'a[[' ]);

@@ -278,10 +278,10 @@ export default class Parser {
     }
     flowContext.endFunction(this.token);
 
-    this.addLexerErrors(this.lexer);
-    for (const { lexer } of this.pasted.values()) {
-      this.addLexerErrors(lexer);
-    }
+    // Lua reads a token before it parses it, so an error in reading one comes before the parser's error at it, as the
+    // stable sort keeps them (4.numtext.dot-in-name).
+    const lexers = [ this.lexer, ...[ ...this.pasted.values() ].map(({ lexer }) => lexer) ];
+    this.errors = lexers.flatMap(lexer => lexer.errors).concat(this.errors);
     // The parse can stop in a file pasted in.
     for (const lexer of this.lexerStack.slice(1)) {
       this.takeComments(lexer);
@@ -500,13 +500,6 @@ export default class Parser {
       if (next === this.token) {
         block.push(statement);
       }
-    }
-  }
-
-  addLexerErrors(lexer: Lexer) {
-    // One by one, since spreading a long list as arguments overflows the stack.
-    for (const error of lexer.errors) {
-      this.errors.push(error);
     }
   }
 
