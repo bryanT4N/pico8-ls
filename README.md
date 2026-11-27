@@ -81,7 +81,7 @@ To open every `.lua` file as PICO-8 Lua, as versions before 0.6.0 did, add this 
 
 ## Large workspaces
 
-The language server reads the `.p8` files of the workspace and the `.lua` files that belong to them, leaving out what `files.exclude` hides, also after you change it. It reads small folders first, and once the files it has read hold about 20 million characters it reads no more and says so once, so that a large folder is what is left out: Go to Symbol in Workspace and the problems of files that are not open then leave out the rest. A file you open still gets every feature, with the `.p8` files in its folder and the folders above it. To have everything read, exclude the large folders you do not work on, such as generated or test output, with `files.exclude`.
+The language server reads the `.p8` files of the workspace and the `.lua` files that belong to them, leaving out what `files.exclude` hides, also after you change it. It reads small folders first, and a folder's files all or none, and once the files it has read hold about 20 million characters it keeps no more and says so once, so that a large folder is what is left out: Go to Symbol in Workspace and the problems of files that are not open then leave out the rest. Of those it reads only the `#include` lines, and a `.lua` file that one of them includes shows no undefined-variable warnings, as that file can define the names it uses. A file you open still gets every feature, with the `.p8` files in its folder and the folders above it, which it then reads in full; only undefined-variable warnings can still be left out, as above. To have everything read, exclude the large folders you do not work on, such as generated or test output, with `files.exclude`.
 
 ## Support for other platforms
 
