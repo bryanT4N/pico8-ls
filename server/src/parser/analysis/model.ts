@@ -1,6 +1,7 @@
 import { Comment_, Expression } from '../expressions';
 import ResolvedFile from '../file-resolver';
 import type { OutlineBlock, OutlineEntry } from '../outline/model';
+import { ByName } from '../p8scii';
 import { ASTNode, Bounds } from '../types';
 
 export type SymbolKind = 'global' | 'local' | 'param' | 'loopvar' | 'member' | 'label' | 'self' | 'value';
@@ -25,7 +26,7 @@ export type Scope = { kind: 'file' | 'function' | 'block', loc?: Bounds, elsewhe
   declarations: Declared[] };
 
 export class LuaSymbol {
-  readonly members = new Map<string, LuaSymbol>();
+  readonly members = new ByName<LuaSymbol>();
   readonly definitions: Definition[] = [];
   readonly references: Reference[] = [];
   readonly entries: OutlineEntry[] = [];
@@ -48,10 +49,10 @@ export class LuaSymbol {
 export type Analysis = {
   // The top-level outline entries of every file in the chunk.
   outline: OutlineEntry[],
-  globals: Map<string, LuaSymbol>,
+  globals: ByName<LuaSymbol>,
   // Key: ResolvedFile.path. Sorted by loc.start.index.
   referencesByFile: Map<string, Reference[]>,
-  membersByKey: Map<string, LuaSymbol[]>,
+  membersByKey: ByName<LuaSymbol[]>,
   scope: Scope,
   // Key: ResolvedFile.path of an #included file. The order the analysis had come to at its first #include.
   includeStarts: Map<string, number>,

@@ -6,6 +6,7 @@ import { ASTVisitor, VisitableASTNode } from '../visitor';
 import { addEntry, CodeSymbolType, isColonMethod, moveEntry, OutlineBlock, OutlineEntry, Owner, signatureOf } from '../outline/model';
 import { defineMember, pathMember, receiveTable, tableTypeOf, unwrapValue } from '../outline/members';
 import { findBoundaryLines, groupMethodRuns, StatementInfo } from '../outline/method-runs';
+import { ByName } from '../p8scii';
 import { Analysis, LuaSymbol, Reference, Scope } from './model';
 
 type Decl = {
@@ -45,12 +46,12 @@ type OpenInclude = { file: string, included: string, end: number };
 const MAX_OUTLINE_KEYS = 200;
 
 class BinderScope {
-  decls = new Map<string, Decl>();
+  decls = new ByName<Decl>();
   // undefined = inherit from enclosing scope; null = this function binds self but its table is unknown
   selfTable?: OutlineEntry | null;
   selfPath?: SelfPath;
   implicitSelf?: Decl;
-  readonly labels = new Map<string, LuaSymbol>();
+  readonly labels = new ByName<LuaSymbol>();
   // A goto may jump to a label further down, so a function, or the file, resolves its gotos when it ends.
   readonly gotos: PendingGoto[] = [];
   outlineBlock?: OutlineBlock;
@@ -62,7 +63,7 @@ class BinderScope {
 
 class Binder extends ASTVisitor<BinderScope> {
   readonly root: Owner = { children: [] };
-  readonly globals = new Map<string, LuaSymbol>();
+  readonly globals = new ByName<LuaSymbol>();
   readonly references: Reference[] = [];
   readonly fileScope: Scope = { kind: 'file', children: [], declarations: [] };
   readonly includeStarts = new Map<string, number>();
@@ -75,7 +76,7 @@ class Binder extends ASTVisitor<BinderScope> {
   // file's content starts.
   private readonly includesOfFiles = new Map<string, IncludeStatement>();
   // Key: the included file's path.
-  private readonly globalEntries = new Map<string, Map<string, OutlineEntry>>();
+  private readonly globalEntries = new ByName<Map<string, OutlineEntry>>();
   // Filled in by the statement, function and table constructor hooks before the visitor reaches the values: the binder
   // relies on that order.
   private readonly targets = new Map<Expression, ValueTarget>();
@@ -1039,7 +1040,7 @@ function blockHeader(node: VisitableASTNode): BlockHeader | undefined {
 
 export function emptyAnalysis(): Analysis {
   return {
-    outline: [], globals: new Map(), referencesByFile: new Map(), membersByKey: new Map(),
+    outline: [], globals: new ByName(), referencesByFile: new Map(), membersByKey: new ByName(),
     scope: { kind: 'file', children: [], declarations: [] }, includeStarts: new Map(), includeCheckpoints: new Map(),
     codeStarts: new Map(), comments: [], blocks: [],
   };
@@ -1050,7 +1051,7 @@ export function analyze(chunk: Chunk): Analysis {
   const binder = new Binder(findBoundaryLines(comments));
   binder.visit(chunk);
   const referencesByFile = new Map<string, Reference[]>();
-  const membersByKey = new Map<string, LuaSymbol[]>();
+  const membersByKey = new ByName<LuaSymbol[]>();
   const members = new Set<LuaSymbol>();
   for (const reference of binder.references) {
     listIn(referencesByFile, reference.loc.start.filename.path).push(reference);
@@ -1070,7 +1071,7 @@ export function analyze(chunk: Chunk): Analysis {
   };
 }
 
-function listIn<T>(map: Map<string, T[]>, key: string): T[] {
+function listIn<T>(map: Map<string, T[]> | ByName<T[]>, key: string): T[] {
   let list = map.get(key);
   if (!list) {
     list = [];

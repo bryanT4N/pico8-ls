@@ -35,18 +35,26 @@ export const P8SCII_TEXT: readonly string[] = [
   '\u30f2', '\u30f3', '\u30c3', '\u30e3', '\u30e5', '\u30e7', '\u25dc', '\u25dd',
 ];
 
-// The texts of the bytes that are not ASCII, by the code unit each starts with, the longest first.
+// The texts that PICO-8 reads as one byte that is not ASCII, by the code unit each starts with, the longest first:
+// those it writes for the bytes, and the letters U+1D622 to U+1D63B, which it reads as the bytes 65 to 90, A to Z
+// (4.puny.string).
 const GLYPHS = new Map<number, { text: string, byte: number }[]>();
-P8SCII_TEXT.forEach((text, byte) => {
+const readAs = (text: string, byte: number) => {
   const first = text.charCodeAt(0);
-  if (first >= 0x80) {
-    GLYPHS.set(first, [ ...GLYPHS.get(first) ?? [], { text, byte }].sort((a, b) => b.text.length - a.text.length));
+  GLYPHS.set(first, [ ...GLYPHS.get(first) ?? [], { text, byte }].sort((a, b) => b.text.length - a.text.length));
+};
+P8SCII_TEXT.forEach((text, byte) => {
+  if (text.charCodeAt(0) >= 0x80) {
+    readAs(text, byte);
   }
 });
+for (let k = 0; k < 26; k++) {
+  readAs(String.fromCodePoint(0x1d622 + k), 65 + k);
+}
 
-// PICO-8 reads the code as bytes: a byte's text as that byte, and any other character as its UTF-8 bytes, as an
+// PICO-8 reads the code as bytes: a text of GLYPHS as its byte, and any other character as its UTF-8 bytes, as an
 // e-acute is 195 169 (4.str.glyphs-*, 4.str.others). The bytes for the code at index, and the length they take.
-function bytesAt(code: string, index: number): { bytes: number[], length: number } {
+export function bytesAt(code: string, index: number): { bytes: number[], length: number } {
   const unit = code.charCodeAt(index);
   if (unit < 0x80) {
     return { bytes: [ unit ], length: 1 };
@@ -61,16 +69,52 @@ function bytesAt(code: string, index: number): { bytes: number[], length: number
 
 // The code as the text of the bytes PICO-8 holds for it.
 export function pico8Text(code: string): string {
-  if (!/[\x01-\x08\x0b\x0c\x0e-\x1f\x7f-\uffff]/.test(code)) {
+  // Found with a loop, which is faster than a regular expression on the short texts of names (ByName).
+  let same = 0;
+  while (same < code.length && isOwnText(code.charCodeAt(same))) {
+    same++;
+  }
+  if (same === code.length) {
     return code;
   }
-  let text = '';
-  for (let i = 0; i < code.length;) {
+  let text = code.slice(0, same);
+  for (let i = same; i < code.length;) {
     const { bytes, length } = bytesAt(code, i);
     text += bytes.map(byte => P8SCII_TEXT[byte]).join('');
     i += length;
   }
   return text;
+}
+
+// Whether the character is the text of its own byte, as ASCII is but for 127 and the controls P8SCII has glyphs for.
+function isOwnText(c: number): boolean {
+  return c >= 32 ? c < 127 : c === 0 || c === 9 || c === 10 || c === 13;
+}
+
+// A map by name, as PICO-8 tells names, and the keys of a table, apart: by the bytes it holds for them, so that
+// U+1D622 is the name A, and t.é is t["é"] (4.puny.name, 4.name.e-acute-key).
+export class ByName<T> {
+  private readonly map = new Map<string, T>();
+
+  get(name: string): T | undefined {
+    return this.map.get(pico8Text(name));
+  }
+
+  set(name: string, value: T): void {
+    this.map.set(pico8Text(name), value);
+  }
+
+  has(name: string): boolean {
+    return this.map.has(pico8Text(name));
+  }
+
+  values(): IterableIterator<T> {
+    return this.map.values();
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
 }
 
 // The text of the first byte PICO-8 holds for the code at index, which a message quotes alone after a \.

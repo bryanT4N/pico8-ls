@@ -981,7 +981,8 @@ __music__
       const firstOf = (code: string) => parse(code).errors.map(formatError)[0];
       // \u00e9 is the bytes 195 169, the first of which is \u308c, as \u30cc is the first of \u2b05 without its \ufe0f.
       deepEquals([ 'x = "\\\u{1f431}"', 'x = "\\\u2b05\ufe0f"', 'x = "\\\u00e9"', 'x = "\\\u2b05"', 'x = "\\x\u{1f431}"', 'x = "\\x4\u{1f431}"',
-        'x = "\\x\u2b05\ufe0f"', 'x = "a\\x4\r\nb"', 'x = 1 "\u00e9"', 'x = 1 "\\195\\169"', '\u00e9 \u00e9', '::\u00e9::\n::\u00e9::', 'goto \u00e9' ].map(firstOf), [
+        'x = "\\x\u2b05\ufe0f"', 'x = "a\\x4\r\nb"', 'x = 1 "\u00e9"', 'x = 1 "\\195\\169"', '\u00e9 \u00e9', '::\u00e9::\n::\u00e9::', 'goto \u00e9',
+        'x \u{1d622}b', '::\u{1d622}::\n::A::', '::\u00e9::\n::\u308c\u305f::' ].map(firstOf), [
         'main_test_file 1:4 invalid escape sequence near \'\\\u{1f431}\'',
         'main_test_file 1:4 invalid escape sequence near \'\\\u2b05\ufe0f\'',
         'main_test_file 1:4 invalid escape sequence near \'\\\u308c\'',
@@ -995,6 +996,14 @@ __music__
         'main_test_file 1:2 assignment operator expected near \'\u308c\u305f\'',
         'main_test_file 2:2 label \'\u308c\u305f\' already defined on line 1',
         'main_test_file 1:0 no visible label \'\u308c\u305f\' for <goto>',
+        'main_test_file 1:2 assignment operator expected near \'Ab\'',
+        'main_test_file 2:2 label \'A\' already defined on line 1',
+        'main_test_file 2:2 label \'\u308c\u305f\' already defined on line 1',
+      ]);
+      // A goto finds its label, and passes a local, by the bytes of their names.
+      deepEquals([ 'goto \u{1d622}\n::A::', 'goto \u{1d622}\nlocal x\n::A::\nx = 1' ].map(firstOf), [
+        undefined,
+        'main_test_file 1:0 <goto A> jumps into the scope of local \'x\'',
       ]);
     });
 

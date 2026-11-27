@@ -1,6 +1,6 @@
 import { deepStrictEqual, notStrictEqual as ne, ok, strictEqual as eq } from 'assert';
 import { OutlineEntry } from '../outline/model';
-import { analyzeCode, Analyzed, describeSymbol, getTestFileContents, referenceAtPos, symbolAt, TEST_CARTS } from './test-utils';
+import { analyzeCode, Analyzed, describeSymbol, getTestFileContents, referenceAtPos, symbolAt, TEST_CARTS, warningsIn } from './test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
 
@@ -203,6 +203,18 @@ describe('binder', () => {
     const a = analyzeCode(lines('function _init()', '  x = 0', 'end', '#include inc.lua', 'a = 5', 'function _update()', '  x += 1', 'end'),
       { 'inc.lua': 'function typing()\n  local a = 1' });
     eq(probe(a).kind(5, 0), 'local a');
+  });
+
+  it('takes two names, or two keys, for one when PICO-8 holds the same bytes for them, and shows each as it is written', () => {
+    const a = analyzeCode(lines('\u{1d622}b = 5', 'printh(Ab)', 't = {}', 't.é = 1', 'printh(t.れた)', 'local \u{1d623} = 2', 'printh(B)'));
+    const { at, kind } = probe(a);
+    eq(at(2, 7), at(1, 0));
+    eq(kind(2, 7), 'global \u{1d622}b');
+    eq(at(5, 9), at(4, 2));
+    eq(kind(7, 7), 'local \u{1d623}');
+    deepStrictEqual(warningsIn(a), []);
+    deepStrictEqual(a.analysis.outline.map(entry => [ entry.name, [ ...entry.members.values() ].map(member => member.name) ]),
+      [[ '\u{1d622}b', []], [ 't', [ 'é' ]], [ '\u{1d623}', []]]);
   });
 
   it('copes with names that JavaScript objects have', () => {

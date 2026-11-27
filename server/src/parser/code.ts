@@ -1,3 +1,5 @@
+import { bytesAt } from './p8scii';
+
 // The code PICO-8 reads from a file: a cart's __lua__ sections, or the text of any other file less its lone CRs. It is
 // kept as runs of the file's text, so that each place in the code has its place in the file. The text is the file's as
 // an editor has it, without the BOM it may start with (fileText).
@@ -184,38 +186,23 @@ export function tabsOf(code: Code): Code[] {
   return tabs;
 }
 
-// The characters that PICO-8 counts as one each in code, by the code point: the glyphs of P8SCII as it writes them in a
-// file, and others it reads as one of its characters (5.chars.glyph-*). Some glyphs are written with a U+FE0F after the
-// code point, and count as one with it.
-const GLYPHS = new Set([ ...'¹²³⁴⁵⁶⁷⁸ᵇᶜᵉᶠ▮■□⁙⁘‖◀▶「」¥•、。゛゜○█▒🐱░✽●♥☉웃⌂😐♪◆\u2026★⧗ˇ∧❎▤▥◜◝'
-  + 'あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんっゃゅょ'
-  + 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンッャュョ' ].map(glyph => glyph.codePointAt(0)!)
-  .concat(Array.from({ length: 26 }, (_, k) => 0x1d622 + k)));
-const BEFORE_VARIATION_SELECTOR = new Set([ 0x2b05, 0x2b06, 0x2b07, 0x27a1, 0x1f17e ]);
-
-// PICO-8's count of the characters of code: a line break is one, a CRLF too, a glyph one, and any other character that
-// is not ASCII its bytes in UTF-8 (5.chars.*). Undefined when the code has a U+FFFD: the text has one for each byte of
-// the file that is not UTF-8, which PICO-8 counts one, and for the character itself, which it counts 3.
+// PICO-8's count of the characters of code: a line break is one, a CRLF too, and any other character the bytes PICO-8
+// reads it as, a glyph one and any other character that is not ASCII its bytes in UTF-8 (5.chars.*). Undefined when the
+// code has a U+FFFD: the text has one for each byte of the file that is not UTF-8, which PICO-8 counts one, and for the
+// character itself, which it counts 3.
 export function characterCount(code: string): number | undefined {
   let count = 0;
-  for (let i = 0; i < code.length; i++) {
+  for (let i = 0; i < code.length;) {
     const c = code.charCodeAt(i);
     if (c < 0x80) {
       count += c === 13 && code.charCodeAt(i + 1) === 10 ? 0 : 1;
-      continue;
-    }
-    const point = code.codePointAt(i)!;
-    if (point > 0xffff) {
       i++;
-    }
-    if (point === 0xfffd) {
+    } else if (c === 0xfffd) {
       return undefined;
-    }
-    if (BEFORE_VARIATION_SELECTOR.has(point) && code.charCodeAt(i + 1) === 0xfe0f) {
-      i++;
-      count++;
     } else {
-      count += GLYPHS.has(point) ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+      const { bytes, length } = bytesAt(code, i);
+      count += bytes.length;
+      i += length;
     }
   }
   return count;

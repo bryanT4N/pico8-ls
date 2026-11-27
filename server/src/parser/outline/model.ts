@@ -1,4 +1,5 @@
 import type { LuaSymbol } from '../analysis/model';
+import { ByName } from '../p8scii';
 import { FunctionDeclaration } from '../statements';
 import { Bounds, CodeLocation } from '../types';
 
@@ -59,7 +60,7 @@ export type OutlineEntry = Owner & {
   selectionLoc: Bounds,
   parent: Owner,
   // Data members only: methods are never in here.
-  members: Map<string, OutlineEntry>,
+  members: ByName<OutlineEntry>,
   // Created for a field assignment before the name itself was assigned.
   implicit: boolean,
   // A local declared without a value that later gets a function: the function's entry stands for it, so it is left
@@ -75,7 +76,7 @@ export function addEntry(parent: Owner, name: string, type: CodeSymbolType, loc:
   const entry: OutlineEntry = {
     name, type, detail, loc, selectionLoc, parent,
     children: [],
-    members: new Map<string, OutlineEntry>(),
+    members: new ByName<OutlineEntry>(),
     implicit: false,
     hidden: false,
   };

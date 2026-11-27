@@ -76,6 +76,8 @@ describe('Lexer', () => {
       // é is the bytes 195 169, and ⬅ without its ️ the bytes 226 172 133.
       assert.deepStrictEqual(values('"é" "\\195\\169" [[é]] "⬅" "⬅️" "¹\x01" "a\tb"'),
         [ 'れた', 'れた', 'れた', 'ヌて✽', '⬅️', '¹¹', 'a\tb' ]);
+      // PICO-8 reads the letters U+1D622 to U+1D63B, which it writes for its puny font, as A to Z.
+      assert.deepStrictEqual(values('"\u{1d622}\u{1d63b}" [[\u{1d622}b]]'), [ 'AZ', 'Ab' ]);
     });
 
     it('Keyword', () => {

@@ -1461,7 +1461,7 @@ export default class Parser {
   private addVariables(flowContext: FlowContext, names: string[]): void {
     const variables = flowContext.currentScope().variables;
     for (const name of names) {
-      variables.push({ name });
+      variables.push({ name: pico8Text(name) });
     }
   }
 
@@ -1506,7 +1506,7 @@ export default class Parser {
     if (target.parens) {
       return 0;
     }
-    const table = (base: Expression) => (base.type === 'Identifier' ? base.name !== '_ENV' && !declaration(flowContext, base.name).variable
+    const table = (base: Expression) => (base.type === 'Identifier' ? pico8Text(base.name) !== '_ENV' && !declaration(flowContext, base.name).variable
       : [ 'MemberExpression', 'IndexExpression', 'CallExpression', 'StringCallExpression', 'TableCallExpression' ].includes(base.type)) ? 1 : 0;
     switch (target.type) {
     case 'CallExpression': case 'StringCallExpression': case 'TableCallExpression':

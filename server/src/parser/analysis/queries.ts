@@ -1,6 +1,7 @@
 import { isBuiltinName } from '../builtins';
 import { createWarning, errMessages, Warning } from '../errors';
 import ResolvedFile from '../file-resolver';
+import { ByName, pico8Text } from '../p8scii';
 import { Bounds, containsIndex } from '../types';
 import { Analysis, LuaSymbol, Reference, Scope } from './model';
 
@@ -86,7 +87,7 @@ export function warningsOf(analysis: Analysis): Warning[] {
 // in where its #include is.
 export function visibleAt(analysis: Analysis, file: ResolvedFile, index: number): LuaSymbol[] {
   const order = orderAt(analysis, file, index);
-  const visible = new Map<string, LuaSymbol>();
+  const visible = new ByName<LuaSymbol>();
   for (let scope: Scope | undefined = innermostScope(analysis.scope, file, index); scope; scope = scope.parent) {
     for (let i = scope.declarations.length - 1; i >= 0; i--) {
       const { symbol, file: declaredIn, visibleFrom, order: declaredAt } = scope.declarations[i];
@@ -130,7 +131,8 @@ function orderAt(analysis: Analysis, file: ResolvedFile, index: number): number 
 }
 
 export function symbolOfPath(analysis: Analysis, file: ResolvedFile, index: number, path: string[]): LuaSymbol | undefined {
-  let symbol = visibleAt(analysis, file, index).find(visible => visible.name === path[0]);
+  const name = pico8Text(path[0]);
+  let symbol = visibleAt(analysis, file, index).find(visible => pico8Text(visible.name) === name);
   for (const key of path.slice(1)) {
     symbol = symbol && (symbol.table ?? symbol).members.get(key);
   }

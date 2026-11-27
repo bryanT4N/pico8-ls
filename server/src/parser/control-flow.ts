@@ -5,6 +5,8 @@ import ResolvedFile from './file-resolver';
 import { Token } from './tokens';
 import { CodeLocation } from './types';
 
+// Names are held as the text of the bytes PICO-8 holds for them, by which it tells them apart: U+1D622 is the name A
+// (4.puny.label-twice, 4.strtext.label-e).
 export type Goto = {
   token: Token,
   maxDepth: number,
@@ -87,10 +89,11 @@ export class FlowContext {
   }
 
   variableNamed(name: string): LocalVariable | undefined {
+    const held = pico8Text(name);
     for (let i = this.scopes.length - 1; i >= 0; i--) {
       const variables = this.scopes[i].variables;
       for (let j = variables.length - 1; j >= 0; j--) {
-        if (variables[j].name === name) {
+        if (variables[j].name === held) {
           return variables[j];
         }
       }
@@ -127,7 +130,7 @@ export class FlowContext {
     if (first) {
       this.report(found, first.target === 'break'
         ? createErrForToken(first.token, errMessages.noLoopToBreak, 'break')
-        : createErrForToken(first.token, errMessages.labelNotVisible, pico8Text(first.target)));
+        : createErrForToken(first.token, errMessages.labelNotVisible, first.target));
     }
     this.scopes.pop();
   }
@@ -140,7 +143,8 @@ export class FlowContext {
     }
   }
 
-  addGoto(target: string, token: Token) {
+  addGoto(name: string, token: Token) {
+    const target = pico8Text(name);
     const localCounts = [];
 
     for (let i = 0; i < this.scopes.length; ++i) {
@@ -160,14 +164,15 @@ export class FlowContext {
   }
 
   // found: the token after the label's name, which Lua has read when it finds the name taken.
-  addLabel(name: string, token: Token, found: Token) {
+  addLabel(written: string, token: Token, found: Token) {
+    const name = pico8Text(written);
     const scope = this.currentScope();
 
     if (Object.prototype.hasOwnProperty.call(scope.labels, name)) {
       const first = scope.labels[name];
       this.report(found, first.file.equals(token.bounds.start.filename)
-        ? createErrForToken(token, errMessages.labelAlreadyDefined, pico8Text(name), first.line)
-        : createErrForToken(token, errMessages.labelAlreadyDefinedInFile, pico8Text(name), first.line, path.basename(first.file.path)));
+        ? createErrForToken(token, errMessages.labelAlreadyDefined, name, first.line)
+        : createErrForToken(token, errMessages.labelAlreadyDefinedInFile, name, first.line, path.basename(first.file.path)));
       return;
     }
 
@@ -198,7 +203,7 @@ export class FlowContext {
 
   addLocal(name: string, token: Token) {
     this.currentScope().locals.push({
-      name: name,
+      name: pico8Text(name),
       token: token,
     });
   }
@@ -212,8 +217,8 @@ export class FlowContext {
       this.report(found, createErrForToken(
         theGoto.token,
         errMessages.gotoJumpInLocalScope,
-        pico8Text(theGoto.target),
-        pico8Text(scope.locals[theGoto.localCounts[this.scopes.length - 1]].name),
+        theGoto.target,
+        scope.locals[theGoto.localCounts[this.scopes.length - 1]].name,
       ));
     }
     // Reported once: this runs again before every statement of the scope.
