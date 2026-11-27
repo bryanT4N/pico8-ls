@@ -83,6 +83,9 @@ export abstract class ASTVisitor<T> {
   // `value` is the scope that was just popped off the stack.
   onExitScope(value: T) {}
 
+  // Optional callback for every node, before it is visited.
+  onVisitNode(node: VisitableASTNode) {}
+
   // Scope-creating statements
   visitIfClause(node: IfClause): T {
     return this.createDefaultScope(node);
@@ -204,6 +207,7 @@ export abstract class ASTVisitor<T> {
   private visitNode(node: VisitableASTNode) {
     // console.log('\nvisitNode ' + node.type + ', node stack: [' + this.nodeStack.map(node => node.node.type).join(' | ') + ']');
     // logObj(node, 'current node');
+    this.onVisitNode(node);
     if (isChainLink(node)) {
       this.visitChain(node);
       return;

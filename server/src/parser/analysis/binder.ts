@@ -79,6 +79,9 @@ class Binder extends ASTVisitor<BinderScope> {
   private order = 0;
   // The chain of #includes whose content the analysis is in, outermost first.
   private readonly openIncludes: OpenInclude[] = [];
+  // The first #include of each file that the code includes, other than the file itself, by the file's path, until the
+  // file's content starts.
+  private readonly includesOfFiles = new Map<string, IncludeStatement>();
   // The first entry each global name got in each file: by name, then by ResolvedFile.path.
   private readonly globalEntries = new Map<string, Map<string, OutlineEntry>>();
   // For each expression value, where to attach it in the outline. The statement hooks fill this in before the
@@ -108,6 +111,11 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   override visit(chunk: Chunk): void {
+    for (const { stmt, resolvedFile } of chunk.includes ?? []) {
+      if (!this.includesOfFiles.has(resolvedFile.path) && resolvedFile.path !== stmt.loc!.start.filename.path) {
+        this.includesOfFiles.set(resolvedFile.path, stmt);
+      }
+    }
     super.visit(chunk);
     this.closeIncludes();
     this.resolveGotos(this.scopeStack[0]);
@@ -231,6 +239,16 @@ class Binder extends ASTVisitor<BinderScope> {
     }
   }
 
+  // The parser keeps no statement for an #include read in the middle of a statement, as for the value after an =: its
+  // file's content starts at its first node.
+  override onVisitNode(node: VisitableASTNode): void {
+    const file = this.includesOfFiles.size > 0 ? node.loc?.start.filename.path : undefined;
+    const include = file === undefined ? undefined : this.includesOfFiles.get(file);
+    if (include) {
+      this.visitIncludeStatement(include);
+    }
+  }
+
   override visitIncludeStatement(node: IncludeStatement): void {
     const file = node.loc!.start.filename;
     this.closeIncludes(file.path);
@@ -239,6 +257,7 @@ class Binder extends ASTVisitor<BinderScope> {
       this.includeScopes.set(included, this.topScope().analysisScope);
       this.includeStarts.set(included, this.order);
     }
+    this.includesOfFiles.delete(included);
     this.openIncludes.push({ file: file.path, included, end: node.loc!.end.index });
   }
 

@@ -140,6 +140,22 @@ describe('completionItems', () => {
     deepStrictEqual(names(itemsAt(lines('#include a.lua', 'end'), 3, 2, opened, 'a.lua')), [ 'f', 'q' ]);
   });
 
+  it('offers in a file read in the middle of a statement what the same code offers with its #include as a statement', () => {
+    const body = { 'val.lua': lines('function(p)', '  local q = 1', '  ', 'end') };
+    const statement = { 'val.lua': lines('x = function(p)', '  local q = 1', '  ', 'end') };
+    deepStrictEqual([ names(itemsAt(lines('function f()', '  local a = 1', '  x =', '#include val.lua', 'end'), 3, 2, body, 'val.lua')),
+      names(itemsAt(lines('function f()', '  local a = 1', '#include val.lua', 'end'), 3, 2, statement, 'val.lua')) ],
+    [[ 'a', 'f', 'p', 'q', 'x' ], [ 'a', 'f', 'p', 'q', 'x' ]]);
+    const value = { 'h.lua': lines('function()', '  ', '  return speed', 'end') };
+    deepStrictEqual([ names(itemsAt(lines('local speed = 2', 'h =', '#include h.lua'), 2, 2, value, 'h.lua')),
+      names(itemsAt(lines('local speed = 2', '#include h.lua'), 2, 2, { 'h.lua': lines('h = function()', '  ', '  return speed', 'end') }, 'h.lua')) ],
+    [[ 'h', 'speed' ], [ 'h', 'speed' ]]);
+    const taken = { 'a.lua': lines('(f)()', 'local z = 2', '', '') };
+    deepStrictEqual([ names(itemsAt(lines('function g()', '  local k = 1', '  x = y', '#include a.lua', 'end'), 3, 0, taken, 'a.lua')),
+      names(itemsAt(lines('function g()', '  local k = 1', '  x = y', '#include a.lua', 'end'), 3, 0, { 'a.lua': lines('f()', 'local z = 2', '', '') }, 'a.lua')) ],
+    [[ 'g', 'k', 'x', 'z' ], [ 'g', 'k', 'x', 'z' ]]);
+  });
+
   it('sees the locals of the function an #include sits in', () => {
     const main = lines('function _init()', '  local speed = 1', '  #include lib.lua', 'end');
     const lib = { 'lib.lua': lines('local gravity = 2', 'function move()', '  ', 'end') };
