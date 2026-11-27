@@ -13,8 +13,8 @@ import { builtinInfo } from './parser/builtins';
 import ResolvedFile, { fileText, hasP8Extension, pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
 import {
-  DISK_OPERATIONS, forgetWatched, isScanned, isUnder, isWatched, listP8AndLuaFiles, makeFileResolver, nearP8File, onDisk, ProjectDocument,
-  ProjectIndex, ScanBudget, scansFolder, setExcludes, smallFoldersFirst,
+  DISK_OPERATIONS, forgetWatched, IncludesNoted, isScanned, isUnder, isWatched, listP8AndLuaFiles, makeFileResolver, nearP8File, onDisk,
+  ProjectDocument, ProjectIndex, readFoldersWithinBudget, ScanBudget, scansFolder, setExcludes, smallFoldersFirst,
 } from './projects';
 import { Exclude, excludeOf } from './files-exclude';
 import * as url from 'url';
@@ -106,7 +106,12 @@ function p8FilesNotReadFor(filePath: string): string[] {
 
 const fileResolver = makeFileResolver(uri => documents.get(uri)?.getText(), diskText);
 
-const index = new ProjectIndex(parseFile, isMember);
+// What the files past the budget #include. A file that one the index does not hold includes gives no
+// undefined-variable warnings, as that one can define the names it uses; a .p8 file is a root whoever includes it, and
+// gives the warnings of its own project.
+const includesPastBudget = new IncludesNoted();
+const index: ProjectIndex = new ProjectIndex(parseFile, isMember, uri => !hasP8Extension(uri)
+  && includesPastBudget.includersOf(url.fileURLToPath(uri)).some(includer => !index.document(includer)));
 
 // The client asks again whether its open lua documents belong to a .p8 file, and switches those that do to PICO-8
 // Lua.
@@ -178,11 +183,13 @@ connection.onInitialized(() => {
       }
       const joined = index.joins();
       const resend = index.prune();
+      const noted = includesPastBudget.changes;
+      includesPastBudget.forget(uri => !isScanned(url.fileURLToPath(uri), workspaceRoots));
       // A file that left gets empty diagnostics, which clears its warnings from the Problems panel. With none leaving
       // and no project changing there is nothing to send here: the scan of an added folder that finds files for the
       // index sends every file's diagnostics, and otherwise nothing changed. A file can still join, one whose parse
       // failed before, and it gets its diagnostics too.
-      if (resend.length > 0 || index.joins() > joined) {
+      if (resend.length > 0 || index.joins() > joined || includesPastBudget.changes > noted) {
         publish([ ...index.uris(), ...resend ]);
       }
       // A file under a removed folder and in a dot-folder of it can now belong to a .p8 file in its own folder.
@@ -233,15 +240,25 @@ let excludesHide = false;
 let scansRunning = 0;
 let scansTookFiles = false;
 let rescanWanted: 'drop' | 'list' | undefined;
+// The scans take their files to the budget one after another, in the order they started, so that the files read do
+// not depend on which listing or read ends first.
+let lastBudgetTurn = Promise.resolve();
 
 async function scanFolder(folderPath: string, onlyNew = false, alsoPublish: string[] = []): Promise<void> {
   let published = false;
+  let toPublish = alsoPublish;
+  const turn = lastBudgetTurn;
+  let endTurn!: () => void;
+  lastBudgetTurn = new Promise(resolve => {
+    endTurn = resolve;
+  });
   scansRunning++;
   try {
     // A folder inside a workspace folder is listed as the scan of the outermost one that reaches it would list it.
     const from = workspaceRoots.filter(root => scansFolder(folderPath, [ root ]))
       .reduce((outer, root) => path.normalize(root).length < path.normalize(outer).length ? root : outer, folderPath);
     const allFiles = await listP8AndLuaFiles(folderPath, from);
+    await turn;
 
     // The folder can have been removed while it was being listed.
     for (const filePath of allFiles) {
@@ -254,7 +271,12 @@ async function scanFolder(folderPath: string, onlyNew = false, alsoPublish: stri
     const members = smallFoldersFirst(allFiles).map(filePath => pathToFileURL(filePath))
       .filter(uri => (isMember(uri) || index.isAwaited(uri)) && !(onlyNew && index.document(uri)));
     scansTookFiles = true;
+    const noted = includesPastBudget.changes;
     const read = await readWithinBudget(members);
+    endTurn();
+    if (includesPastBudget.changes > noted) {
+      toPublish = [ ...alsoPublish, ...index.uris() ];
+    }
     if (budget.reached) {
       // Past the budget the files open in the editor still get every feature, with the .p8 files they belong to.
       for (const document of documents.all()) {
@@ -274,13 +296,14 @@ async function scanFolder(folderPath: string, onlyNew = false, alsoPublish: stri
     }
     // A scan of no file would send every file's diagnostics again.
     if (stillMembers.size > 0) {
-      publish([ ...alsoPublish, ...index.scan([ ...stillMembers ]) ]);
+      publish([ ...toPublish, ...index.scan([ ...stillMembers ]) ]);
       published = true;
     }
   } finally {
+    endTurn();
     // Also after a scan that failed, so that whatever waits for the end of the scan is not left waiting.
     if (!published) {
-      publish(alsoPublish);
+      publish(toPublish);
     }
     notifyMembershipChanged();
     scansRunning--;
@@ -296,39 +319,30 @@ function tellBudgetReached(): void {
     return;
   }
   budgetShown = true;
+  const files = `${budget.files.toLocaleString('en-US')} ${budget.files === 1 ? 'file' : 'files'}`;
   connection.sendNotification(ShowMessageNotification.type, { type: MessageType.Warning,
-    message: `PICO-8-LS read ${budget.files.toLocaleString('en-US')} files and stopped, to keep its memory in bounds. Workspace symbols and `
-      + 'the problems of files that are not open leave out the rest; a file you open still gets every feature. To have it read everything, '
-      + 'exclude large folders you do not work on with files.exclude.' });
+    message: `PICO-8-LS read ${files} and left out the rest, to keep its memory in bounds: workspace symbols and the problems of files `
+      + 'that are not open leave them out. Of the rest it reads only the #include lines, and a .lua file that one of them includes shows '
+      + 'no undefined-variable warnings. To have it read everything, exclude large folders you do not work on with files.exclude.' });
 }
 
-// Reads the files in order while the budget lasts, and returns those it read. The text of a file that the file watcher
-// does not report would go stale; textOf reads such a file again when it is parsed.
+// Reads the files in order while the budget lasts, and returns those it read; of the rest it notes the #include lines.
+// The text of a file that the file watcher does not report would go stale; textOf reads such a file again when it is
+// parsed.
 async function readWithinBudget(uris: string[]): Promise<string[]> {
-  const read: string[] = [];
-  let next = 0;
-  const readNext = async (): Promise<void> => {
-    while (next < uris.length && !budget.reached) {
-      const uri = uris[next++];
-      const filePath = url.fileURLToPath(uri);
-      let text: string;
-      try {
-        text = fileText(await onDisk(() => fs.promises.readFile(filePath)));
-      } catch (e) {
-        console.error('Error reading ' + filePath, e);
-        continue;
-      }
-      if (!budget.take(text.length)) {
-        return;
-      }
-      if (isWatched(filePath, workspaceRoots)) {
-        diskText.set(uri, text);
-      }
-      read.push(uri);
+  const found = await readFoldersWithinBudget(uris, budget, DISK_OPERATIONS, uri => {
+    const filePath = url.fileURLToPath(uri);
+    return onDisk(() => fs.promises.readFile(filePath)).then(fileText, e => {
+      console.error('Error reading ' + filePath, e);
+      return undefined;
+    });
+  }, (uri, text) => includesPastBudget.note(uri, text));
+  for (const { uri, text } of found) {
+    if (isWatched(url.fileURLToPath(uri), workspaceRoots)) {
+      diskText.set(uri, text);
     }
-  };
-  await Promise.all(Array.from({ length: DISK_OPERATIONS }, readNext));
-  return read;
+  }
+  return found.map(({ uri }) => uri);
 }
 
 async function fetchExcludes(): Promise<void> {
@@ -377,8 +391,12 @@ function rescan(): void {
   }
   const joined = index.joins();
   const resend = index.prune();
+  // The scans below note again what the files past the budget include, and the files that are now hidden include
+  // nothing.
+  const noted = includesPastBudget.changes;
+  includesPastBudget.forget(uri => !isScanned(url.fileURLToPath(uri), workspaceRoots));
   budget.restart(index.uris().map(uri => index.document(uri)!.textDocument.getText().length));
-  publish(resend);
+  publish(includesPastBudget.changes > noted ? [ ...index.uris(), ...resend ] : resend);
   if (index.joins() > joined || resend.length > 0) {
     notifyMembershipChanged();
   }
@@ -576,6 +594,7 @@ connection.onDidChangeWatchedFiles(change => {
     forgetWatched();
   }
   const joined = index.joins();
+  const noted = includesPastBudget.changes;
   const uris: string[] = [];
   const newP8Files: string[] = [];
   const newFolders: string[] = [];
@@ -598,6 +617,7 @@ connection.onDidChangeWatchedFiles(change => {
       for (const cached of [ ...diskText.keys() ].filter(cached => gone(cached, uri, '/'))) {
         diskText.delete(cached);
       }
+      includesPastBudget.forget(includer => gone(includer, uri, '/'));
       const removed = index.uris().filter(indexed => !documents.get(indexed) && gone(indexed, uri, '/'));
       if (removed.length > 0) {
         uris.push(...index.removeAll(removed));
@@ -634,7 +654,9 @@ connection.onDidChangeWatchedFiles(change => {
       addP8File(filePath);
       newP8Files.push(filePath);
     }
-    if (!known && !isMember(uri) && !index.isAwaited(uri)) {
+    // Of a file that the scans would read but for the budget, the #include lines are noted.
+    const pastBudget = !known && !isMember(uri) && !index.isAwaited(uri);
+    if (pastBudget && !(budget.reached && isScanMember(uri))) {
       continue;
     }
     let text: string | undefined;
@@ -644,7 +666,10 @@ connection.onDidChangeWatchedFiles(change => {
       console.error('Error reading ' + uri, e);
     }
     // A file that joins as a member takes from the budget, as the scan's files do.
-    if (!known && text !== undefined && !documents.get(uri) && !index.isAwaited(uri) && !budget.take(text.length)) {
+    if (pastBudget || (!known && text !== undefined && !documents.get(uri) && !index.isAwaited(uri) && !budget.take([ text.length ]))) {
+      if (text !== undefined) {
+        includesPastBudget.note(uri, text);
+      }
       tellBudgetReached();
       continue;
     }
@@ -663,6 +688,9 @@ connection.onDidChangeWatchedFiles(change => {
     if (resend.length > 0 || index.joins() > joinedBefore) {
       uris.push(...index.uris(), ...resend);
     }
+  }
+  if (includesPastBudget.changes > noted) {
+    uris.push(...index.uris());
   }
   // The scan of a new .p8 file's folder sends the problems of every file when it parses any, so this batch's go with
   // it, not before.

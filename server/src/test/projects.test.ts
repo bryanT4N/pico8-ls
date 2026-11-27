@@ -13,7 +13,7 @@ import { outlineLines } from '../parser/test/outline-utils';
 import { ALL_OUTLINE_OPTIONS, formatError } from '../parser/test/test-utils';
 import {
   DISK_OPERATIONS, FolderReader, forgetWatched, isScanned, isTrackedPath, isWatched, listP8AndLuaFiles, makeFileResolver, nearP8File, onDisk,
-  ProjectDocument, ProjectIndex, ScanBudget, scansFolder, setExcludes, smallFoldersFirst,
+  includedFiles, IncludesNoted, ProjectDocument, ProjectIndex, readFoldersWithinBudget, ScanBudget, scansFolder, setExcludes, smallFoldersFirst,
 } from '../projects';
 import { excludeOf } from '../files-exclude';
 import { callContextAt } from '../signature-help';
@@ -193,12 +193,85 @@ describe('files.exclude in the scan', () => {
       [ 'main.p8', 'small/main.p8', 'mid/a.p8', 'mid/b.p8', 'big/1/main.p8', 'big/2/main.p8', 'big/3/main.p8' ]);
   });
 
-  it('takes files within the budget, each at least 256 characters, and none once one did not fit', () => {
+  it('puts the files of a folder together, before its folders', () => {
+    const files = [ 'a/sub/x.lua', 'a/z.p8', 'a/lib.lua' ].map(file => path.join(ws, file));
+    deepStrictEqual(smallFoldersFirst(files).map(file => path.relative(ws, file).split(path.sep).join('/')), [ 'a/lib.lua', 'a/z.p8', 'a/sub/x.lua' ]);
+  });
+
+  it('takes files within the budget, each at least 256 characters, all of a call or none, and none once some did not fit', () => {
     const budget = new ScanBudget(1000);
-    deepStrictEqual([ 400, 10, 300, 100, 10 ].map(length => budget.take(length)), [ true, true, true, false, false ]);
+    deepStrictEqual([[ 400 ], [ 10 ], [ 300 ], [ 100 ], [ 10 ]].map(lengths => budget.take(lengths)), [ true, true, true, false, false ]);
     deepStrictEqual([ budget.files, budget.reached ], [ 3, true ]);
     budget.restart([ 600 ]);
-    deepStrictEqual([ budget.reached, budget.take(100), budget.take(1), budget.files ], [ false, true, false, 2 ]);
+    deepStrictEqual([ budget.reached, budget.take([ 100 ]), budget.take([ 1 ]), budget.files ], [ false, true, false, 2 ]);
+    const groups = new ScanBudget(1000);
+    deepStrictEqual([ groups.take([ 400, 300 ]), groups.take([ 100, 10 ]), groups.files ], [ true, false, 2 ]);
+  });
+
+  describe('readFoldersWithinBudget', () => {
+    const uriIn = (file: string) => pathToFileURL(path.join(ws, ...file.split('/')));
+    const relOf = (uri: string) => path.relative(ws, url.fileURLToPath(uri)).split(path.sep).join('/');
+    // Reads that end in the order `endOrder` gives the files, an undefined length failing.
+    const reader = (lengths: Record<string, number | undefined>, endOrder: (index: number) => number = () => 0) => {
+      const asked: string[] = [];
+      const read = (uri: string) => {
+        const file = relOf(uri);
+        asked.push(file);
+        const length = lengths[file];
+        return new Promise<string | undefined>(resolve => setTimeout(() => resolve(length === undefined ? undefined : 'x'.repeat(length)), endOrder(asked.length - 1)));
+      };
+      return { asked, read };
+    };
+    const readAll = async (lengths: Record<string, number | undefined>, limit: number, ahead: number, endOrder?: (index: number) => number) => {
+      const budget = new ScanBudget(limit);
+      const { asked, read } = reader(lengths, endOrder);
+      const rest: string[] = [];
+      const taken = await readFoldersWithinBudget(Object.keys(lengths).map(uriIn), budget, ahead, read, (uri, text) => rest.push(`${relOf(uri)} ${text.length}`));
+      return { taken: taken.map(({ uri }) => relOf(uri)), budget, asked, rest };
+    };
+
+    it('takes no file of a folder whose files do not all fit, a .lua file never without its .p8 file', async () => {
+      const { taken, budget, asked, rest } = await readAll({ 'proj/lib.lua': 20, 'proj/main.p8': 2000 }, 1000, 0);
+      deepStrictEqual([ taken, budget.reached, budget.files, asked, rest ], [[], true, 0, [ 'proj/lib.lua', 'proj/main.p8' ], [ 'proj/lib.lua 20', 'proj/main.p8 2000' ]]);
+    });
+
+    it('takes the folders before the one that did not fit, which a file of theirs can include from elsewhere, and gives the rest to rest', async () => {
+      const { taken, budget, rest } = await readAll({ 'lib/x.lua': 20, 'z/main.p8': 2000, 'zz/main.p8': 20, 'zz/bad.lua': undefined }, 1000, 1, i => 5 - i);
+      deepStrictEqual([ taken, budget.reached, rest ], [[ 'lib/x.lua' ], true, [ 'z/main.p8 2000', 'zz/main.p8 20' ]]);
+    });
+
+    it('reads each file once, with at most the files waited for and that many more at once', async () => {
+      const files = Array.from({ length: 20 }, (_, i) => `f${String(i).padStart(2, '0')}/main.p8`);
+      const asked: string[] = [];
+      const rest: string[] = [];
+      let reading = 0;
+      let most = 0;
+      const budget = new ScanBudget(1000);
+      await readFoldersWithinBudget(files.map(uriIn), budget, 2, uri => {
+        asked.push(relOf(uri));
+        most = Math.max(most, ++reading);
+        return new Promise(resolve => setTimeout(() => {
+          reading--;
+          resolve('x'.repeat(300));
+        }, 1));
+      }, uri => rest.push(relOf(uri)));
+      deepStrictEqual([ asked, budget.files, rest, most ], [ files, 3, files.slice(3), 3 ]);
+    });
+
+    it('takes the same files whatever order the reads end in', async () => {
+      const lengths = { 'a/1.lua': 300, 'a/main.p8': 300, 'b/main.p8': 300, 'c/main.p8': 300, 'd/main.p8': 300, 'e/main.p8': 10 };
+      const orders = [ () => 0, (i: number) => 10 - 2 * i, (i: number) => (i * 7) % 5 ];
+      const results = [];
+      for (const order of orders) {
+        results.push((await readAll(lengths, 1000, 64, order)).taken);
+      }
+      deepStrictEqual(results, orders.map(() => [ 'a/1.lua', 'a/main.p8', 'b/main.p8' ]));
+    });
+
+    it('leaves out a file whose read fails', async () => {
+      const { taken, budget } = await readAll({ 'a/bad.lua': undefined, 'a/main.p8': 10 }, 1000, 64);
+      deepStrictEqual([ taken, budget.files, budget.reached ], [[ 'a/main.p8' ], 1, false ]);
+    });
   });
 
   it('runs at most DISK_OPERATIONS disk operations at once, every scan together', async () => {
@@ -211,6 +284,36 @@ describe('files.exclude in the scan', () => {
     });
     await Promise.all(Array.from({ length: 3 * DISK_OPERATIONS }, operation));
     deepStrictEqual([ most, running ], [ DISK_OPERATIONS, 0 ]);
+  });
+});
+
+describe('includedFiles', () => {
+  it('names the files of the #include lines that PICO-8 reads, as the parser resolves them', () => {
+    const ws = path.resolve('/ws');
+    const text = CART + '#include lib.lua  \n  #include ../shared/x.lua\n-- #include no.lua\nprint("#include no.lua")\ns = [[\n#include no.lua\n]]\n'
+      + '#include tabs.p8:1\n__gfx__\n#include no.lua\n';
+    deepStrictEqual(includedFiles(path.join(ws, 'game', 'main.p8'), text).map(file => path.relative(ws, file).split(path.sep).join('/')),
+      [ 'game/lib.lua', 'shared/x.lua', 'game/tabs.p8' ]);
+    deepStrictEqual(includedFiles(path.join(ws, 'main.p8'), CART + 'print(1)'), []);
+  });
+});
+
+describe('IncludesNoted', () => {
+  it('gives the files that include a file, whatever its case, by what each noted last, less those forgotten', () => {
+    const ws = path.resolve('/ws');
+    const uri = (file: string) => pathToFileURL(path.join(ws, ...file.split('/')));
+    const noted = new IncludesNoted();
+    const includers = (file: string) => noted.includersOf(path.join(ws, ...file.split('/'))).map(includer => path.relative(ws, url.fileURLToPath(includer))
+      .split(path.sep).join('/')).sort();
+    noted.note(uri('a/main.p8'), CART + '#include ../lib/x.lua\n#include ../lib/X.lua');
+    noted.note(uri('b/main.p8'), CART + '#include ../lib/x.lua');
+    noted.note(uri('b/main.p8'), CART + '#include ../lib/x.lua\n');
+    deepStrictEqual([ includers('lib/x.lua'), includers('LIB/X.LUA'), noted.changes ], [[ 'a/main.p8', 'b/main.p8' ], [ 'a/main.p8', 'b/main.p8' ], 2 ]);
+    noted.note(uri('a/main.p8'), CART + 'print(1)');
+    deepStrictEqual([ includers('lib/x.lua'), noted.changes ], [[ 'b/main.p8' ], 3 ]);
+    noted.forget(includer => includer.startsWith(uri('b') + '/'));
+    noted.forget(() => false);
+    deepStrictEqual([ includers('lib/x.lua'), noted.changes ], [[], 4 ]);
   });
 });
 
@@ -285,11 +388,12 @@ const NO_DISK: FileResolver = {
 
 type IndexOptions = {
   tweak?: (doc: ProjectDocument) => void, cache?: Map<string, string>, disk?: FileResolver, parsed?: string[], isMember?: (uri: string) => boolean,
+  includedByUnread?: (uri: string) => boolean,
 };
 
 // `files` are the editor's open documents; the server reads any other file through the resolver, from `cache` while
 // `disk` has it.
-function indexOver(files: Record<string, string>, { tweak, cache = new Map(), disk = NO_DISK, parsed, isMember }: IndexOptions = {}) {
+function indexOver(files: Record<string, string>, { tweak, cache = new Map(), disk = NO_DISK, parsed, isMember, includedByUnread }: IndexOptions = {}) {
   const openText = (uri: string) => files[nameOf(uri)];
   const resolver = makeFileResolver(openText, cache, disk);
   const parseFile = (uri: string) => {
@@ -304,7 +408,7 @@ function indexOver(files: Record<string, string>, { tweak, cache = new Map(), di
     tweak?.(doc);
     return doc;
   };
-  return new ProjectIndex(parseFile, isMember);
+  return new ProjectIndex(parseFile, isMember, includedByUnread);
 }
 
 const loc = (l: Location) => `${nameOf(l.uri)} ${l.range.start.line + 1}:${l.range.start.character}-${l.range.end.line + 1}:${l.range.end.character}`;
@@ -813,6 +917,30 @@ describe('ProjectIndex', () => {
     const resend = index.update(uriOf('main.p8'));
     deepStrictEqual([ resend.includes(lib), index.document(lib), index.analyses(lib), index.warnings(lib) ], [ true, undefined, [], []]);
     deepStrictEqual(sorted(index.uris()), [ 'main.p8' ]);
+  });
+
+  it('gives no undefined-variable warnings in a file that a file not read includes, nor from a project whose root one includes', () => {
+    // As past the budget, when z/main.p8, which includes lib/x.lua and defines foo, is not read: lib/x.lua is read, and is
+    // a root of its own until own.p8, which includes it too, is read.
+    const onDisk = new Map([[ 'x.lua', 'print(foo)' ], [ 'own.p8', CART + '#include lib/x.lua\nprint(bar)' ]]);
+    const warnings = (includedByUnread?: (uri: string) => boolean) => {
+      const index = indexOver({}, { disk: diskOf(onDisk), includedByUnread });
+      index.scan([ uriOf('lib/x.lua') ]);
+      const alone = index.warnings(uriOf('lib/x.lua')).map(formatError);
+      index.scan([ uriOf('own.p8') ]);
+      return [ alone, index.warnings(uriOf('lib/x.lua')).map(formatError), index.warnings(uriOf('own.p8')).map(formatError) ];
+    };
+    deepStrictEqual(warnings(), [[ 'x.lua 1:6 undefined variable: foo' ], [ 'x.lua 1:6 undefined variable: foo' ], [ 'own.p8 5:6 undefined variable: bar' ]]);
+    deepStrictEqual(warnings(uri => uri === uriOf('lib/x.lua')), [[], [], [ 'own.p8 5:6 undefined variable: bar' ]]);
+    // When a file not read includes m.lua, m.lua is not a root that PICO-8 runs, so the warnings of u.lua come from
+    // two.p8 alone, as they would once that file was read; while m.lua is a root, it defines foo for u.lua.
+    const both = (includedByUnread?: (uri: string) => boolean) => {
+      const index = indexOver({}, { disk: diskOf(new Map([[ 'u.lua', 'print(foo)' ], [ 'm.lua', 'foo = 1\n#include u.lua' ], [ 'two.p8', CART + '#include u.lua' ]])),
+        includedByUnread });
+      index.scan([ 'm.lua', 'two.p8' ].map(uriOf));
+      return index.warnings(uriOf('u.lua')).map(formatError);
+    };
+    deepStrictEqual([ both(), both(uri => uri === uriOf('m.lua')) ], [[], [ 'u.lua 1:6 undefined variable: foo' ]]);
   });
 
   it('adds only the files a member includes itself, as PICO-8 follows no #include in an included file', () => {

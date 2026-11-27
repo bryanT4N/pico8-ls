@@ -70,6 +70,16 @@ const PICO8_MAIN_LOCALS = [ 'circ', 'ovalfill', 'circfill', 'fget', 'pget', 'col
 const MAX_TOKENS = 8192;
 const MAX_CHARACTERS = 65536;
 
+// The file that an #include line names, from what follows "#include ". PICO-8 finds the file with every byte up to a
+// space, and every byte of a character that is not ASCII, left out at both ends of the name (3.trailing-spaces,
+// si.line.form.none.sp.vt, si.pin.trim.lead-e-acute). It takes the name up to its first colon as the file's, whatever
+// the file is, and the rest as a tab (3.colon-two-p8, 3.colon-before, 3.colon-lua-p8).
+export function includedName(written: string): { filename: string, name: string, tab: string | undefined } {
+  const filename = written.replace(/^[\0-\x20\x80-\uffff]+|[\0-\x20\x80-\uffff]+$/g, '');
+  const colon = filename.indexOf(':');
+  return { filename, name: colon < 0 ? filename : filename.slice(0, colon), tab: colon < 0 ? undefined : filename.slice(colon + 1) };
+}
+
 export type ParserOptions = {
   includeFileResolver?: FileResolver,
 };
@@ -418,20 +428,15 @@ export default class Parser {
   // An #include line: the tokens of its file are read next. Wherever the line is, the file is listed in includes, and
   // where a statement can start, the line is a statement too (placeIncludes).
   private paste(line: Token): void {
-    // PICO-8 finds the file with every byte up to a space, and every byte of a character that is not ASCII, left out at
-    // both ends of the name (3.trailing-spaces, si.line.form.none.sp.vt, si.pin.trim.lead-e-acute), and names it in its
-    // error as it is written, in its bytes (si.line.missing.none.sp2.none, 4.strtext.include-e).
+    // PICO-8 names the file in its error as it is written, in its bytes (si.line.missing.none.sp2.none,
+    // 4.strtext.include-e).
     const written = (line.value as string).slice('#include '.length);
-    const filename = written.replace(/^[\0-\x20\x80-\uffff]+|[\0-\x20\x80-\uffff]+$/g, '');
+    const { filename, name, tab } = includedName(written);
     const statement: IncludeStatement = { type: 'IncludeStatement', filename, loc: boundsClone(line.bounds), included: false };
     this.unplaced.push({ statement });
-    // PICO-8 takes the name up to its first colon as the file's, whatever the file is, and the rest as a tab
-    // (3.colon-two-p8, 3.colon-before, 3.colon-lua-p8).
-    const colon = filename.indexOf(':');
-    const name = colon < 0 ? filename : filename.slice(0, colon);
     const resolvedInclude = resolveIncludeFile(this.mainFile, name, this.includeFileResolver);
     statement.resolvedFile = resolvedInclude;
-    const pasted = this.codeToPaste(statement, written, name, resolvedInclude, colon < 0 ? undefined : filename.slice(colon + 1));
+    const pasted = this.codeToPaste(statement, written, name, resolvedInclude, tab);
     if (pasted !== undefined) {
       const lexer = new Lexer(pasted.code, resolvedInclude);
       lexer.pasted = true;

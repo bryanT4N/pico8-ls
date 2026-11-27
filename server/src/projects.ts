@@ -5,7 +5,10 @@ import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ParseError, Warning } from './parser/errors';
-import ResolvedFile, { FileResolver, hasP8Extension, RealFileResolver } from './parser/file-resolver';
+import ResolvedFile, { FileResolver, hasP8Extension, RealFileResolver, resolveIncludeFile } from './parser/file-resolver';
+import { readCode } from './parser/code';
+import { includeLinesOf, lineEnd } from './parser/lexer';
+import { includedName } from './parser/parser';
 import { analyze, emptyAnalysis } from './parser/analysis/binder';
 import { Analysis, Reference } from './parser/analysis/model';
 import { definitionsAt, referenceAt, referencesOf, warningsOf } from './parser/analysis/queries';
@@ -210,8 +213,9 @@ export async function listP8AndLuaFiles(folder: string, from = folder, reader: F
   return found;
 }
 
-// The order the scan reads files in, so that a budget it stops at leaves out the largest folders: of two files, the one
-// whose folder, where their paths part, holds fewer of the files comes first.
+// The order the scan reads files in, so that a budget it stops at leaves out the largest folders: where the paths of two
+// files part, a file comes before a folder, so that the files of a folder come together, and of two folders the one
+// that holds fewer of the files comes first.
 export function smallFoldersFirst(files: string[]): string[] {
   const sizes = new Map<string, number>();
   const parts = new Map(files.map(file => [ file, path.normalize(file).split(path.sep) ]));
@@ -229,6 +233,10 @@ export function smallFoldersFirst(files: string[]): string[] {
     while (i < aParts.length - 1 && i < bParts.length - 1 && aParts[i] === bParts[i]) {
       i++;
     }
+    const aIsFile = i === aParts.length - 1;
+    if (aIsFile !== (i === bParts.length - 1)) {
+      return aIsFile ? -1 : 1;
+    }
     return sizeAt(aParts, i) - sizeAt(bParts, i) || compareStrings(aParts[i], bParts[i]);
   });
 }
@@ -239,20 +247,21 @@ export function smallFoldersFirst(files: string[]): string[] {
 export class ScanBudget {
   static readonly FILE_MINIMUM = 256;
   private used = 0;
-  // The files taken, and whether one did not fit, after which none is taken.
+  // The files taken, and whether some did not fit, after which none are taken.
   files = 0;
   reached = false;
 
   constructor(readonly limit: number) {}
 
-  take(length: number): boolean {
-    const cost = Math.max(length, ScanBudget.FILE_MINIMUM);
+  // Takes the files of these lengths all, or none of them.
+  take(lengths: number[]): boolean {
+    const cost = lengths.reduce((sum, length) => sum + Math.max(length, ScanBudget.FILE_MINIMUM), 0);
     if (this.reached || this.used + cost > this.limit) {
       this.reached = true;
       return false;
     }
     this.used += cost;
-    this.files++;
+    this.files += lengths.length;
     return true;
   }
 
@@ -266,6 +275,108 @@ export class ScanBudget {
       this.files++;
     }
   }
+}
+
+// The files read in order, with their texts, while the budget lasts. The budget takes the files of a folder all or
+// none, in the order of the files whatever order the reads end in, so that a folder's .lua files are not taken without
+// its .p8 files and the same files are taken each time. Each file past the budget is read for rest, which keeps what it
+// needs of it, and let go. The reads go that many files ahead of the ones waited for; a file whose read fails is left
+// out.
+export async function readFoldersWithinBudget(uris: string[], budget: ScanBudget, ahead: number,
+  read: (uri: string) => Promise<string | undefined>, rest?: (uri: string, text: string) => void): Promise<{ uri: string, text: string }[]> {
+  const texts: (Promise<string | undefined> | undefined)[] = [];
+  const readTo = (end: number) => {
+    for (let i = texts.length; i < Math.min(end, uris.length); i++) {
+      texts.push(read(uris[i]));
+    }
+  };
+  const taken: { uri: string, text: string }[] = [];
+  const folderOf = (uri: string) => path.dirname(url.fileURLToPath(uri));
+  let next = 0;
+  while (next < uris.length && !budget.reached) {
+    const folder = folderOf(uris[next]);
+    let end = next + 1;
+    while (end < uris.length && folderOf(uris[end]) === folder) {
+      end++;
+    }
+    readTo(end + ahead);
+    const found = (await Promise.all(texts.slice(next, end))).flatMap((text, k) => text === undefined ? [] : [{ uri: uris[next + k], text }]);
+    if (!budget.take(found.map(({ text }) => text.length))) {
+      break;
+    }
+    taken.push(...found);
+    next = end;
+  }
+  for (; rest !== undefined && next < uris.length; next++) {
+    readTo(next + 1 + ahead);
+    const text = await texts[next];
+    texts[next] = undefined;
+    if (text !== undefined) {
+      rest(uris[next], text);
+    }
+  }
+  return taken;
+}
+
+// What the files that the scans read only for their #include lines include: by each file included, lower case, the
+// URIs of the files that include it. changes counts the notes and removals that changed it.
+export class IncludesNoted {
+  private readonly includers = new Map<string, Set<string>>();
+  private readonly included = new Map<string, string[]>();
+  changes = 0;
+
+  // The #include lines of a file, in place of those noted before.
+  note(uri: string, text: string): void {
+    const files = unique(includedFiles(url.fileURLToPath(uri), text).map(file => file.toLowerCase()));
+    if (JSON.stringify(files) === JSON.stringify(this.included.get(uri) ?? [])) {
+      return;
+    }
+    this.remove(uri);
+    if (files.length > 0) {
+      this.included.set(uri, files);
+    }
+    for (const file of files) {
+      this.includers.set(file, (this.includers.get(file) ?? new Set<string>()).add(uri));
+    }
+    this.changes++;
+  }
+
+  // The files noted that gone accepts, as when a file or folder is deleted.
+  forget(gone: (uri: string) => boolean): void {
+    const uris = [ ...this.included.keys() ].filter(gone);
+    for (const uri of uris) {
+      this.remove(uri);
+    }
+    if (uris.length > 0) {
+      this.changes++;
+    }
+  }
+
+  includersOf(filePath: string): string[] {
+    return [ ...this.includers.get(filePath.toLowerCase()) ?? [] ];
+  }
+
+  private remove(uri: string): void {
+    for (const file of this.included.get(uri) ?? []) {
+      const includers = this.includers.get(file)!;
+      includers.delete(uri);
+      if (includers.size === 0) {
+        this.includers.delete(file);
+      }
+    }
+    this.included.delete(uri);
+  }
+}
+
+// The files that the #include lines of a file name, as the parser finds them, whether they exist or not.
+export function includedFiles(filePath: string, text: string): string[] {
+  if (!text.includes('#include ')) {
+    return [];
+  }
+  const { code } = readCode(text);
+  const file = ResolvedFile.fromPath(filePath);
+  return [ ...includeLinesOf(code) ?? [] ]
+    .map(hash => resolveIncludeFile(file, includedName(code.slice(hash + '#include '.length, lineEnd(code, hash))).name).path);
 }
 
 export type ParsedDocumentsMap = Map<string, ProjectDocument>;
@@ -337,7 +448,10 @@ export class ProjectIndex {
   private awaited: Set<string> | undefined;
   private settledMembers = new Set<string>();
 
-  constructor(private readonly parseFile: ParseFile, private readonly isMember: (uri: string) => boolean = () => true) {}
+  // includedByUnread: whether a file that the index has not read includes this one, which can then define names it
+  // uses, and need not be a root that PICO-8 runs (warnings).
+  constructor(private readonly parseFile: ParseFile, private readonly isMember: (uri: string) => boolean = () => true,
+    private readonly includedByUnread: (uri: string) => boolean = () => false) {}
 
   document(uri: string): ProjectDocument | undefined {
     return this.documents.get(uri);
@@ -483,11 +597,16 @@ export class ProjectIndex {
   // The warnings of the file's own project when it is a root, as its outline comes from there; otherwise only the
   // warnings every project containing uri gives: in a file that several roots include, a warning that one root's code
   // proves wrong is not shown. A project whose analysis failed gives an empty list; intersecting with it would remove
-  // all warnings from other projects, so failed projects are skipped, as the outline of such a file skips them.
+  // all warnings from other projects, so failed projects are skipped, as the outline of such a file skips them. A file
+  // that a file not read includes has none, as the warnings of that file's project are not known, and the project of a
+  // root that one includes is skipped too.
   warnings(uri: string): Warning[] {
+    if (this.includedByUnread(uri)) {
+      return [];
+    }
     const containing = this.projectsOf(uri);
     const own = containing.filter(project => project.root === uri);
-    const [ first, ...others ] = (own.length > 0 ? own : containing).filter(project => !project.failed)
+    const [ first, ...others ] = (own.length > 0 ? own : containing).filter(project => !project.failed && !this.includedByUnread(project.root))
       .map(project => project.warnings.filter(warning => inThisFile(uri, warning)));
     if (!first) {
       return [];
