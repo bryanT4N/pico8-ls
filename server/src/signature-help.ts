@@ -4,6 +4,7 @@ import { definitionDoc, documentationOf, paramDoc } from './parser/analysis/docs
 import { Analysis, Definition, LuaSymbol } from './parser/analysis/model';
 import { methodsNamed, placeOf, symbolOfPath } from './parser/analysis/queries';
 import { builtinInfo } from './parser/builtins';
+import { codeIndexOf, readCode } from './parser/code';
 import ResolvedFile from './parser/file-resolver';
 import Lexer from './parser/lexer';
 import { isColonMethod, parameterNames } from './parser/outline/model';
@@ -23,12 +24,17 @@ type Paren = Callee | 'unnamed call' | 'parameters' | 'group';
 // and a one-line if has none.
 type Open = { kind: '(', paren: Paren, commas: number } | { kind: '{' | '[', commas: number } | { kind: 'function' | 'then' | 'do' | 'repeat' };
 
-// The tokens are read from the start of the text, so strings, comments, nesting and calls over several lines count
-// as Lua reads them.
+// The tokens are read from the start of the code that PICO-8 reads from the file's text, so strings, comments,
+// nesting and calls over several lines count as Lua reads them, and a cart's header and other sections not at all.
 export function callContextAt(text: string, offset: number): CallContext | undefined {
+  const code = readCode(text);
+  const at = codeIndexOf(code, offset);
+  if (at === undefined) {
+    return undefined;
+  }
   const tokens: Token[] = [];
   try {
-    const lexer = new Lexer(text.slice(0, offset), LEXED_FILE);
+    const lexer = new Lexer({ ...code, code: code.code.slice(0, at), end: undefined }, LEXED_FILE);
     for (lexer.next(); lexer.token!.type !== TokenType.EOF; lexer.next()) {
       tokens.push(lexer.token!);
     }

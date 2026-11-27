@@ -50,6 +50,28 @@ export function textCode(text: string): Code {
   return { text, code: text, runs: [{ at: 0, from: 0 }], cart: false };
 }
 
+// Where a place in the text is in the code, the end of a run counting as in it, or undefined for a place the code
+// leaves out, such as a cart's header and its other sections.
+export function codeIndexOf(code: Code, index: number): number | undefined {
+  const { runs } = code;
+  if (runs[0].from > index) {
+    return undefined;
+  }
+  let low = 0;
+  let high = runs.length - 1;
+  while (low < high) {
+    const middle = (low + high + 1) >> 1;
+    if (runs[middle].from <= index) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  const run = runs[low];
+  const length = (low + 1 < runs.length ? runs[low + 1].at : code.code.length) - run.at;
+  return index - run.from <= length ? run.at + index - run.from : undefined;
+}
+
 // A cart's lines as PICO-8 reads them: a lone CR is a line break that takes the character after it with it, and a CR
 // that ends the file takes itself and the character before it (si.pin.cr.mid, si.line.cr-alone, si.pin.cr.eof). The
 // first line is the header and the second the version, whatever it holds (si.pin.head.junk-line2,

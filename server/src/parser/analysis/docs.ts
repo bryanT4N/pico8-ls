@@ -1,3 +1,4 @@
+import { textCode } from '../code';
 import { Comment_ } from '../expressions';
 import ResolvedFile, { FileResolver } from '../file-resolver';
 import Parser from '../parser';
@@ -226,7 +227,7 @@ function isCode(text: string): boolean {
   if (!/[=(){}]|\bend\b|^\s*(#include|\?|local\b|return\b)/m.test(t)) {
     return false;
   }
-  const parse = (code: string) => new Parser(COMMENT_FILE, code, { includeFileResolver: EVERY_FILE_EMPTY }).parseChunk();
+  const parse = (code: string) => new Parser(COMMENT_FILE, textCode(code), { includeFileResolver: EVERY_FILE_EMPTY }).parseChunk();
   try {
     const chunk = parse(t);
     if (chunk.errors.length === 0 && chunk.block.body.length > 0) {

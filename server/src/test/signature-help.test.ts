@@ -195,6 +195,17 @@ describe('signatureHelpAt', () => {
     strictEqual(helpAt(P8)!.signatures[0].label, 'f(a, b)');
   });
 
+  it('reads a cart as PICO-8 does, so that a bracket in its header or in a section between its __lua__ sections opens no call', () => {
+    const cart = 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\nfunction f(a, b) end\n__meta:title__\nprint("me\n__lua__\n';
+    const atEnd = (code: string) => callContextAt(cart + code, cart.length + code.length);
+    deepStrictEqual([ atEnd('f(1, '), atEnd('x = 1 '), callContextAt(cart, cart.indexOf('me')) ],
+      [{ path: [ 'f' ], colon: false, argument: 1 }, undefined, undefined ]);
+    strictEqual(helpAt(cart + 'f(1, ')!.signatures[0].label, 'f(a, b)');
+    // PICO-8 takes text before pico-8 cartridge on the first line (si.t28.head.code-without-p).
+    const header = 'abs( pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\nx = 1 ';
+    strictEqual(callContextAt(header, header.length), undefined);
+  });
+
   it('shows builtins as before, and a user function of the same name instead', () => {
     const builtin = helpAt(lines('x = 1', 'print(sub(s, 1, 2), '))!;
     const print = builtinInfo('print')!;

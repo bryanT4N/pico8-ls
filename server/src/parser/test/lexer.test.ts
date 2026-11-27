@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 import * as assert from 'assert';
 import { ParseError } from '../errors';
-import { callContextAt } from '../../signature-help';
 import { Code, textCode } from '../code';
 import ResolvedFile from '../file-resolver';
 import Lexer from '../lexer';
@@ -338,7 +337,6 @@ __music__
     const lexer = new Lexer(text, file);
     lexer.next();
     assert.deepStrictEqual([ lexer.token!.type, lexer.token!.value ], [ TokenType.Identifier, 'x' ]);
-    assert.deepStrictEqual(callContextAt('x = "pico-8 cartridge" .. f(', 28), { path: [ 'f' ], colon: false, argument: 0 });
     // The text of a file is read as PICO-8 reads it, here a cart with no code.
     const statements = (input: string | Code) => {
       const chunk = new Parser(file, input).parseChunk();

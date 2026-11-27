@@ -86,6 +86,12 @@ describe('doc comments', () => {
     strictEqual(text(docAt(lines('x = 1', '-- calls "update"', 'function f() end'), 3, 9)), 'calls "update"');
   });
 
+  it('reads a comment as code of its own, not by the rules of a file, where a first line with pico-8 cartridge makes a cart', () => {
+    strictEqual(text(docAt(lines('x = 1', '--title("pico-8 cartridge")', 'function f() end'), 3, 9)), undefined);
+    strictEqual(text(docAt(lines('x = 1', '-- return {the pico-8 cartridge flag = true}', 'function f() end'), 3, 9)),
+      'return {the pico-8 cartridge flag = true}');
+  });
+
   it('uses the same rule in function bodies, but not for the function itself', () => {
     strictEqual(text(docAt(lines('function f()', '  -- sprite position', '  local sp = 1', '  return sp', 'end'), 4, 9)), 'sprite position');
     strictEqual(text(docAt(lines('x = 1', 'function f()', '  -- does f', 'end'), 2, 9)), undefined);
