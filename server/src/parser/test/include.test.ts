@@ -601,5 +601,10 @@ describe('#include', function () {
       assert.deepStrictEqual([ oneLine.errors, statementsOf(oneLine), assignedNames((oneLine.block.body[1] as IfStatement).clauses[0].block.body) ],
         [[], [ 'IncludeStatement', 'IfStatement*', 'AssignmentStatement' ], [ 'x', 'y' ]]);
     });
+
+    it('takes a \\ at the end of a pasted file into a string with the first line break after the file, as PICO-8 does', () => {
+      assert.deepStrictEqual(parseWith('#include a.lua\nprinth(s)', { 'a.lua': 's = "a\\' }).errors.map(formatError),
+        [ 'a.lua 1:4 unfinished string near \'"a\\\'' ]);
+    });
   });
 });

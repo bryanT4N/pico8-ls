@@ -784,6 +784,11 @@ export default class Lexer {
       return this.input.charAt(this.index++);
     }
 
+    // PICO-8 pastes a file in with two line breaks after it, and a \ that ends the file takes the first
+    // (si.eff.str.short-bs-no-final).
+    if (this.pasted && this.index >= this.length) {
+      return '\n';
+    }
     this.addError(errMessages.invalidEscape, '\\' + this.input.slice(sequenceStart, this.index + 1));
     return this.index < this.length ? this.input.charAt(this.index++) : '';
   }
