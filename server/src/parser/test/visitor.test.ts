@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { Identifier } from '../expressions';
-import { ASTVisitor } from '../visitor';
+import { ASTVisitor, VisitableASTNode } from '../visitor';
 import { parse } from './test-utils';
 
 // Records each name with the number of scopes open when it is visited.
@@ -87,6 +87,23 @@ describe('ASTVisitor chains', () => {
     assert.deepStrictEqual(visitor.seen, [
       'x/1', 'Logical/1', 'Binary/2', 'TableCall/3', 'StringCall/4', 'Member/5', 'Index/6', 'Call/7', 'Member/8', 'a/9', 'b/9',
       'c/8', 'd/7', 'e/6', 'StringLiteral/5', 'TableConstructor/4', 'f/6', 'Binary/3', 'g/4', 'h/4', 'i/2',
+    ]);
+  });
+
+  it('calls onVisitNode once for every node, each link of a chain too, before visiting it', () => {
+    class Hooked extends Order {
+      override onVisitNode(node: VisitableASTNode): void {
+        this.seen.push(`hook ${node.type === 'Identifier' ? node.name : node.type}`);
+      }
+    }
+    const visitor = new Hooked();
+    visitor.visit(parse('x = a.b(c)[d]:e"s"{f} + g * h'));
+    assert.deepStrictEqual(visitor.seen, [
+      'hook AssignmentStatement', 'hook x', 'x/1', 'hook BinaryExpression', 'Binary/1', 'hook TableCallExpression', 'TableCall/2',
+      'hook StringCallExpression', 'StringCall/3', 'hook MemberExpression', 'Member/4', 'hook IndexExpression', 'Index/5',
+      'hook CallExpression', 'Call/6', 'hook MemberExpression', 'Member/7', 'hook a', 'a/8', 'hook b', 'b/8', 'hook c', 'c/7',
+      'hook d', 'd/6', 'hook e', 'e/5', 'hook StringLiteral', 'StringLiteral/4', 'hook TableConstructorExpression',
+      'TableConstructor/3', 'hook TableValue', 'hook f', 'f/5', 'hook BinaryExpression', 'Binary/2', 'hook g', 'g/3', 'hook h', 'h/3',
     ]);
   });
 });

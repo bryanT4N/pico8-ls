@@ -175,6 +175,10 @@ export abstract class ASTVisitor<T> {
     const outer = links.length;
     let node: VisitableASTNode = top;
     while (isChainLink(node)) {
+      // visitNode has called it for the top link.
+      if (node !== top) {
+        this.onVisitNode(node);
+      }
       switch (node.type) {
       case 'BinaryExpression': this.visitBinaryExpression(node); break;
       case 'LogicalExpression': this.visitLogicalExpression(node); break;
