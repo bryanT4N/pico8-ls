@@ -40,19 +40,19 @@ Full support for `#include` statements:
 
 ## Errors
 
-The first syntax error is at the token where PICO-8 stops reading the code; PICO-8 names the line where that statement began, so the lines can differ. A statement with an error is left out of the outline, and while a cart has an error, none of its files shows undefined-variable warnings.
+The first syntax error is at the token where PICO-8 stops reading the code; PICO-8 names the line where that statement began (for a token over several lines, the line it ends on; for a `goto` into a local's scope, the label's line), so the lines can differ. A statement with an error is left out of the outline, and while a cart has an error, none of its files shows undefined-variable warnings.
 
-PICO-8 0.2.7's limits are checked as PICO-8 counts them: more than 200 local variables in scope in a function, or 141 at a cart's top level, where PICO-8 keeps 59 of its own, counting the hidden ones of compound assignments such as `t.x += 1`; more than 255 upvalues of a function, in a cart each API function it uses, such as `sin`, counting as one; nesting deeper than 200 levels; and in a cart, with its `#include` files pasted in, more than 8,192 tokens or 65,536 characters. The cart limits apply to a main file that is a cart by its first line, `pico-8 cartridge`. A `.p8` file whose first line, from its first `p`, does not start with `pico-8 cartridge` is reported, as PICO-8 does not load it, unless its path has `.lua` in it.
+PICO-8 0.2.7's limits are checked as PICO-8 counts them: more than 200 local variables in scope in a function, or 141 at a cart's top level, where PICO-8 keeps 59 of its own, counting the hidden ones that some compound assignments hold, such as `g.x += 1` on a global `g`; more than 255 upvalues of a function, in a cart each of the 58 API functions that PICO-8 keeps as locals of its main function, such as `sin`, counting as one when the function uses it; nesting deeper than 200 levels; and in a cart, with its `#include` files pasted in, more than 8,192 tokens or 65,536 characters. The cart limits apply to a main file that is a cart by its first line, `pico-8 cartridge`. A `.p8` file whose first line, from its first `p`, does not start with `pico-8 cartridge` is reported, as PICO-8 does not load it, unless its path has `.lua` in it.
 
 Not checked:
 
 - PICO-8's "function or expression too complex", too many registers in use, as with more than 189 arguments in one call at a cart's top level, or 248 in a function.
 - The size of the code in bytes: code made mostly of glyphs passes about 196,600 bytes before 65,536 characters, and PICO-8 then crashes or gives a false error.
 - The hidden local that PICO-8 also takes for a compound assignment once a function holds about 256 constants, which a cart's top level reaches from about its 68th compound assignment.
-- A compound assignment whose key is made only of literals that PICO-8 does not fold, as in `t[~1] += 1`.
+- The hidden local of a compound assignment whose key is literals joined by an operator that PICO-8 does not fold, as in `t[~1] += 1`.
 - PICO-8's buffer of about 65,533 characters for an `#include`d file ("#include file too long"); the character limit is reported instead.
-- The character counts of code that has a U+FFFD, and the count with `#include` files when an included file that is neither a cart nor a `.lua` file has a `-->8` line.
-- A cart's limits for a `.p8` main file without the cart header whose path has `.lua` in it, which PICO-8 runs as Lua.
+- The character counts of code that has a U+FFFD, and the count with `#include` files when an included file that is neither a cart nor a `.lua` file has a `-->8` line, when a cart or `.lua` file included whole has more than 16 tabs, or when an `#include` names a tab outside 0 to 15.
+- A cart's limits, and the `return` and `goto` that PICO-8 rejects at the end of a cart's outermost block, for a main file without the cart header: a `.lua` file, often a library that a cart includes, or a `.p8` file whose path has `.lua` in it, which PICO-8 runs as Lua.
 
 PICO-8 reports loading, `#include` and token errors before the compiler's errors; the editor shows each error at its place, so another error can come first.
 
@@ -78,6 +78,10 @@ To open every `.lua` file as PICO-8 Lua, as versions before 0.6.0 did, add this 
 ```json
 "files.associations": { "*.lua": "pico-8-lua" }
 ```
+
+## Large workspaces
+
+The language server reads the carts of the workspace and their `.lua` files, leaving out what `files.exclude` hides, also after you change it. It reads small folders first, and once the files it has read hold about 20 million characters it reads no more and says so once, so that a large folder is what is left out: Go to Symbol in Workspace and the problems of files that are not open then leave out the rest. A file you open still gets every feature, with the carts in its folder and the folders above it. To have everything read, exclude the large folders you do not work on, such as generated or test output, with `files.exclude`.
 
 ## Support for other platforms
 
