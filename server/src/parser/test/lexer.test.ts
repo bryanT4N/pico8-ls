@@ -55,8 +55,21 @@ describe('Lexer', () => {
       assertNoMoreTokens(tokens);
     });
 
-    // TODO
-    // it('StringLiteral with escape characters', () => {});
+    it('StringLiteral - an escape gives the text of the byte PICO-8 holds for it, the text PICO-8 reads as that byte', () => {
+      const values = (code: string) => getLexedTokens(code).filter(t => t.type === TokenType.StringLiteral).map(t => t.value);
+      assert.deepStrictEqual(values('"\\65" "\\065" "\\0065" "\\1234" "a\\0b" "\\9" "\\x41" "\\xAb" "\\xff"'),
+        [ 'A', 'A', '\u20765', '{4', 'a\0b', '\t', 'A', '\u3064', '\u25dd' ]);
+      assert.deepStrictEqual(values('"\\a\\b\\t\\n\\v\\f\\r" "\\*\\#\\-\\|\\+\\^" "\\\\\\"\\\'"'),
+        [ '\u2077\u2078\t\n\u1d47\u1d9c\r', '\u00b9\u00b2\u00b3\u2074\u2075\u2076', '\\"\'' ]);
+      // PICO-8 reads each of these glyphs as the byte the escape gives.
+      assert.deepStrictEqual(values('"\\1" "\\16" "\\127" "\\128" "\\x82" "\\139"'), values('"\u00b9" "\u25ae" "\u25cb" "\u2588" "\u{1f431}" "\u2b05\ufe0f"'));
+    });
+
+    it('StringLiteral - the line breaks after a \\z or a \\ and in a long string, as PICO-8 holds them', () => {
+      const values = (code: string) => getLexedTokens(code).filter(t => t.type === TokenType.StringLiteral).map(t => t.value);
+      assert.deepStrictEqual(values('"a\\z \t\n  \r\n b" "a\\\nb" "a\\\r\nb"'), [ 'ab', 'a\nb', 'a\nb' ]);
+      assert.deepStrictEqual(values('[[\na]] [[\r\na]] [[a\r\nb\nc]] [==[a]]b]==] [[a\\65]]'), [ 'a', 'a', 'a\nb\nc', 'a]]b', 'a\\65' ]);
+    });
 
     it('Keyword', () => {
       const tokens = getLexedTokens('function break goto if then while end');

@@ -5,8 +5,13 @@ import * as errors from './errors';
 import { errMessages } from './errors';
 import { Comment_ } from './expressions';
 import ResolvedFile from './file-resolver';
+import { P8SCII_TEXT } from './p8scii';
 import { Token, tokenText, TokenType, TokenValue } from './tokens';
 import { Bounds, CodeLocation } from './types';
+
+// The escapes of one letter or sign, by the byte PICO-8 holds for each (4.str.esc-*, 4.str.p8-*).
+const ESCAPED_BYTES = new Map([[ '*', 1 ], [ '#', 2 ], [ '-', 3 ], [ '|', 4 ], [ '+', 5 ], [ '^', 6 ], [ 'a', 7 ], [ 'b', 8 ], [ 't', 9 ],
+  [ 'n', 10 ], [ 'v', 11 ], [ 'f', 12 ], [ 'r', 13 ]]);
 
 // Lexer
 // -----
@@ -564,7 +569,7 @@ export default class Lexer {
 
     return this.makeToken(
       TokenType.StringLiteral,
-      this.encodingMode.discardStrings ? null : this.encodingMode.fixup(this.getLocation(), string),
+      this.encodingMode.discardStrings ? null : this.encodingMode.fixup(this.getLocation(), lineFeeds(string)),
     );
   }
 
@@ -733,18 +738,18 @@ export default class Lexer {
     };
   }
 
-  // Translate escape sequences to the actual characters.
+  // The escape sequence after a \, as the text of the byte PICO-8 holds for it (P8SCII_TEXT).
   readEscapeSequence() {
     const sequenceStart = this.index;
+    const escaped = ESCAPED_BYTES.get(this.input.charAt(this.index));
+    if (escaped !== undefined) {
+      ++this.index;
+      return P8SCII_TEXT[escaped];
+    }
     switch (this.input.charAt(this.index)) {
-    // Lua allow the following escape sequences.
-    case 'n': ++this.index; return '\n';
-    case 'r': ++this.index; return '\r';
-    case 't': ++this.index; return '\t';
-
-      // Backslash at the end of the line. We treat all line endings as equivalent,
-      // and as representing the [LF] character (code 10). Lua 5.1 through 5.3
-      // have been verified to behave the same way.
+    // Backslash at the end of the line. We treat all line endings as equivalent,
+    // and as representing the [LF] character (code 10). Lua 5.1 through 5.3
+    // have been verified to behave the same way.
     case '\r':
     case '\n':
       this.consumeEOL();
@@ -755,7 +760,7 @@ export default class Lexer {
       if (isHexDigit(this.input.charCodeAt(this.index + 1)) &&
           isHexDigit(this.input.charCodeAt(this.index + 2))) {
         this.index += 3;
-        return this.encodingMode.encodeByte(parseInt(this.input.slice(sequenceStart + 1, this.index), 16));
+        return P8SCII_TEXT[parseInt(this.input.slice(sequenceStart + 1, this.index), 16)];
       }
       this.addError(errMessages.hexadecimalDigitExpected, '\\' + this.input.slice(sequenceStart, this.index + 2));
       return this.input.charAt(this.index++);
@@ -768,14 +773,11 @@ export default class Lexer {
       const digits = /^[0-9]{1,3}/.exec(this.input.slice(this.index, this.index + 3))![0];
       if (+digits > 255) {
         this.addError(errMessages.decimalEscapeTooLarge, '\\' + digits);
+        return this.input.charAt(this.index++);
       }
-      return this.input.charAt(this.index++);
+      this.index += digits.length;
+      return P8SCII_TEXT[+digits];
     }
-
-    // P8SCII control codes to ignore, see: https://pico-8.fandom.com/wiki/P8SCII
-    case '*': case '#': case '-': case '|': case '+': case '^':
-    case 'a': case 'b': case 'v': case 'f':
-      return this.input.charAt(this.index++);
     }
 
     // PICO-8 pastes a file in with two line breaks after it, and a \ that ends the file takes the first
@@ -1091,6 +1093,12 @@ export function lineEnd(input: string, i: number): number {
     i++;
   }
   return i;
+}
+
+// The text of a long string, each line break in it, as consumeEOL reads them, an LF, as PICO-8 holds it
+// (4.str.long-crlf).
+export function lineFeeds(text: string): string {
+  return text.replace(/\r\n|\n\r|\r|\n/g, '\n');
 }
 
 // PICO-8 counts the tokens of a cart with its #include files pasted in before Lua reads the code, with a lexer of its

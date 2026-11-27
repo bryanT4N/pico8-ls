@@ -17,7 +17,7 @@ import {
 } from './expressions';
 import ResolvedFile, { FileResolver, RealFileResolver, resolveIncludeFile } from './file-resolver';
 import { characterCount, Code, joined, readCode, tabsOf } from './code';
-import Lexer, { countTokens, includeLinesOf, lineEnd, onOneLine, OpenBracket } from './lexer';
+import Lexer, { countTokens, includeLinesOf, lineEnd, lineFeeds, onOneLine, OpenBracket } from './lexer';
 import Marker from './marker';
 import {
   AssignmentStatement,
@@ -467,7 +467,7 @@ export default class Parser {
       if (!open.isComment && open.token.value !== null) {
         const read = lexer.input.slice(from, reached === 'close' ? lexer.index - open.level - 2 : lexer.index);
         const breaks = reached === 'end' && lexer !== this.lexer ? '\n\n' : '';
-        open.token.value = open.token.value + lexer.encodingMode.fixup(lexer.getLocation(), read + breaks);
+        open.token.value = open.token.value + lexer.encodingMode.fixup(lexer.getLocation(), lineFeeds(read) + breaks);
       }
     }
     if (reached === 'include') {
