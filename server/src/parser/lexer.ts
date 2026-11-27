@@ -26,7 +26,6 @@ export type OpenBracket = { unfinished: errors.ParseError, include?: number } & 
 
 export default class Lexer {
   charCode: number = 0;
-  peekCharCodeindex: number = 0;
 
   // where we currently are
   index: number = 0;
@@ -170,19 +169,6 @@ export default class Lexer {
 
   addError(fmtMessage: string, ...rest: any[]) {
     this.errors.push(errors.createErr(this.getCurrentBounds(), fmtMessage, ...rest));
-  }
-
-  getLocation(): CodeLocation {
-    if (this.runs) {
-      const place = this.placeOf(this.index, false);
-      return { ...place, column: place.column + 1 };
-    }
-    return {
-      index: this.index + this.shift.index,
-      line: this.line + this.shift.line,
-      column: this.index - this.lineStart + 1,
-      filename: this.filename,
-    };
   }
 
   getCurrentBounds(): Bounds {
@@ -412,24 +398,17 @@ export default class Lexer {
 
   consumeEOL() {
     const charCode = this.input.charCodeAt(this.index);
-    const peekCharCode = this.input.charCodeAt(this.index + 1);
-
-    if (isLineTerminator(charCode)) {
-      // Count \n\r and \r\n as one newline.
-      let forward = 1;
-      if (10 === charCode && 13 === peekCharCode) {
-        this.peekCharCodeindex++; forward = 2;
-      }
-      if (13 === charCode && 10 === peekCharCode) {
-        this.peekCharCodeindex++; forward = 2;
-      }
-      this.index += forward;
-
-      this.line++;
-      this.lineStart = this.index;
-      return true;
+    if (!isLineTerminator(charCode)) {
+      return false;
     }
-    return false;
+    // Lua reads \r\n and \n\r as one line break. The lines of positions are an editor's, which counts \n\r as two unless
+    // the CR starts a CRLF.
+    const next = this.input.charCodeAt(this.index + 1);
+    const pair = isLineTerminator(next) && next !== charCode;
+    this.index += pair ? 2 : 1;
+    this.line += pair && charCode === 10 && this.input.charCodeAt(this.index) !== 10 ? 2 : 1;
+    this.lineStart = this.index;
+    return true;
   }
 
   skipWhiteSpace() {
@@ -1210,15 +1189,15 @@ function isLineTerminator(charCode: number): boolean {
   return 10 === charCode || 13 === charCode;
 }
 
-// The line breaks in the text from from to to, read as consumeEOL reads them, and where the line after the last starts.
+// The line breaks in the text from from to to, counted as an editor counts them: a CRLF is one, and any other CR or LF
+// one each; and where the line after the last starts.
 function lineBreaks(text: string, from: number, to: number): { breaks: number, lineStart: number } {
   let breaks = 0;
   let lineStart = from;
   for (let i = from; i < to; i++) {
     const charCode = text.charCodeAt(i);
     if (isLineTerminator(charCode)) {
-      const next = text.charCodeAt(i + 1);
-      i += isLineTerminator(next) && next !== charCode ? 1 : 0;
+      i += charCode === 13 && text.charCodeAt(i + 1) === 10 ? 1 : 0;
       breaks++;
       lineStart = i + 1;
     }
@@ -1226,14 +1205,13 @@ function lineBreaks(text: string, from: number, to: number): { breaks: number, l
   return { breaks, lineStart };
 }
 
-// Where each line of the text starts, its line breaks read as consumeEOL reads them.
+// Where each line of the text starts, its line breaks counted as an editor counts them (lineBreaks).
 function lineStartsOf(text: string): number[] {
   const starts = [ 0 ];
   for (let i = 0; i < text.length; i++) {
     const charCode = text.charCodeAt(i);
     if (isLineTerminator(charCode)) {
-      const next = text.charCodeAt(i + 1);
-      i += isLineTerminator(next) && next !== charCode ? 1 : 0;
+      i += charCode === 13 && text.charCodeAt(i + 1) === 10 ? 1 : 0;
       starts.push(i + 1);
     }
   }

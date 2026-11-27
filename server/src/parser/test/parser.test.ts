@@ -1,5 +1,8 @@
 import { strictEqual as eq } from 'assert';
+import { TextDocument } from 'vscode-languageserver-textdocument';
 import { CallExpression } from '../expressions';
+import ResolvedFile from '../file-resolver';
+import Lexer from '../lexer';
 import { AssignmentStatement, CallStatement, IfStatement, Statement } from '../statements';
 import { analyzeCode, bounds, deepEquals, deepEqualsAST, formatError, getTestFileContents, MockFileResolver, parse, parseInChild, TestFilesResolver, warningsIn } from './test-utils';
 
@@ -1081,6 +1084,20 @@ __music__
       const { errors, block } = parse(unfinishedStringLines.join('\r\n'));
       deepEquals(errors.map(formatError), [ 'main_test_file 2:4 unfinished string near \'"abc\'' ]);
       deepEquals(statementsOf(block.body), [ 'AssignmentStatement 1', 'AssignmentStatement 2', 'FunctionDeclaration 3', 'AssignmentStatement 6' ]);
+    });
+
+    it('places an error on the line an editor shows it on, an LF with a CR after it being two line breaks', () => {
+      const header = 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\n';
+      for (const code of [ 'x=1\n\ry==2', 'x=1\n\r\ny==2', 'x=1\n\r\n\ry==2', header + 'x=1\n\r==2', 'pico-8 cartridge\n\rversion 42\n__lua__\nx=1\ny==2' ]) {
+        const { start } = parse(code).errors[0].bounds;
+        const place = TextDocument.create('main_test_file', 'pico-8', 0, code).positionAt(start.index);
+        deepEquals([ start.line, start.column ], [ place.line + 1, place.character ]);
+      }
+      // A text read as code of its own, as a doc comment's, keeps its lone CRs.
+      const lexer = new Lexer('a\n\rb', new ResolvedFile('main_test_file', 'main_test_file'));
+      lexer.next();
+      lexer.next();
+      eq(lexer.token!.bounds.start.line, 3);
     });
 
     it('keeps the statement before an unclosed long comment', () => {

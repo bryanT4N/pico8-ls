@@ -187,9 +187,10 @@ describe('#include', function () {
       'main_test_file 1:2 unfinished string near \'"aprinth(s)\'', 'main_test_file 2:0 Can\'t #include "nope.lua"" from main_test_file: File does not exist',
     ]);
     assert.deepStrictEqual(read('s="a\\\n#include nope.lua\\\n"\nprinth(s)', {}), [[], 'a\n#include nope.lua\n' ]);
-    for (const lineBreak of [ '\n', '\r\n', '\n\r' ]) {
+    // An editor shows the CR of an LF and a CR as a line of its own.
+    for (const [ lineBreak, line ] of [[ '\n', 3 ], [ '\r\n', 3 ], [ '\n\r', 4 ]]) {
       assert.deepStrictEqual(read(`s="a\\${lineBreak}[["\n#include nope.lua`, {})[0],
-        [ 'main_test_file 3:0 Can\'t #include "nope.lua" from main_test_file: File does not exist' ], JSON.stringify(lineBreak));
+        [ `main_test_file ${line}:0 Can't #include "nope.lua" from main_test_file: File does not exist` ], JSON.stringify(lineBreak));
     }
     // A lone CR is dropped from a file that is not a cart, so the \ is before the [.
     assert.deepStrictEqual(read('s="a\\\r[["\n#include nope.lua', {}), [[
