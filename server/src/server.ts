@@ -162,13 +162,13 @@ connection.onInitialized(() => {
         }
       }
       const joined = index.joins();
-      const left = index.prune();
-      // A file that left gets empty diagnostics, which clears its warnings from the Problems panel. With none leaving
-      // there is nothing to send here: the scan of an added folder that finds files for the index sends every file's
-      // diagnostics, and otherwise nothing changed. A file can still join, one whose parse failed before, and it gets
-      // its diagnostics too.
-      if (left.length > 0 || index.joins() > joined) {
-        publish([ ...index.uris(), ...left ]);
+      const resend = index.prune();
+      // A file that left gets empty diagnostics, which clears its warnings from the Problems panel. With none leaving and
+      // no project changing there is nothing to send here: the scan of an added folder that finds files for the index
+      // sends every file's diagnostics, and otherwise nothing changed. A file can still join, one whose parse failed
+      // before, and it gets its diagnostics too.
+      if (resend.length > 0 || index.joins() > joined) {
+        publish([ ...index.uris(), ...resend ]);
       }
       // A file under a removed folder and in a dot-folder of it can now belong to a cart in its own folder.
       if (removed.length > 0 || index.joins() > joined) {
@@ -413,8 +413,8 @@ connection.onWorkspaceSymbol(guarded('give workspace symbols', () => [], (params
   return index.workspaceSymbols(params.query, globalSettings.outline);
 }));
 
-// The client asks for a lua document, uri in VS Code's form, to give it the PICO-8 Lua language. True when a member root
-// of the index #includes it, whatever its name, as PICO-8 does; or when it is a .lua file and a cart is in its folder or a
+// The client asks for a lua document, uri in VS Code's form, to give it the PICO-8 Lua language. True when a project
+// root of the index #includes it, whatever its name, as PICO-8 does; or when it is a .lua file and a cart is in its folder or a
 // folder above it, so that a file such as notes.txt that the user shows as Lua keeps that language. Only the search for
 // a cart reads the disk, so that the answer does not wait for the scan to find the carts.
 connection.onRequest('pico-8-ls/belongsToCart', guarded('tell whether a file belongs to a cart', () => false, (params: { uri: string }) => {
@@ -487,7 +487,7 @@ connection.onDidChangeWatchedFiles(change => {
     if (!named) {
       continue;
     }
-    // A file in a dot-folder is in the index when a member root of the index #includes it, and an #include can wait for
+    // A file in a dot-folder is in the index when a project root of the index #includes it, and an #include can wait for
     // one to appear.
     const known = index.document(uri) !== undefined;
     if (!known && !isScanned(filePath, workspaceRoots) && !index.isAwaited(uri)) {
@@ -516,9 +516,9 @@ connection.onDidChangeWatchedFiles(change => {
     // The files near the deleted carts that nothing #includes leave; a file that one of them included can now be the
     // root of its own project, and a file whose parse failed before can join.
     const joinedBefore = index.joins();
-    const left = index.prune();
-    if (left.length > 0 || index.joins() > joinedBefore) {
-      uris.push(...index.uris(), ...left);
+    const resend = index.prune();
+    if (resend.length > 0 || index.joins() > joinedBefore) {
+      uris.push(...index.uris(), ...resend);
     }
   }
   // The scan of a new cart's folder sends the problems of every file when it parses any, so this batch's go with it,
