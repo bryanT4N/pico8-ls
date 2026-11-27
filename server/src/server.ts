@@ -163,10 +163,10 @@ connection.onInitialized(() => {
       }
       const joined = index.joins();
       const resend = index.prune();
-      // A file that left gets empty diagnostics, which clears its warnings from the Problems panel. With none leaving and
-      // no project changing there is nothing to send here: the scan of an added folder that finds files for the index
-      // sends every file's diagnostics, and otherwise nothing changed. A file can still join, one whose parse failed
-      // before, and it gets its diagnostics too.
+      // A file that left gets empty diagnostics, which clears its warnings from the Problems panel. With none leaving
+      // and no project changing there is nothing to send here: the scan of an added folder that finds files for the
+      // index sends every file's diagnostics, and otherwise nothing changed. A file can still join, one whose parse
+      // failed before, and it gets its diagnostics too.
       if (resend.length > 0 || index.joins() > joined) {
         publish([ ...index.uris(), ...resend ]);
       }
@@ -414,9 +414,9 @@ connection.onWorkspaceSymbol(guarded('give workspace symbols', () => [], (params
 }));
 
 // The client asks for a lua document, uri in VS Code's form, to give it the PICO-8 Lua language. True when a project
-// root of the index #includes it, whatever its name, as PICO-8 does; or when it is a .lua file and a cart is in its folder or a
-// folder above it, so that a file such as notes.txt that the user shows as Lua keeps that language. Only the search for
-// a cart reads the disk, so that the answer does not wait for the scan to find the carts.
+// root of the index #includes it, whatever its name, as PICO-8 does; or when it is a .lua file and a cart is in its
+// folder or a folder above it, so that a file such as notes.txt that the user shows as Lua keeps that language. Only
+// the search for a cart reads the disk, so that the answer does not wait for the scan to find the carts.
 connection.onRequest('pico-8-ls/belongsToCart', guarded('tell whether a file belongs to a cart', () => false, (params: { uri: string }) => {
   const filePath = pathOf(params.uri);
   return filePath !== undefined
@@ -487,8 +487,8 @@ connection.onDidChangeWatchedFiles(change => {
     if (!named) {
       continue;
     }
-    // A file in a dot-folder is in the index when a project root of the index #includes it, and an #include can wait for
-    // one to appear.
+    // A file in a dot-folder is in the index when a project root of the index #includes it, and an #include can wait
+    // for one to appear.
     const known = index.document(uri) !== undefined;
     if (!known && !isScanned(filePath, workspaceRoots) && !index.isAwaited(uri)) {
       continue;

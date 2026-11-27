@@ -431,11 +431,13 @@ export default class Parser {
     }
 
     this.includes.push({ stmt: statement, resolvedFile: resolvedInclude });
-    // PICO-8 takes a tab of a cart or of a .lua file, and includes any other file whole (3.colon-txt, 3.colon-txt-cart).
+    // PICO-8 takes a tab of a cart or of a .lua file, and includes any other file whole (3.colon-txt,
+    // 3.colon-txt-cart).
     const tabbed = fileContents.startsWith('pico-8 cartridge') || /\.lua$/i.test(resolvedInclude.path);
     const tab = tabSuffix !== undefined && tabbed ? tabIndex(tabSuffix) : undefined;
     if (tab !== undefined) {
-      // PICO-8 includes nothing for a number that is not one of the 16 tabs a cart can have (3.p8-tab-11, 3.p8-tab-minus-2).
+      // PICO-8 includes nothing for a number that is not one of the 16 tabs a cart can have (3.p8-tab-11,
+      // 3.p8-tab-minus-2).
       const tabText = tab >= 0 && tab < 16 ? tabOf(fileContents, tab) : '';
       if (tabText === undefined) {
         this.errors.push(this.getIncludeStatementError(statement, `${path.basename(resolvedInclude.path)} has no tab ${tab}`));
