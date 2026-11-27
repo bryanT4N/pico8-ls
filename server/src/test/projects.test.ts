@@ -12,8 +12,8 @@ import { NO_OUTLINE_OPTIONS } from '../parser/outline/model';
 import { outlineLines } from '../parser/test/outline-utils';
 import { ALL_OUTLINE_OPTIONS, formatError } from '../parser/test/test-utils';
 import {
-  FolderReader, isScanned, isTrackedPath, isWatched, listCartFiles, makeFileResolver, nearCart, ProjectDocument,
-  ProjectIndex, scansFolder,
+  FolderReader, forgetWatched, isScanned, isTrackedPath, isWatched, listCartFiles, makeFileResolver, nearCart,
+  ProjectDocument, ProjectIndex, scansFolder,
 } from '../projects';
 import { callContextAt } from '../signature-help';
 
@@ -175,6 +175,28 @@ describe('isWatched', () => {
         [ true, false, false ]);
       // A workspace folder is watched also when it is a junction itself.
       eq(isWatched(path.join(linked, 'lib.lua'), [ ws, linked ]), true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('gives the answer it gave for a file and the same workspace folders until forgetWatched', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pico8-ls-watch-'));
+    try {
+      const ws = path.join(dir, 'ws');
+      const outside = path.join(dir, 'outside');
+      for (const file of [ 'ws/lib/lib.lua', 'outside/lib.lua' ]) {
+        fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        fs.writeFileSync(path.join(dir, file), '');
+      }
+      const lib = path.join(ws, 'lib', 'lib.lua');
+      eq(isWatched(lib, [ ws ]), true);
+      fs.rmSync(path.join(ws, 'lib'), { recursive: true });
+      fs.symlinkSync(outside, path.join(ws, 'lib'), 'junction');
+      eq(isWatched(lib, [ ws ]), true);
+      eq(isWatched(lib, [ ws, path.join(dir, 'other') ]), false);
+      forgetWatched();
+      eq(isWatched(lib, [ ws ]), false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

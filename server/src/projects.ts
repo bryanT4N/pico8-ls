@@ -73,20 +73,35 @@ export function isUnder(filePath: string, folder: string): boolean {
   return path.normalize(filePath).startsWith(dir.endsWith(path.sep) ? dir : dir + path.sep);
 }
 
+// The answers of isWatched, which looks at each folder on the file's path on the disk: the server asks it each time it
+// reads a file it does not keep, as one reached through a link, at each parse of a file that includes it.
+const watchedAnswers = new Map<string, boolean>();
+
+// For a file or folder created or deleted, which can put a link where a folder was.
+export function forgetWatched(): void {
+  watchedAnswers.clear();
+}
+
 // Whether the file watcher reports the file's changes, files.watcherExclude aside. It watches the workspace folders,
 // also one that is a link, and reports nothing under a link inside them, a junction among them.
 export function isWatched(filePath: string, roots: string[]): boolean {
-  return roots.some(root => {
-    if (!isUnder(filePath, root)) {
-      return false;
-    }
-    const parts = path.relative(root, filePath).split(path.sep);
-    try {
-      return parts.every((_, i) => !fs.lstatSync(path.join(root, ...parts.slice(0, i + 1))).isSymbolicLink());
-    } catch {
-      return false;
-    }
-  });
+  const key = [ ...roots, filePath ].join('\n');
+  let answer = watchedAnswers.get(key);
+  if (answer === undefined) {
+    answer = roots.some(root => {
+      if (!isUnder(filePath, root)) {
+        return false;
+      }
+      const parts = path.relative(root, filePath).split(path.sep);
+      try {
+        return parts.every((_, i) => !fs.lstatSync(path.join(root, ...parts.slice(0, i + 1))).isSymbolicLink());
+      } catch {
+        return false;
+      }
+    });
+    watchedAnswers.set(key, answer);
+  }
+  return answer;
 }
 
 type Kind = { isDirectory(): boolean, isFile(): boolean };
@@ -226,9 +241,9 @@ export class ProjectIndex {
   scan(uris: string[]): string[] {
     const { dropped } = this.reparse(uris);
     this.buildProjects();
-    // An includer can have read one of these files before its folder was in the workspace, when no file watcher reported
-    // its changes, or before a folder was renamed to the name its #include writes: the other roots that contain one,
-    // and the files that wait for one, are parsed again.
+    // An includer can have read one of these files before its folder was in the workspace, when no file watcher
+    // reported its changes, or before a folder was renamed to the name its #include writes: the other roots that
+    // contain one, and the files that wait for one, are parsed again.
     const scanned = new Set(uris);
     const names = new Set(uris.map(caseless));
     const again = unique([
@@ -245,8 +260,8 @@ export class ProjectIndex {
     return unique([ ...this.documents.keys(), ...dropped, ...left ]);
   }
 
-  // Returns the URIs whose diagnostics to send again. After the projects are rebuilt, that is every known one, so that a
-  // file that left a project loses that project's warnings, and every dropped one and every one that left the index.
+  // Returns the URIs whose diagnostics to send again. After the projects are rebuilt, that is every known one, so that
+  // a file that left a project loses that project's warnings, and every dropped one and every one that left the index.
   update(uri: string): string[] {
     const before = this.documents.get(uri);
     const document = this.parseFile(uri);

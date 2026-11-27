@@ -663,7 +663,8 @@ class Binder extends ASTVisitor<BinderScope> {
     }
 
     if (value?.type === 'FunctionDeclaration') {
-      // Grouping takes this file's entry only, but self.k = v still goes under the table when another file has its entry.
+      // Grouping takes this file's entry only, but self.k = v still goes under the table when another file has its
+      // entry.
       const selfTable = binding.entry ?? (binding.kind === 'global' ? this.anyGlobalEntry(root.name) : undefined);
       return this.addMethod(value, root, segments, variable.indexer, binding.entry, loc, member, selfTable);
     }
@@ -844,10 +845,10 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   // Breadcrumbs descend into the first entry whose range contains the cursor, and the range of a member can lie outside
-  // its table's: local e = {}, then e.co = cocreate(function() end). So a callback that callbackOwner put under an entry
-  // goes up to the lowest entry the descent reaches it through: the entries from the function it is in down to there all
-  // contain it. With none, it goes back to that function. This waits for the last grouping, which stretches tables over
-  // their methods.
+  // its table's: local e = {}, then e.co = cocreate(function() end). So a callback that callbackOwner put under an
+  // entry goes up to the lowest entry the descent reaches it through: the entries from the function it is in down to
+  // there all contain it. With none, it goes back to that function. This waits for the last grouping, which stretches
+  // tables over their methods.
   private liftUnreachableCallbacks(): void {
     for (const { entry, natural } of this.nestedCallbacks) {
       let place: Owner = natural;

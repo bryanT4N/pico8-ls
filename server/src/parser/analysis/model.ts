@@ -11,15 +11,16 @@ export type SymbolKind = 'global' | 'local' | 'param' | 'loopvar' | 'member' | '
 // FunctionDeclaration. Docs read the comments above node.
 export type Definition = { loc: Bounds, nameLoc: Bounds, node: ASTNode, value?: Expression, isFunction: boolean, compound: boolean };
 
-// One per identifier that names something; loc covers that identifier only. A compound target (x += 1) reads and writes.
-// order: when the analysis came to it, counted together with Declared.order; for a goto, where the goto is.
+// One per identifier that names something; loc covers that identifier only. A compound target (x += 1) reads and
+// writes. order: when the analysis came to it, counted together with Declared.order; for a goto, where the goto is.
 export type Reference = { symbol: LuaSymbol, loc: Bounds, read: boolean, write: boolean, isCall: boolean, order: number };
 
 export type Declared = { symbol: LuaSymbol, file: ResolvedFile, visibleFrom: number, order: number };
 
-// For a block whose closing keyword is missing, the end of loc is synthetic: only its index is meaningful. A scope covers
-// its text in every file it is in, whichever file it starts in: loc in the file it starts in, elsewhere in the files
-// after that one, as for a block that runs from an included file into the cart or from the cart into an included file.
+// For a block whose closing keyword is missing, the end of loc is synthetic: only its index is meaningful. A scope
+// covers its text in every file it is in, whichever file it starts in: loc in the file it starts in, elsewhere in the
+// files after that one, as for a block that runs from an included file into the cart or from the cart into an included
+// file.
 export type Scope = { kind: 'file' | 'function' | 'block', loc?: Bounds, elsewhere?: Bounds[], parent?: Scope, children: Scope[],
   declarations: Declared[] };
 

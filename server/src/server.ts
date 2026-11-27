@@ -12,7 +12,7 @@ import { isParseError } from './parser/errors';
 import { builtinInfo } from './parser/builtins';
 import ResolvedFile, { fileText, pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
-import { isScanned, isUnder, isWatched, listCartFiles, makeFileResolver, nearCart, ProjectDocument, ProjectIndex, scansFolder } from './projects';
+import { forgetWatched, isScanned, isUnder, isWatched, listCartFiles, makeFileResolver, nearCart, ProjectDocument, ProjectIndex, scansFolder } from './projects';
 import * as url from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -214,8 +214,8 @@ async function scanFolder(folderPath: string, onlyNew = false, alsoPublish: stri
         addCart(filePath);
       }
     }
-    // A .lua file that belongs to no cart is not read at all, so a folder of plain Lua costs only its listing. One that an
-    // #include waits for is read, as it is when the file watcher reports it.
+    // A .lua file that belongs to no cart is not read at all, so a folder of plain Lua costs only its listing. One that
+    // an #include waits for is read, as it is when the file watcher reports it.
     const members = allFiles.map(filePath => pathToFileURL(filePath))
       .filter(uri => (isMember(uri) || index.isAwaited(uri)) && !(onlyNew && index.document(uri)));
     await readFromDisk(members);
@@ -429,6 +429,9 @@ connection.onReferences(guarded('give references', () => [], (params: ReferenceP
 }));
 
 connection.onDidChangeWatchedFiles(change => {
+  if (change.changes.some(({ type }) => type !== FileChangeType.Changed)) {
+    forgetWatched();
+  }
   const joined = index.joins();
   const uris: string[] = [];
   const newCarts: string[] = [];

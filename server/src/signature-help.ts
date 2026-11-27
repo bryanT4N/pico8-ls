@@ -47,9 +47,9 @@ export function callContextAt(text: string, offset: number): CallContext | undef
   tokens.forEach((token, at) => {
     if (token.type === TokenType.Keyword) {
       switch (token.value) {
-      // These only start a statement, which cannot sit inside an open bracket: a ( { or [ still open before one, such as
-      // an unclosed call earlier in the file, was never closed. In a block, such as the body of a function passed to a
-      // call, the block is on top, so the brackets around it stay open.
+      // These only start a statement, which cannot sit inside an open bracket: a ( { or [ still open before one, such
+      // as an unclosed call earlier in the file, was never closed. In a block, such as the body of a function passed to
+      // a call, the block is on top, so the brackets around it stay open.
       case 'local':
       case 'if':
       case 'for':
@@ -266,8 +266,8 @@ function hasFunction(symbol: LuaSymbol): boolean {
 }
 
 // Shown as the call is written. With a colon, the receiver goes to the first parameter of a function not declared with
-// one, whatever its name, so that parameter is left out; a ... takes the receiver and the rest, so it stays. With a dot,
-// the self of a method is added.
+// one, whatever its name, so that parameter is left out; a ... takes the receiver and the rest, so it stays. With a
+// dot, the self of a method is added.
 function userSignature(analysis: Analysis, symbol: LuaSymbol, definition: Definition, fn: FunctionDeclaration, call: CallContext): Signature {
   let names = parameterNames(fn);
   if (call.colon && !isColonMethod(fn) && names[0] !== '...') {
