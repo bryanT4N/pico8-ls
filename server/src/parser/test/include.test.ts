@@ -166,7 +166,7 @@ describe('#include', function () {
   it('parses 256 #included files and reports the next one', () => {
     const errorsFor = (includes: number) => parseWith('#include a.lua\n'.repeat(includes), { 'a.lua': 'x = 1' }).errors.map(formatError);
     assert.deepStrictEqual(errorsFor(256), []);
-    assert.deepStrictEqual(errorsFor(257), [ 'main_test_file 257:0 Can\'t #include "a.lua" from main_test_file: Too many #include parses (more than 256)' ]);
+    assert.deepStrictEqual(errorsFor(257), [ 'main_test_file 257:0 too many #includes (limit is 256)' ]);
   });
 
   it('stops a tree of #includes that doubles at every level', () => {
@@ -285,11 +285,14 @@ describe('#include', function () {
     assert.deepStrictEqual(included('other.p8:A'), [[], [ 't10' ]]);
     assert.deepStrictEqual(included('other.p8:b'), [[ 'other.p8 26:4 <expression> expected near \'=\'' ], []]);
     assert.deepStrictEqual(included('other.p8:c'), [[ 'main_test_file 1:0 Can\'t #include "other.p8:c" from main_test_file: other.p8 has no tab 12' ], []]);
-    for (const name of [ 'other.p8:01', 'other.p8:1x', 'other.p8:0x1' ]) {
-      assert.deepStrictEqual(included(name), [[], [ 't1' ]], name);
+    for (const name of [ 'other.p8:01', 'other.p8:1x', 'other.p8:0x1', 'other.p8:0X1', 'other.p8: 1', 'other.p8:\t1', 'other.p8:+1' ]) {
+      assert.deepStrictEqual(included(name), [[], [ 't1' ]], JSON.stringify(name));
     }
+    assert.deepStrictEqual(included('other.p8:-0'), [[], [ 't0' ]]);
     assert.deepStrictEqual([ included('other.p8:11'), included('other.p8:12') ], [[[], []], [[], []]]);
     const whole = [[ 'other.p8 26:4 <expression> expected near \'=\'' ], Array.from({ length: 11 }, (_, k) => 't' + k) ];
-    assert.deepStrictEqual([ included('other.p8:'), included('other.p8:g') ], [ whole, whole ]);
+    for (const name of [ 'other.p8:', 'other.p8:g', 'other.p8:x1', 'other.p8:0x', 'other.p8:0xg', 'other.p8:-1' ]) {
+      assert.deepStrictEqual(included(name), whole, name);
+    }
   });
 });

@@ -45,7 +45,7 @@ import * as path from 'path';
 import { ASTNode, Bounds } from './types';
 import Operators from './operators';
 
-// A file included twice is parsed twice, and each #include line of a cart is parsed.
+// PICO-8 takes 256 #include lines in a cart and stops at the next one with "too many #includes" (3.includes-257).
 const MAX_INCLUDE_PARSES = 256;
 
 // PICO-8's Lua, as Lua 5.2 (LUAI_MAXCCALLS), counts a level for each statement
@@ -404,7 +404,7 @@ export default class Parser {
     if (this.includeParses >= MAX_INCLUDE_PARSES) {
       if (!this.reportedTooManyIncludeParses) {
         this.reportedTooManyIncludeParses = true;
-        this.errors.push(this.getIncludeStatementError(statement, `Too many #include parses (more than ${MAX_INCLUDE_PARSES})`));
+        this.errors.push(new errors.ParseError(`too many #includes (limit is ${MAX_INCLUDE_PARSES})`, statement.loc!));
       }
       return [];
     }
@@ -1544,11 +1544,16 @@ function isEndOfFile(token: Token) {
   return token.type === TokenType.EOF;
 }
 
-// PICO-8 reads the tab after .p8: as C's strtol does in hexadecimal, the digits it starts with after an optional 0x, and
-// includes the whole cart when there are none (3.p8-tab-01, 3.p8-tab-1x, 3.p8-tab-g).
+// PICO-8 reads the tab after .p8: as a hexadecimal number that the text starts with, after white space and a sign, and
+// with a 0x before its digits only when a digit follows the 0x. With no such number, or a negative one, it includes the
+// whole cart (3.p8-tab-01, 3.p8-tab-1x, 3.p8-tab-lead-space, 3.p8-tab-plus, 3.p8-tab-g, 3.p8-tab-0x, 3.p8-tab-minus).
 function tabIndex(suffix: string): number | undefined {
-  const digits = /^(?:0x)?([0-9a-f]+)/i.exec(suffix);
-  return digits ? parseInt(digits[1], 16) : undefined;
+  const number = /^[ \t\n\v\f\r]*([+-]?)(?:0x([0-9a-f]+)|(?!0x)([0-9a-f]+))/i.exec(suffix);
+  if (!number) {
+    return undefined;
+  }
+  const tab = parseInt(number[2] ?? number[3], 16);
+  return number[1] === '-' && tab > 0 ? undefined : tab;
 }
 
 // One tab of a cart, with the code of the other tabs blanked out by spaces, so that every position stays where it is in
