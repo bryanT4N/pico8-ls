@@ -120,12 +120,14 @@ describe('local variable and upvalue limits', () => {
     assert.deepStrictEqual(cartErrors(reading(255)), [ 'main.p8 12:1174 too many upvalues (limit is 255) in function at line 11 near \'+\'' ]);
   });
 
-  it('gives a main.p8 without the header of a cart none of a cart\'s limits, as PICO-8 does not load it', () => {
+  it('gives a main.p8 without the header of a cart none of a cart\'s limits, only the error that PICO-8 does not load it', () => {
     const headerless = (code: string) => parse(code, { filename: 'main.p8' }).errors.map(formatError);
-    assert.deepStrictEqual(headerless('local ' + names('a', 142) + '\nprinth("ok")'), []);
-    assert.deepStrictEqual(headerless(`x={${Array.from({ length: 9000 }, (_, k) => k + 1).join(',')}}`), []);
-    assert.deepStrictEqual(headerless(`--${'a'.repeat(65521)}\nprinth("ok")\n`), []);
-    assert.deepStrictEqual(headerless('local ' + names('a', 201) + '\nprinth("ok")'), [ 'main.p8 1:1096 too many local variables (limit is 200) in main function near \'printh\'' ]);
+    const notLoaded = 'main.p8 1:0 PICO-8 does not load this .p8 file, whose first line, from its first p, does not start with \'pico-8 cartridge\'';
+    assert.deepStrictEqual(headerless('local ' + names('a', 142) + '\nprinth("ok")'), [ notLoaded ]);
+    assert.deepStrictEqual(headerless(`x={${Array.from({ length: 9000 }, (_, k) => k + 1).join(',')}}`), [ notLoaded ]);
+    assert.deepStrictEqual(headerless(`--${'a'.repeat(65521)}\nprinth("ok")\n`), [ notLoaded ]);
+    assert.deepStrictEqual(headerless('local ' + names('a', 201) + '\nprinth("ok")'),
+      [ notLoaded, 'main.p8 1:1096 too many local variables (limit is 200) in main function near \'printh\'' ]);
   });
 
   it('reports more than 255 upvalues in a function, as PICO-8 does', () => {

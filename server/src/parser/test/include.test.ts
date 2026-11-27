@@ -263,11 +263,12 @@ describe('#include', function () {
 
   it('reports a return that ends a cart from a file the cart includes, and the code after a return in an included file', () => {
     const files = { 'lib.lua': 'x=1\nreturn x', 'e.lua': '' };
-    const cartErrors = (code: string) => parse(code, { filename: 'main.p8', includeFileResolver: new TestFilesResolver(files) }).errors.map(formatError);
+    const cart = 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\n';
+    const cartErrors = (code: string) => parse(cart + code, { filename: 'main.p8', includeFileResolver: new TestFilesResolver(files) }).errors.map(formatError);
     assert.deepStrictEqual(cartErrors('printh("ok")\n#include lib.lua'), [ 'lib.lua 2:0 PICO-8 does not accept a return in the cart\'s outermost block' ]);
-    assert.deepStrictEqual(cartErrors('printh("ok")\nreturn\n#include e.lua'), [ 'main.p8 2:0 PICO-8 does not accept a return in the cart\'s outermost block' ]);
+    assert.deepStrictEqual(cartErrors('printh("ok")\nreturn\n#include e.lua'), [ 'main.p8 5:0 PICO-8 does not accept a return in the cart\'s outermost block' ]);
     assert.deepStrictEqual(cartErrors('function f()\n#include lib.lua\nend'), []);
-    assert.deepStrictEqual(cartErrors('#include lib.lua\nprinth(x)'), [ 'main.p8 2:0 \'<eof>\' expected near \'printh\'' ]);
+    assert.deepStrictEqual(cartErrors('#include lib.lua\nprinth(x)'), [ 'main.p8 5:0 \'<eof>\' expected near \'printh\'' ]);
     const stopped = parseWith('#include lib.lua\nprinth(x)', { 'lib.lua': '-- lib\nreturn 1\nx=2' });
     assert.deepStrictEqual([ stopped.errors.map(formatError), stopped.includedComments!.map(comment => comment.raw) ],
       [[ 'lib.lua 3:0 \'<eof>\' expected near \'x\'' ], [ '-- lib' ]]);
@@ -527,7 +528,7 @@ describe('#include', function () {
         for (const [ name, text ] of Object.entries(files)) {
           fs.writeFileSync(path.join(dir, name), text);
         }
-        const parsed = (code: string) => parse(code, { filename: path.join(dir, 'main.p8'), includeFileResolver: new RealFileResolver() });
+        const parsed = (code: string) => parse(code, { filename: path.join(dir, 'main.lua'), includeFileResolver: new RealFileResolver() });
         const names = (code: string) => {
           const chunk = parsed(code);
           return [ chunk.errors.map(formatError), chunk.block.body.filter(s => s.type === 'FunctionDeclaration').map(s => ((s as FunctionDeclaration).identifier as Identifier).name) ];

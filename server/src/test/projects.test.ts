@@ -244,14 +244,16 @@ function scanned(files: Record<string, string>): ProjectIndex {
   return index;
 }
 
+const CART = 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\n';
+
 describe('ProjectIndex', () => {
   const brief = (list: SymbolInformation[]) => list.map(s => [ s.name, s.containerName, nameOf(s.location.uri) ]);
   const sharedGlobals = () => ({
-    'main.p8': '#include lib.lua\nshared = 5\nplayer.hp = 3\nfunction _draw() print(shared) end',
+    'main.p8': CART + '#include lib.lua\nshared = 5\nplayer.hp = 3\nfunction _draw() print(shared) end',
     'lib.lua': 'shared = 0\nplayer = { x = 1 }',
   });
   const localAfterInclude = () => ({
-    'main.p8': 'local speed = 2\n#include lib.lua\nlocal gravity = 1',
+    'main.p8': CART + 'local speed = 2\n#include lib.lua\nlocal gravity = 1',
     'lib.lua': 'function move(p)\n  p.x += speed\n  p.y += gravity\nend',
   });
 
@@ -264,7 +266,7 @@ describe('ProjectIndex', () => {
   it('goes to the definition in every file of the project', () => {
     const files = sharedGlobals();
     const index = scanned(files);
-    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 4, 23)).map(loc), [ 'lib.lua 1:0-1:6', 'main.p8 2:0-2:6' ]);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 7, 23)).map(loc), [ 'lib.lua 1:0-1:6', 'main.p8 5:0-5:6' ]);
   });
 
   it('hides a local declared after the #include from the included file', () => {
@@ -276,18 +278,18 @@ describe('ProjectIndex', () => {
 
   it('shares a file between two roots: lookups from both, warnings only if both agree', () => {
     const files = {
-      'a.p8': 'player = {}\n#include common.lua',
-      'b.p8': 'enemy = {}\n#include common.lua',
+      'a.p8': CART + 'player = {}\n#include common.lua',
+      'b.p8': CART + 'enemy = {}\n#include common.lua',
       'common.lua': 'function draw_player()\n  spr(1, player.x, enemy.y)\nend',
     };
     const index = scanned(files);
     deepStrictEqual(index.warnings(uriOf('common.lua')), []);
-    deepStrictEqual(index.definitions(uriOf('common.lua'), offsetIn(files, 'common.lua', 2, 9)).map(loc), [ 'a.p8 1:0-1:6' ]);
-    deepStrictEqual(index.definitions(uriOf('common.lua'), offsetIn(files, 'common.lua', 2, 19)).map(loc), [ 'b.p8 1:0-1:5' ]);
+    deepStrictEqual(index.definitions(uriOf('common.lua'), offsetIn(files, 'common.lua', 2, 9)).map(loc), [ 'a.p8 4:0-4:6' ]);
+    deepStrictEqual(index.definitions(uriOf('common.lua'), offsetIn(files, 'common.lua', 2, 19)).map(loc), [ 'b.p8 4:0-4:5' ]);
   });
 
   it('analyses a file that no project contains as its own project', () => {
-    const files: Record<string, string> = { 'main.p8': 'x = 1' };
+    const files: Record<string, string> = { 'main.p8': CART + 'x = 1' };
     const index = scanned(files);
     files['new.lua'] = 'function helper() end\nhelper()';
     const resend = index.update(uriOf('new.lua'));
@@ -297,9 +299,9 @@ describe('ProjectIndex', () => {
   });
 
   it('updates the includer in the same call', () => {
-    const files = { 'main.p8': '#include lib.lua\nprint(answer())', 'lib.lua': 'function answer() return 1 end' };
+    const files = { 'main.p8': CART + '#include lib.lua\nprint(answer())', 'lib.lua': 'function answer() return 1 end' };
     const index = scanned(files);
-    const answer = offsetIn(files, 'main.p8', 2, 6);
+    const answer = offsetIn(files, 'main.p8', 5, 6);
     deepStrictEqual(index.definitions(uriOf('main.p8'), answer).map(loc), [ 'lib.lua 1:9-1:15' ]);
     files['lib.lua'] = '\nfunction answer() return 2 end';
     deepStrictEqual(index.update(uriOf('lib.lua')).sort(), [ uriOf('main.p8'), uriOf('lib.lua') ].sort());
@@ -340,7 +342,7 @@ describe('ProjectIndex', () => {
 
   it('knows an included file by the URI the editor gives it when its name has parentheses', () => {
     const files: Record<string, string> = {
-      'main.p8': 'player = {}\n#include lib(2).lua\nprint(answer())',
+      'main.p8': CART + 'player = {}\n#include lib(2).lua\nprint(answer())',
       'lib(2).lua': 'function answer() return player end',
     };
     const index = scanned(files);
@@ -358,34 +360,34 @@ describe('ProjectIndex', () => {
     files['lib(2).lua'] = '\n\nfunction answer() return player end';
     index.update(lib);
     deepStrictEqual(index.warnings(lib), []);
-    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 3, 6)).map(loc), [ 'lib(2).lua 3:9-3:15' ]);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 6, 6)).map(loc), [ 'lib(2).lua 3:9-3:15' ]);
   });
 
   it('moves a file into the project that starts including it', () => {
-    const files = { 'lib.lua': 'function draw_player() spr(1, player.x, 0) end', 'main.p8': 'x = 1' };
+    const files = { 'lib.lua': 'function draw_player() spr(1, player.x, 0) end', 'main.p8': CART + 'x = 1' };
     const index = scanned(files);
     deepStrictEqual(index.warnings(uriOf('lib.lua')).map(formatError), [ 'lib.lua 1:30 undefined variable: player' ]);
-    files['main.p8'] = 'player = {}\n#include lib.lua';
+    files['main.p8'] = CART + 'player = {}\n#include lib.lua';
     eq(index.update(uriOf('main.p8')).includes(uriOf('lib.lua')), true);
     deepStrictEqual(index.warnings(uriOf('lib.lua')), []);
   });
 
   it('forgets a removed file in the projects that included it', () => {
-    const files: Record<string, string> = { 'main.p8': '#include lib.lua\nhelper()', 'lib.lua': 'function helper() end' };
+    const files: Record<string, string> = { 'main.p8': CART + '#include lib.lua\nhelper()', 'lib.lua': 'function helper() end' };
     const index = scanned(files);
-    const helper = offsetIn(files, 'main.p8', 2, 0);
+    const helper = offsetIn(files, 'main.p8', 5, 0);
     deepStrictEqual(index.definitions(uriOf('main.p8'), helper).map(loc), [ 'lib.lua 1:9-1:15' ]);
     delete files['lib.lua'];
     const resend = index.remove(uriOf('lib.lua'));
     deepStrictEqual([ resend.includes(uriOf('main.p8')), resend.includes(uriOf('lib.lua')) ], [ true, true ]);
     eq(new Set(resend).size, resend.length);
-    eq(index.document(uriOf('main.p8'))!.errors.map(formatError).includes('main.p8 1:0 Can\'t #include "lib.lua" from main.p8: File does not exist'), true);
+    eq(index.document(uriOf('main.p8'))!.errors.map(formatError).includes('main.p8 4:0 Can\'t #include "lib.lua" from main.p8: File does not exist'), true);
     deepStrictEqual(index.definitions(uriOf('main.p8'), helper), []);
     deepStrictEqual(index.warnings(uriOf('main.p8')), []);
   });
 
   it('does not take an #include from the cached text of a file that is gone from disk', () => {
-    const files: Record<string, string> = { 'main.p8': '#include lib.lua\nhelper()' };
+    const files: Record<string, string> = { 'main.p8': CART + '#include lib.lua\nhelper()' };
     const onDisk = new Set([ 'main.p8', 'lib.lua' ]);
     const cache = new Map([[ uriOf('lib.lua'), 'function helper() end' ]]);
     const disk: FileResolver = {
@@ -397,27 +399,27 @@ describe('ProjectIndex', () => {
     };
     const index = indexOver(files, { cache, disk });
     index.scan([ uriOf('main.p8'), uriOf('lib.lua') ]);
-    const helper = offsetIn(files, 'main.p8', 2, 0);
-    const includeLine = offsetIn(files, 'main.p8', 1, 3);
+    const helper = offsetIn(files, 'main.p8', 5, 0);
+    const includeLine = offsetIn(files, 'main.p8', 4, 3);
     deepStrictEqual(index.definitions(uriOf('main.p8'), helper).map(loc), [ 'lib.lua 1:9-1:15' ]);
     // Its folder is deleted, which the file watcher does not report for lib.lua; then main.p8 is edited.
     onDisk.delete('lib.lua');
     index.update(uriOf('main.p8'));
     deepStrictEqual(index.document(uriOf('main.p8'))!.errors.map(formatError),
-      [ 'main.p8 1:0 Can\'t #include "lib.lua" from main.p8: File does not exist' ]);
+      [ 'main.p8 4:0 Can\'t #include "lib.lua" from main.p8: File does not exist' ]);
     deepStrictEqual(index.definitions(uriOf('main.p8'), helper), []);
     deepStrictEqual(index.definitions(uriOf('main.p8'), includeLine), []);
     eq(cache.has(uriOf('lib.lua')), false);
   });
 
   it('lists a file included twice once', () => {
-    const index = scanned({ 'main.p8': '#include a.lua\n#include a.lua\nf()', 'a.lua': 'function f() end\nx = 1\nlocal y = 2' });
+    const index = scanned({ 'main.p8': CART + '#include a.lua\n#include a.lua\nf()', 'a.lua': 'function f() end\nx = 1\nlocal y = 2' });
     deepStrictEqual(outlineLines(index.outline(uriOf('a.lua'))), [ 'f() [Function]', 'x [Variable]', 'y [Variable]' ]);
   });
 
   it('lists the entries of a file #included in a function at the top of its outline', () => {
     const lib = 'function helper() end\nfunction other() end';
-    const outlineOfLib = (main: string) => outlineLines(scanned({ 'main.p8': main, 'lib.lua': lib }).outline(uriOf('lib.lua')));
+    const outlineOfLib = (main: string) => outlineLines(scanned({ 'main.p8': CART + main, 'lib.lua': lib }).outline(uriOf('lib.lua')));
     deepStrictEqual(outlineOfLib('function _init()\n  #include lib.lua\nend'), [ 'helper() [Function]', 'other() [Function]' ]);
     deepStrictEqual(outlineOfLib('function _init()\n  local function setup()\n    #include lib.lua\n  end\nend'),
       [ 'helper() [Function]', 'other() [Function]' ]);
@@ -426,13 +428,13 @@ describe('ProjectIndex', () => {
   });
 
   it('keeps a forward-declared local in its file\'s outline when the function is in another file', () => {
-    const index = scanned({ 'main.p8': 'local update_enemy\n#include lib.lua', 'lib.lua': 'update_enemy = function() end' });
+    const index = scanned({ 'main.p8': CART + 'local update_enemy\n#include lib.lua', 'lib.lua': 'update_enemy = function() end' });
     deepStrictEqual(outlineLines(index.outline(uriOf('main.p8'))), [ 'update_enemy [Variable]' ]);
     deepStrictEqual(outlineLines(index.outline(uriOf('lib.lua'))), [ 'update_enemy() [Function]' ]);
   });
 
   it('copes with files that include each other', () => {
-    const index = scanned({ 'main.p8': '#include a.lua', 'a.lua': '#include b.lua\nfunction fa() end', 'b.lua': '#include a.lua\nfunction fb() end' });
+    const index = scanned({ 'main.p8': CART + '#include a.lua', 'a.lua': '#include b.lua\nfunction fa() end', 'b.lua': '#include a.lua\nfunction fb() end' });
     deepStrictEqual(outlineLines(index.outline(uriOf('a.lua'))), [ 'fa() [Function]' ]);
   });
 
@@ -449,24 +451,24 @@ describe('ProjectIndex', () => {
   });
 
   it('keeps an included file in its includer\'s project only', () => {
-    const index = scanned({ 'main.p8': '#include lib.lua\nx = 1', 'lib.lua': 'y = 2' });
+    const index = scanned({ 'main.p8': CART + '#include lib.lua\nx = 1', 'lib.lua': 'y = 2' });
     eq(index.analyses(uriOf('lib.lua')).length, 1);
   });
 
   it('groups the methods of an included file across a tab line of the main file', () => {
-    const index = scanned({ 'main.p8': '#include player.lua\n-->8\nx = 1',
+    const index = scanned({ 'main.p8': CART + '#include player.lua\n-->8\nx = 1',
       'player.lua': 'player = {}\nfunction player:update() end\nfunction player:draw() end' });
     deepStrictEqual(outlineLines(index.outline(uriOf('player.lua'))), [ 'player [Table]', '  update() [Method]', '  draw() [Method]' ]);
   });
 
   it('keeps the methods of an included file in place across its own region lines', () => {
-    const index = scanned({ 'main.p8': '#include player.lua',
+    const index = scanned({ 'main.p8': CART + '#include player.lua',
       'player.lua': 'player = {}\nfunction player:update() end\n-- #region drawing\nfunction player:draw() end\n-- #endregion' });
     deepStrictEqual(outlineLines(index.outline(uriOf('player.lua'))), [ 'player [Table]', 'player:update() [Method]', 'player:draw() [Method]' ]);
   });
 
   it('drops a root that cannot be parsed again, so that nothing is analysed from its old text', () => {
-    const files: Record<string, string> = { 'main.p8': '#include lib.lua', 'lib.lua': 'function old() end' };
+    const files: Record<string, string> = { 'main.p8': CART + '#include lib.lua', 'lib.lua': 'function old() end' };
     const index = scanned(files);
     delete files['main.p8'];
     files['lib.lua'] = 'function new() end';
@@ -477,7 +479,7 @@ describe('ProjectIndex', () => {
   });
 
   it('sends again the diagnostics of a file that a new scan cannot parse', () => {
-    const files: Record<string, string> = { 'main.p8': 'x = 1', 'gone.lua': 'print(nope)' };
+    const files: Record<string, string> = { 'main.p8': CART + 'x = 1', 'gone.lua': 'print(nope)' };
     const index = scanned(files);
     deepStrictEqual(index.warnings(uriOf('gone.lua')).map(formatError), [ 'gone.lua 1:6 undefined variable: nope' ]);
     delete files['gone.lua'];
@@ -486,17 +488,17 @@ describe('ProjectIndex', () => {
   });
 
   it('goes from an #include line to the file', () => {
-    const files = { 'main.p8': '#include lib.lua', 'lib.lua': 'x = 1' };
-    const found = scanned(files).definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 1, 3));
+    const files = { 'main.p8': CART + '#include lib.lua', 'lib.lua': 'x = 1' };
+    const found = scanned(files).definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 4, 3));
     deepStrictEqual(found.map(l => [ l.uri, l.range.start ]), [[ uriOf('lib.lua'), { line: 0, character: 0 }]]);
   });
 
   it('leaves the declaration out of references when asked', () => {
-    const files = { 'main.p8': 'local a\nb = a' };
+    const files = { 'main.p8': CART + 'local a\nb = a' };
     const index = scanned(files);
-    const a = offsetIn(files, 'main.p8', 2, 4);
-    deepStrictEqual(index.references(uriOf('main.p8'), a, true).map(loc), [ 'main.p8 1:6-1:7', 'main.p8 2:4-2:5' ]);
-    deepStrictEqual(index.references(uriOf('main.p8'), a, false).map(loc), [ 'main.p8 2:4-2:5' ]);
+    const a = offsetIn(files, 'main.p8', 5, 4);
+    deepStrictEqual(index.references(uriOf('main.p8'), a, true).map(loc), [ 'main.p8 4:6-4:7', 'main.p8 5:4-5:5' ]);
+    deepStrictEqual(index.references(uriOf('main.p8'), a, false).map(loc), [ 'main.p8 5:4-5:5' ]);
   });
 
   const failedAnalysis = (files: Record<string, string>, failing = 'main.p8') => {
@@ -520,21 +522,21 @@ describe('ProjectIndex', () => {
   };
 
   it('falls back to an empty analysis when the analysis throws', () => {
-    const { index, logged } = failedAnalysis({ 'main.p8': 'function f() end' });
+    const { index, logged } = failedAnalysis({ 'main.p8': CART + 'function f() end' });
     deepStrictEqual(index.outline(uriOf('main.p8')), []);
     deepStrictEqual(index.warnings(uriOf('main.p8')), []);
     deepStrictEqual(logged, [ `Failed to analyse the project of ${uriOf('main.p8')}` ]);
   });
 
   it('takes the outline from the next project when the first one\'s analysis failed', () => {
-    const files = { 'a.p8': '#include common.lua', 'b.p8': '#include common.lua', 'common.lua': 'function helper()\n  local x = 1\nend' };
+    const files = { 'a.p8': CART + '#include common.lua', 'b.p8': CART + '#include common.lua', 'common.lua': 'function helper()\n  local x = 1\nend' };
     const { index, logged } = failedAnalysis(files, 'a.p8');
     deepStrictEqual(logged, [ `Failed to analyse the project of ${uriOf('a.p8')}` ]);
     deepStrictEqual(outlineLines(index.outline(uriOf('common.lua'))), [ 'helper() [Function]', '  x [Variable]' ]);
   });
 
   it('takes the warnings from the projects whose analysis did not fail', () => {
-    const files = { 'a.p8': '#include common.lua', 'b.p8': '#include common.lua', 'common.lua': 'function helper()\n  print(undefined_thing)\nend' };
+    const files = { 'a.p8': CART + '#include common.lua', 'b.p8': CART + '#include common.lua', 'common.lua': 'function helper()\n  print(undefined_thing)\nend' };
     const { index, logged } = failedAnalysis(files, 'a.p8');
     deepStrictEqual(logged, [ `Failed to analyse the project of ${uriOf('a.p8')}` ]);
     deepStrictEqual(index.warnings(uriOf('common.lua')).map(formatError), [ 'common.lua 2:8 undefined variable: undefined_thing' ]);
@@ -542,7 +544,7 @@ describe('ProjectIndex', () => {
 
   it('takes the outline, warnings and symbols of a cart whose analysis failed from its own project, though another cart includes it', () => {
     const other = 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\nfunction f0() end\n-->8\nfunction f1() print(nope) end\n';
-    const { index, logged } = failedAnalysis({ 'main.p8': '#include other.p8:1', 'other.p8': other }, 'other.p8');
+    const { index, logged } = failedAnalysis({ 'main.p8': CART + '#include other.p8:1', 'other.p8': other }, 'other.p8');
     deepStrictEqual(logged, [ `Failed to analyse the project of ${uriOf('other.p8')}` ]);
     deepStrictEqual([ index.outline(uriOf('other.p8')), index.warnings(uriOf('other.p8')), brief(index.workspaceSymbols('f')) ], [[], [], []]);
   });
@@ -555,7 +557,7 @@ describe('ProjectIndex', () => {
   });
 
   it('takes a file\'s symbols from the project its outline comes from, also when that project gives it none', () => {
-    const files = { 'a.p8': 'local x\n#include common.lua', 'b.p8': '#include common.lua', 'common.lua': 'x = 1' };
+    const files = { 'a.p8': CART + 'local x\n#include common.lua', 'b.p8': CART + '#include common.lua', 'common.lua': 'x = 1' };
     const index = scanned(files);
     deepStrictEqual([ index.outline(uriOf('common.lua')), brief(index.workspaceSymbols('x')).filter(([ , , file ]) => file === 'common.lua') ], [[], []]);
   });
@@ -581,9 +583,9 @@ describe('ProjectIndex', () => {
   });
 
   it('gives no hover and the builtin signature help when the analysis failed', () => {
-    const files = { 'main.p8': 'function f() end\nprint(' };
+    const files = { 'main.p8': CART + 'function f() end\nprint(' };
     const { index } = failedAnalysis(files);
-    eq(index.hover(uriOf('main.p8'), offsetIn(files, 'main.p8', 1, 9)), undefined);
+    eq(index.hover(uriOf('main.p8'), offsetIn(files, 'main.p8', 4, 9)), undefined);
     eq(index.signatureHelp(uriOf('main.p8'), files['main.p8'].length, callContextAt(files['main.p8'], files['main.p8'].length)!)!.signatures[0].label,
       builtinInfo('print')!.sig);
   });
@@ -591,17 +593,17 @@ describe('ProjectIndex', () => {
   const LOST_DEFINITIONS: [string, Record<string, string>, string, string[], string][] = [
     [
       'a deleted } leaves out the table that defines it',
-      { 'main.p8': '#include lib.lua\nenemies = { 1, 2\nfunction _draw()\n  print(#enemies, nope)\nend', 'lib.lua': 'function count() return #enemies end' },
-      '#include lib.lua\nenemies = { 1, 2 }\nfunction _draw()\n  print(#enemies, nope)\nend',
-      [ 'main.p8 3:0 \'}\' expected near \'function\'', 'main.p8 5:0 unexpected keyword \'end\' near \'<eof>\'' ],
-      'main.p8 4:18 undefined variable: nope',
+      { 'main.p8': CART + '#include lib.lua\nenemies = { 1, 2\nfunction _draw()\n  print(#enemies, nope)\nend', 'lib.lua': 'function count() return #enemies end' },
+      CART + '#include lib.lua\nenemies = { 1, 2 }\nfunction _draw()\n  print(#enemies, nope)\nend',
+      [ 'main.p8 6:0 \'}\' expected near \'function\'', 'main.p8 8:0 unexpected keyword \'end\' near \'<eof>\'' ],
+      'main.p8 7:18 undefined variable: nope',
     ],
     [
       'a line cut after = takes in the line below that defines it',
-      { 'main.p8': '#include lib.lua\nspeed =\nlives = 3\nprint(speed, lives, nope)', 'lib.lua': 'function hud() print(lives) end' },
-      '#include lib.lua\nspeed = 1\nlives = 3\nprint(speed, lives, nope)',
-      [ 'main.p8 3:6 unexpected symbol \'=\' near \'3\'' ],
-      'main.p8 4:20 undefined variable: nope',
+      { 'main.p8': CART + '#include lib.lua\nspeed =\nlives = 3\nprint(speed, lives, nope)', 'lib.lua': 'function hud() print(lives) end' },
+      CART + '#include lib.lua\nspeed = 1\nlives = 3\nprint(speed, lives, nope)',
+      [ 'main.p8 6:6 unexpected symbol \'=\' near \'3\'' ],
+      'main.p8 7:20 undefined variable: nope',
     ],
   ];
   for (const [ how, cart, fixed, errors, warning ] of LOST_DEFINITIONS) {
@@ -619,19 +621,19 @@ describe('ProjectIndex', () => {
 
   it('shows each error of a cart\'s parse in the file it is in, once, also one that the file\'s own parse does not find', () => {
     const index = scanned({
-      'labels.p8': '::a::\n#include lib.lua',
+      'labels.p8': CART + '::a::\n#include lib.lua',
       'lib.lua': '::a::\nprint(1)',
-      'one.p8': 'function f()\n#include va.lua\nend',
-      'two.p8': 'function g()\n#include va.lua\nend',
+      'one.p8': CART + 'function f()\n#include va.lua\nend',
+      'two.p8': CART + 'function g()\n#include va.lua\nend',
       'va.lua': 'x = ...',
-      'typo.p8': '#include bad.lua',
+      'typo.p8': CART + '#include bad.lua',
       'bad.lua': 'x = = 1',
     });
     const shown = (name: string) => index.diagnostics([ uriOf(name) ], 100)[0].diagnostics
       .map(d => `${d.range.start.line + 1}:${d.range.start.character} ${d.message}`);
     deepStrictEqual([ 'labels.p8', 'lib.lua', 'one.p8', 'two.p8', 'va.lua', 'typo.p8', 'bad.lua' ].map(shown), [
       [],
-      [ '1:2 label \'a\' already defined on line 1 of labels.p8' ],
+      [ '1:2 label \'a\' already defined on line 4 of labels.p8' ],
       [],
       [],
       [ '1:4 cannot use \'...\' outside a Vararg function near \'...\'' ],
@@ -642,7 +644,7 @@ describe('ProjectIndex', () => {
 
   it('shows in a file that a cart includes only the errors that the cart\'s parse, which pastes it in, finds there', () => {
     const index = scanned({
-      'main.p8': '#include open.lua\nend\nf()\n#include bad.lua',
+      'main.p8': CART + '#include open.lua\nend\nf()\n#include bad.lua',
       'open.lua': 'function f()\nprinth("in f")\n',
       'bad.lua': 'x = = 1',
       'alone.lua': 'function g()\n',
@@ -666,20 +668,20 @@ describe('ProjectIndex', () => {
   });
 
   it('resolves a fresh #include when update adds the file', () => {
-    const files: Record<string, string> = { 'main.p8': '#include lib.lua\nhelper()' };
+    const files: Record<string, string> = { 'main.p8': CART + '#include lib.lua\nhelper()' };
     const index = indexOver(files);
     index.scan([ uriOf('main.p8') ]);
-    eq(index.document(uriOf('main.p8'))!.errors.map(formatError).includes('main.p8 1:0 Can\'t #include "lib.lua" from main.p8: File does not exist'), true);
+    eq(index.document(uriOf('main.p8'))!.errors.map(formatError).includes('main.p8 4:0 Can\'t #include "lib.lua" from main.p8: File does not exist'), true);
     files['lib.lua'] = 'function helper() end';
     const resend = index.update(uriOf('lib.lua'));
     deepStrictEqual(index.document(uriOf('main.p8'))!.errors, []);
-    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 2, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 5, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
     eq(resend.includes(uriOf('main.p8')), true);
   });
 
   it('parses again only the files with an #include that could not be resolved when a file appears', () => {
     const files: Record<string, string> = {
-      'main.p8': '#include lib.lua\nhelper()', 'lib.lua': 'function helper() end', 'other.lua': 'x = 1', 'waiting.p8': '#include later.lua',
+      'main.p8': CART + '#include lib.lua\nhelper()', 'lib.lua': 'function helper() end', 'other.lua': 'x = 1', 'waiting.p8': CART + '#include later.lua',
     };
     const parsed: string[] = [];
     const index = indexOver(files, { parsed });
@@ -692,21 +694,21 @@ describe('ProjectIndex', () => {
   });
 
   it('shows the errors the cart\'s parse finds in a file it includes: an #include there is a plain #', () => {
-    const files: Record<string, string> = { 'main.p8': '#include a.lua\nhelper()', 'a.lua': '#include b.lua', 'b.lua': 'function helper() end' };
+    const files: Record<string, string> = { 'main.p8': CART + '#include a.lua\nhelper()', 'a.lua': '#include b.lua', 'b.lua': 'function helper() end' };
     const index = scanned(files);
     deepStrictEqual(index.document(uriOf('a.lua'))!.errors, []);
     deepStrictEqual(index.diagnostics([ uriOf('a.lua') ], 100)[0].diagnostics.map(d => `${d.range.start.line + 1}:${d.range.start.character} ${d.message}`),
       [ '1:0 unexpected symbol \'#\' near \'include\'' ]);
-    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 2, 0)), []);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 5, 0)), []);
   });
 
   it('keeps the project of a cart that another cart includes one tab of, for its outline, warnings and symbols', () => {
     const other = 'pico-8 cartridge // http://www.pico-8.com\nversion 42\n__lua__\nfunction f0() print(nope) end\n-->8\nfunction f1() end\n';
-    const files = { 'main.p8': '#include other.p8:1\nf1()', 'other.p8': other };
+    const files = { 'main.p8': CART + '#include other.p8:1\nf1()', 'other.p8': other };
     const index = scanned(files);
     deepStrictEqual(outlineLines(index.outline(uriOf('other.p8'))), [ 'f0() [Function]', 'f1() [Function]' ]);
     deepStrictEqual(index.warnings(uriOf('other.p8')).map(formatError), [ 'other.p8 4:20 undefined variable: nope' ]);
-    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 2, 0)).map(loc), [ 'other.p8 6:9-6:11' ]);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 5, 0)).map(loc), [ 'other.p8 6:9-6:11' ]);
     deepStrictEqual(brief(index.workspaceSymbols('f0')), [[ 'f0()', undefined, 'other.p8' ]]);
   });
 
@@ -727,27 +729,27 @@ describe('ProjectIndex', () => {
 
   it('adds the files a member includes, wherever they are, and drops them when nothing includes them', () => {
     const files: Record<string, string> = {};
-    const onDisk = new Map([[ 'main.p8', 'x = 1\n#include .shared/lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() return x end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + 'x = 1\n#include .shared/lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() return x end' ]]);
     const index = indexOver(files, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') });
     const lib = uriOf('.shared/lib.lua');
     eq(index.scan([ uriOf('main.p8') ]).includes(lib), true);
     deepStrictEqual(sorted(index.uris()), [ '.shared/lib.lua', 'main.p8' ]);
     deepStrictEqual(index.warnings(lib), []);
-    files['main.p8'] = 'x = 1\nhelper()';
+    files['main.p8'] = CART + 'x = 1\nhelper()';
     const resend = index.update(uriOf('main.p8'));
     deepStrictEqual([ resend.includes(lib), index.document(lib), index.analyses(lib), index.warnings(lib) ], [ true, undefined, [], []]);
     deepStrictEqual(sorted(index.uris()), [ 'main.p8' ]);
   });
 
   it('adds only the files a member includes itself, as PICO-8 follows no #include in an included file', () => {
-    const onDisk = new Map([[ 'main.p8', '#include ../lib/a.lua' ], [ 'a.lua', '#include b.lua' ], [ 'b.lua', 'function deep() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include ../lib/a.lua' ], [ 'a.lua', '#include b.lua' ], [ 'b.lua', 'function deep() end' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('game/main.p8') });
     index.scan([ uriOf('game/main.p8') ]);
     deepStrictEqual(sorted(index.uris()), [ 'game/main.p8', 'lib/a.lua' ]);
   });
 
   it('keeps the files a member still includes when others leave', () => {
-    const onDisk = new Map([[ 'main.p8', '#include ../b/inc.lua\nprint(undefined_a)' ], [ 'inc.lua', 'function inc_fn() end' ], [ 'extra.lua', 'print(undefined_b)' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include ../b/inc.lua\nprint(undefined_a)' ], [ 'inc.lua', 'function inc_fn() end' ], [ 'extra.lua', 'print(undefined_b)' ]]);
     let bIsMember = true;
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => uri.includes('/a/') || bIsMember });
     index.scan([ uriOf('a/main.p8'), uriOf('b/inc.lua'), uriOf('b/extra.lua') ]);
@@ -759,7 +761,7 @@ describe('ProjectIndex', () => {
   });
 
   it('sends every file again when a cart that another cart includes stops being a member, and so a root', () => {
-    const onDisk = new Map([[ 'main.p8', '#include ../b/other.p8' ], [ 'other.p8', 'function o() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include ../b/other.p8' ], [ 'other.p8', CART + 'function o() end' ]]);
     let bIsMember = true;
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => uri.includes('/a/') || bIsMember });
     index.scan([ uriOf('a/main.p8'), uriOf('b/other.p8') ]);
@@ -792,28 +794,28 @@ describe('ProjectIndex', () => {
   });
 
   it('drops a file that a member includes once no member includes it, and not the file it includes, which never joined', () => {
-    const files: Record<string, string> = { 'main.p8': '#include .shared/a.lua' };
+    const files: Record<string, string> = { 'main.p8': CART + '#include .shared/a.lua' };
     const onDisk = new Map([[ 'a.lua', '#include b.lua\nfunction fa() end' ], [ 'b.lua', '#include a.lua\nfunction fb() end' ]]);
     const index = indexOver(files, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') });
     index.update(uriOf('main.p8'));
     deepStrictEqual(sorted(index.uris()), [ '.shared/a.lua', 'main.p8' ]);
-    files['main.p8'] = 'x = 1';
+    files['main.p8'] = CART + 'x = 1';
     const resend = index.update(uriOf('main.p8'));
     deepStrictEqual([ sorted(index.uris()), sorted(resend) ], [[ 'main.p8' ], [ '.shared/a.lua', 'main.p8' ]]);
   });
 
   it('takes back a removed file that a member still includes', () => {
-    const onDisk = new Map([[ 'main.p8', '#include lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') });
     index.scan([ uriOf('main.p8') ]);
     const joins = index.joins();
     eq(index.removeAll([ uriOf('lib.lua') ]).includes(uriOf('lib.lua')), true);
     deepStrictEqual([ sorted(index.uris()), index.joins() ], [[ 'lib.lua', 'main.p8' ], joins + 1 ]);
-    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(Object.fromEntries(onDisk), 'main.p8', 2, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(Object.fromEntries(onDisk), 'main.p8', 5, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
   });
 
   it('counts the files that join', () => {
-    const onDisk = new Map([[ 'main.p8', '#include lib.lua' ], [ 'lib.lua', 'x = 1' ], [ 'more.lua', 'y = 2' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include lib.lua' ], [ 'lib.lua', 'x = 1' ], [ 'more.lua', 'y = 2' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk) });
     eq(index.joins(), 0);
     index.scan([ uriOf('main.p8') ]);
@@ -825,7 +827,7 @@ describe('ProjectIndex', () => {
   });
 
   it('does not count a file that joins and leaves in one call', () => {
-    const files = { 'main.p8': 'x = 1', 'loose.lua': 'y = 2' };
+    const files = { 'main.p8': CART + 'x = 1', 'loose.lua': 'y = 2' };
     const index = indexOver(files, { isMember: uri => nameOf(uri) === 'main.p8' });
     index.scan([ uriOf('main.p8') ]);
     eq(index.joins(), 1);
@@ -834,7 +836,7 @@ describe('ProjectIndex', () => {
   });
 
   it('knows which files are included, and which an #include waits for', () => {
-    const files: Record<string, string> = { 'main.p8': '#include lib.lua\n#include gone.lua', 'lib.lua': 'x = 1' };
+    const files: Record<string, string> = { 'main.p8': CART + '#include lib.lua\n#include gone.lua', 'lib.lua': 'x = 1' };
     const index = scanned(files);
     deepStrictEqual([ index.isIncluded(uriOf('lib.lua')), index.isIncluded(uriOf('main.p8')), index.isAwaited(uriOf('gone.lua')), index.isAwaited(uriOf('lib.lua')) ],
       [ true, false, true, false ]);
@@ -845,7 +847,7 @@ describe('ProjectIndex', () => {
 
   it('does not follow the #includes of a file that a member includes when it is opened, whatever comes after', () => {
     const files: Record<string, string> = {};
-    const onDisk = new Map([[ 'main.p8', '#include .shared/a.lua' ], [ 'a.lua', '#include b.lua\nfunction fa() end' ], [ 'b.lua', 'function fb() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include .shared/a.lua' ], [ 'a.lua', '#include b.lua\nfunction fa() end' ], [ 'b.lua', 'function fb() end' ]]);
     const index = indexOver(files, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') || files[nameOf(uri)] !== undefined });
     index.scan([ uriOf('main.p8') ]);
     const joins = index.joins();
@@ -859,7 +861,7 @@ describe('ProjectIndex', () => {
 
   it('settles membership as soon as a file is opened or closed', () => {
     const files: Record<string, string> = {};
-    const onDisk = new Map([[ 'main.p8', '#include .hidden/other.p8' ], [ 'other.p8', '#include x.lua\nfunction o() end' ], [ 'x.lua', 'function fx() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include .hidden/other.p8' ], [ 'other.p8', CART + '#include x.lua\nfunction o() end' ], [ 'x.lua', 'function fx() end' ]]);
     const index = indexOver(files, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') || files[nameOf(uri)] !== undefined });
     index.scan([ uriOf('main.p8') ]);
     const state = () => [ sorted(index.uris()), index.isIncluded(uriOf('.hidden/x.lua')), brief(index.workspaceSymbols('fx')) ];
@@ -876,7 +878,7 @@ describe('ProjectIndex', () => {
 
   it('sends a file again when it moves into the project of a cart that is opened', () => {
     const files: Record<string, string> = {};
-    const onDisk = new Map([[ 'main.p8', '#include .hidden/other.p8' ], [ 'other.p8', 'nope = 1\n#include ../lib.lua' ], [ 'lib.lua', 'print(nope)' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include .hidden/other.p8' ], [ 'other.p8', CART + 'nope = 1\n#include ../lib.lua' ], [ 'lib.lua', 'print(nope)' ]]);
     const index = indexOver(files, { disk: diskOf(onDisk), isMember: uri => [ uriOf('main.p8'), uriOf('lib.lua') ].includes(uri) || files[nameOf(uri)] !== undefined });
     index.scan([ uriOf('main.p8'), uriOf('lib.lua') ]);
     deepStrictEqual(index.warnings(uriOf('lib.lua')).map(formatError), [ 'lib.lua 1:6 undefined variable: nope' ]);
@@ -886,7 +888,7 @@ describe('ProjectIndex', () => {
   });
 
   it('makes a member a root when the member that includes it is in a project, along a chain of #includes', () => {
-    const onDisk = new Map([[ 'main.p8', '#include f.lua' ], [ 'f.lua', '#include r.lua' ], [ 'r.lua', '#include m.lua' ], [ 'm.lua', '#include .hidden/q.lua' ], [ 'q.lua', 'function fq() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include f.lua' ], [ 'f.lua', '#include r.lua' ], [ 'r.lua', '#include m.lua' ], [ 'm.lua', '#include .hidden/q.lua' ], [ 'q.lua', 'function fq() end' ]]);
     const members = [ 'main.p8', 'f.lua', 'r.lua', 'm.lua' ].map(uriOf);
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => members.includes(uri) });
     index.scan(members);
@@ -909,7 +911,7 @@ describe('ProjectIndex', () => {
 
   it('follows the #includes of a member that no project root includes, though another member includes it', () => {
     const onDisk = new Map([
-      [ 'main.p8', '#include f.lua' ], [ 'f.lua', '#include r.lua' ], [ 'r.lua', '#include .hidden/q.lua\nfunction fr() fq() end' ], [ 'q.lua', 'function fq() end' ],
+      [ 'main.p8', CART + '#include f.lua' ], [ 'f.lua', '#include r.lua' ], [ 'r.lua', '#include .hidden/q.lua\nfunction fr() fq() end' ], [ 'q.lua', 'function fq() end' ],
     ]);
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => [ uriOf('main.p8'), uriOf('f.lua'), uriOf('r.lua') ].includes(uri) });
     index.scan([ uriOf('main.p8'), uriOf('f.lua'), uriOf('r.lua') ]);
@@ -919,7 +921,7 @@ describe('ProjectIndex', () => {
   });
 
   it('does not follow the #includes of a member that a project root includes, as PICO-8 follows no #include in an included file', () => {
-    const onDisk = new Map([[ 'main.p8', '#include lib.lua' ], [ 'lib.lua', '#include ../shared/x.lua\nfunction l() end' ], [ 'x.lua', 'function x() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include lib.lua' ], [ 'lib.lua', '#include ../shared/x.lua\nfunction l() end' ], [ 'x.lua', 'function x() end' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => [ uriOf('game/main.p8'), uriOf('game/lib.lua') ].includes(uri) });
     index.scan([ uriOf('game/main.p8'), uriOf('game/lib.lua') ]);
     deepStrictEqual([ sorted(index.uris()), index.isIncluded(uriOf('game/lib.lua')), index.isIncluded(uriOf('shared/x.lua')) ],
@@ -927,7 +929,7 @@ describe('ProjectIndex', () => {
   });
 
   it('does not follow the #includes of a cart that a member includes whole and that is not a member', () => {
-    const onDisk = new Map([[ 'main.p8', '#include .hidden/other.p8' ], [ 'other.p8', '#include x.lua\nfunction o() end' ], [ 'x.lua', 'function fx() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include .hidden/other.p8' ], [ 'other.p8', CART + '#include x.lua\nfunction o() end' ], [ 'x.lua', 'function fx() end' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') });
     index.scan([ uriOf('main.p8') ]);
     deepStrictEqual([ sorted(index.uris()), index.isIncluded(uriOf('.hidden/x.lua')) ], [[ '.hidden/other.p8', 'main.p8' ], false ]);
@@ -935,21 +937,21 @@ describe('ProjectIndex', () => {
   });
 
   it('follows the #includes of a .lua member that no member includes', () => {
-    const onDisk = new Map([[ 'main.p8', 'x = 1' ], [ 'tool.lua', '#include ../shared/x.lua' ], [ 'x.lua', 'function x() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + 'x = 1' ], [ 'tool.lua', '#include ../shared/x.lua' ], [ 'x.lua', 'function x() end' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => [ uriOf('game/main.p8'), uriOf('game/tool.lua') ].includes(uri) });
     index.scan([ uriOf('game/main.p8'), uriOf('game/tool.lua') ]);
     deepStrictEqual([ sorted(index.uris()), index.isIncluded(uriOf('shared/x.lua')) ], [[ 'game/main.p8', 'game/tool.lua', 'shared/x.lua' ], true ]);
   });
 
   it('waits only for the files that a project root #includes', () => {
-    const onDisk = new Map([[ 'main.p8', '#include .shared/a.lua\n#include gone.lua' ], [ 'a.lua', '#include b.lua' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include .shared/a.lua\n#include gone.lua' ], [ 'a.lua', '#include b.lua' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') });
     index.scan([ uriOf('main.p8') ]);
     deepStrictEqual([ index.isAwaited(uriOf('gone.lua')), index.isAwaited(uriOf('.shared/b.lua')), index.awaitedUnder(uriOf('.shared')) ], [ true, false, []]);
   });
 
   it('lists the files under a folder that an #include waits for, which a scan of them links', () => {
-    const onDisk = new Map([[ 'main.p8', '#include .shared/lib.lua\n#include .shared/sub/x.lua\n#include .sharedx/y.lua' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include .shared/lib.lua\n#include .shared/sub/x.lua\n#include .sharedx/y.lua' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk), isMember: uri => uri === uriOf('main.p8') });
     index.scan([ uriOf('main.p8') ]);
     const awaited = index.awaitedUnder(uriOf('.shared'));
@@ -963,7 +965,7 @@ describe('ProjectIndex', () => {
   });
 
   it('drops several deleted files at once, parsing their includer once', () => {
-    const onDisk = new Map([[ 'main.p8', '#include lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ], [ 'other.lua', 'print(nope)' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ], [ 'other.lua', 'print(nope)' ]]);
     const parsed: string[] = [];
     const index = indexOver({}, { disk: diskOf(onDisk), parsed });
     index.scan([ uriOf('main.p8'), uriOf('lib.lua'), uriOf('other.lua') ]);
@@ -978,7 +980,7 @@ describe('ProjectIndex', () => {
   });
 
   it('parses nothing when a whole cart is removed', () => {
-    const onDisk = new Map([[ 'main.p8', '#include lib.lua' ], [ 'lib.lua', 'function helper() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include lib.lua' ], [ 'lib.lua', 'function helper() end' ]]);
     const parsed: string[] = [];
     const index = indexOver({}, { disk: diskOf(onDisk), parsed });
     index.scan([ uriOf('main.p8'), uriOf('lib.lua') ]);
@@ -989,32 +991,32 @@ describe('ProjectIndex', () => {
   });
 
   it('parses again a cart that read a file which a later scan finds', () => {
-    const onDisk = new Map([[ 'main.p8', '#include ../ws2/lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include ../ws2/lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk) });
     index.scan([ uriOf('ws1/main.p8') ]);
     // ws2 is not in the workspace yet, so no file watcher reports this.
     onDisk.set('lib.lua', '-- moved down\n\nfunction helper() end');
     index.scan([ uriOf('ws2/lib.lua') ]);
-    deepStrictEqual(index.definitions(uriOf('ws1/main.p8'), offsetIn({ 'main.p8': onDisk.get('main.p8')! }, 'main.p8', 2, 0)).map(loc),
+    deepStrictEqual(index.definitions(uriOf('ws1/main.p8'), offsetIn({ 'main.p8': onDisk.get('main.p8')! }, 'main.p8', 5, 0)).map(loc),
       [ 'lib.lua 3:9-3:15' ]);
   });
 
   it('resolves an #include of a file that a later scan finds, as when a folder is renamed to the name the #include writes', () => {
-    const onDisk = new Map([[ 'main.p8', '#include game2/lib.lua\nhelper()' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include game2/lib.lua\nhelper()' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk) });
     index.scan([ uriOf('main.p8') ]);
-    deepStrictEqual(index.document(uriOf('main.p8'))!.errors.map(formatError), [ 'main.p8 1:0 Can\'t #include "game2/lib.lua" from main.p8: File does not exist' ]);
+    deepStrictEqual(index.document(uriOf('main.p8'))!.errors.map(formatError), [ 'main.p8 4:0 Can\'t #include "game2/lib.lua" from main.p8: File does not exist' ]);
     onDisk.set('lib.lua', 'function helper() end');
     index.scan([ uriOf('game2/lib.lua') ]);
     deepStrictEqual(index.document(uriOf('main.p8'))!.errors.map(formatError), []);
-    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(Object.fromEntries(onDisk), 'main.p8', 2, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(Object.fromEntries(onDisk), 'main.p8', 5, 0)).map(loc), [ 'lib.lua 1:9-1:15' ]);
   });
 
   // Workspace folder b holds lib.lua, and the disk spells the folder B; ws1/main.p8 includes it as written.
   const spelledUnlikeTheDisk = (written = '../b/lib.lua') => {
     const files: Record<string, string> = {};
     const cache = new Map<string, string>();
-    const onDisk = new Map([[ 'main.p8', `x = 1\n#include ${written}\nhelper()` ], [ 'lib.lua', 'function helper() return x end' ]]);
+    const onDisk = new Map([[ 'main.p8', `${CART}x = 1\n#include ${written}\nhelper()` ], [ 'lib.lua', 'function helper() return x end' ]]);
     const disk: FileResolver = { ...diskOf(onDisk), onDiskName: p => p.replace(`${path.sep}b${path.sep}`, `${path.sep}B${path.sep}`) };
     const index = indexOver(files, { disk, cache, isMember: uri => !uri.includes('/B/') });
     index.scan([ uriOf('ws1/main.p8') ]);
@@ -1049,13 +1051,13 @@ describe('ProjectIndex', () => {
 
   it('resolves an #include of a file that a later scan finds in a folder spelled otherwise in case', () => {
     const cache = new Map<string, string>();
-    const onDisk = new Map([[ 'main.p8', 'x = 1\n#include ../b/lib.lua\nhelper()' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + 'x = 1\n#include ../b/lib.lua\nhelper()' ]]);
     const disk: FileResolver = {
       ...diskOf(onDisk), onDiskName: p => onDisk.has(path.basename(p)) ? p.replace(`${path.sep}b${path.sep}`, `${path.sep}B${path.sep}`) : undefined,
     };
     const index = indexOver({}, { disk, cache });
     index.scan([ uriOf('ws1/main.p8') ]);
-    deepStrictEqual(index.document(uriOf('ws1/main.p8'))!.errors.map(formatError), [ 'main.p8 2:0 Can\'t #include "../b/lib.lua" from main.p8: File does not exist' ]);
+    deepStrictEqual(index.document(uriOf('ws1/main.p8'))!.errors.map(formatError), [ 'main.p8 5:0 Can\'t #include "../b/lib.lua" from main.p8: File does not exist' ]);
     onDisk.set('lib.lua', 'function helper() return x end');
     cache.set(uriOf('B/lib.lua'), onDisk.get('lib.lua')!);
     index.scan([ uriOf('B/lib.lua') ]);
@@ -1066,20 +1068,20 @@ describe('ProjectIndex', () => {
 
   it('parses the includer again when a file it read before the editor had it is opened', () => {
     const files: Record<string, string> = {};
-    const onDisk = new Map([[ 'main.p8', '#include .shared/lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include .shared/lib.lua\nhelper()' ], [ 'lib.lua', 'function helper() end' ]]);
     const index = indexOver(files, { disk: diskOf(onDisk) });
     // The scan leaves out the dot-folder, and the file watcher does not report it.
     index.scan([ uriOf('main.p8') ]);
     onDisk.set('lib.lua', '-- moved down\n\nfunction helper() end');
     files['lib.lua'] = onDisk.get('lib.lua')!;
     index.update(uriOf('.shared/lib.lua'));
-    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn({ 'main.p8': onDisk.get('main.p8')! }, 'main.p8', 2, 0)).map(loc),
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn({ 'main.p8': onDisk.get('main.p8')! }, 'main.p8', 5, 0)).map(loc),
       [ 'lib.lua 3:9-3:15' ]);
   });
 
   it('drops an included file whose folder is deleted, and resolves its #include when it comes back', () => {
     const files: Record<string, string> = {};
-    const onDisk = new Map([[ 'main.p8', 'only_in_main = 1\n#include lib/x.lua\nhelper()' ], [ 'x.lua', 'function helper() return only_in_main end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + 'only_in_main = 1\n#include lib/x.lua\nhelper()' ], [ 'x.lua', 'function helper() return only_in_main end' ]]);
     const index = indexOver(files, { disk: diskOf(onDisk) });
     index.scan([ uriOf('main.p8'), uriOf('lib/x.lua') ]);
     const x = onDisk.get('x.lua')!;
@@ -1093,18 +1095,18 @@ describe('ProjectIndex', () => {
     onDisk.set('x.lua', x);
     index.update(uriOf('lib/x.lua'));
     deepStrictEqual(index.document(uriOf('main.p8'))!.errors, []);
-    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 3, 0)).map(loc), [ 'x.lua 1:9-1:15' ]);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 6, 0)).map(loc), [ 'x.lua 1:9-1:15' ]);
   });
 
   it('lists the fields a file sets on a function of its includer under the function\'s name', () => {
-    const index = scanned({ 'main.p8': 'local function f() end\n#include lib.lua', 'lib.lua': 'f.x = 1\nf.y = 2' });
+    const index = scanned({ 'main.p8': CART + 'local function f() end\n#include lib.lua', 'lib.lua': 'f.x = 1\nf.y = 2' });
     deepStrictEqual(outlineLines(index.outline(uriOf('lib.lua'))), [ 'f [Table]', '  x [Field]', '  y [Field]' ]);
-    const inBody = scanned({ 'main.p8': 'function _init()\n  #include lib.lua\nend', 'lib.lua': 'function helper() end\n_init.x = 1' });
+    const inBody = scanned({ 'main.p8': CART + 'function _init()\n  #include lib.lua\nend', 'lib.lua': 'function helper() end\n_init.x = 1' });
     deepStrictEqual(outlineLines(inBody.outline(uriOf('lib.lua'))), [ 'helper() [Function]', '_init [Table]', '  x [Field]' ]);
   });
 
   it('keeps the analysis of a project whose root is not parsed again', () => {
-    const files: Record<string, string> = { 'main.p8': '#include lib.lua', 'lib.lua': 'x = 1', 'other.p8': 'y = 2' };
+    const files: Record<string, string> = { 'main.p8': CART + '#include lib.lua', 'lib.lua': 'x = 1', 'other.p8': CART + 'y = 2' };
     const index = scanned(files);
     const [ other ] = index.analyses(uriOf('other.p8'));
     const [ main ] = index.analyses(uriOf('main.p8'));
@@ -1126,7 +1128,7 @@ describe('ProjectIndex', () => {
   };
 
   it('drops the files a cart includes when they are gone, and resolves them when they come back', () => {
-    const onDisk = new Map([[ 'main.p8', 'only_in_main = 1\n#include x.lua\n#include y.lua\nhelper()' ], [ 'x.lua', 'x = 1' ], [ 'y.lua', 'function helper() return only_in_main end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + 'only_in_main = 1\n#include x.lua\n#include y.lua\nhelper()' ], [ 'x.lua', 'x = 1' ], [ 'y.lua', 'function helper() return only_in_main end' ]]);
     const { files, index } = onDiskAndScanned(onDisk);
     const [ x, y ] = [ onDisk.get('x.lua')!, onDisk.get('y.lua')! ];
     // Their folder is deleted, which the file watcher reports for the folder only; then main.p8 is edited.
@@ -1141,7 +1143,7 @@ describe('ProjectIndex', () => {
     index.update(uriOf('x.lua'));
     index.update(uriOf('y.lua'));
     deepStrictEqual(index.document(uriOf('main.p8'))!.errors, []);
-    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 4, 0)).map(loc), [ 'y.lua 1:9-1:15' ]);
+    deepStrictEqual(index.definitions(uriOf('main.p8'), offsetIn(files, 'main.p8', 7, 0)).map(loc), [ 'y.lua 1:9-1:15' ]);
   });
 
   it('drops a file included by a removed file when it is gone too', () => {
@@ -1158,29 +1160,29 @@ describe('ProjectIndex', () => {
   });
 
   it('hovers over a function documented in an included file', () => {
-    const files = { 'main.p8': '#include lib.lua\nprint(dist(1, 2))', 'lib.lua': 'x = 1\n-- distance between\n-- two numbers\nfunction dist(a, b) return abs(a - b) end' };
-    eq(scanned(files).hover(uriOf('main.p8'), offsetIn(files, 'main.p8', 2, 6)), '```pico-8-lua\nfunction dist(a, b)\n```\n\ndistance between\ntwo numbers');
+    const files = { 'main.p8': CART + '#include lib.lua\nprint(dist(1, 2))', 'lib.lua': 'x = 1\n-- distance between\n-- two numbers\nfunction dist(a, b) return abs(a - b) end' };
+    eq(scanned(files).hover(uriOf('main.p8'), offsetIn(files, 'main.p8', 5, 6)), '```pico-8-lua\nfunction dist(a, b)\n```\n\ndistance between\ntwo numbers');
   });
 
   it('hovers from the first project by root URI', () => {
-    const files = { 'b.p8': 'x = 1\n-- from b\nplayer = {}\n#include common.lua', 'a.p8': 'x = 1\n-- from a\nplayer = {}\n#include common.lua', 'common.lua': 'print(player)' };
+    const files = { 'b.p8': CART + 'x = 1\n-- from b\nplayer = {}\n#include common.lua', 'a.p8': CART + 'x = 1\n-- from a\nplayer = {}\n#include common.lua', 'common.lua': 'print(player)' };
     eq(scanned(files).hover(uriOf('common.lua'), offsetIn(files, 'common.lua', 1, 6)), '```pico-8-lua\n(global) player = {\u2026}\n```\n\nfrom a');
   });
 
   it('hovers from a later project when the first has nothing to show', () => {
-    const files = { 'a.p8': '#include common.lua', 'b.p8': 'x = 1\n-- from b\nplayer = {}\n#include common.lua', 'common.lua': 'print(player)' };
+    const files = { 'a.p8': CART + '#include common.lua', 'b.p8': CART + 'x = 1\n-- from b\nplayer = {}\n#include common.lua', 'common.lua': 'print(player)' };
     eq(scanned(files).hover(uriOf('common.lua'), offsetIn(files, 'common.lua', 1, 6)), '```pico-8-lua\n(global) player = {\u2026}\n```\n\nfrom b');
   });
 
   it('gives signature help for a function from an included file', () => {
-    const files = { 'main.p8': '#include lib.lua\ndist(1, ', 'lib.lua': 'function dist(a, b) end' };
+    const files = { 'main.p8': CART + '#include lib.lua\ndist(1, ', 'lib.lua': 'function dist(a, b) end' };
     const help = scanned(files).signatureHelp(uriOf('main.p8'), files['main.p8'].length, callContextAt(files['main.p8'], files['main.p8'].length)!)!;
     eq(help.signatures[0].label, 'dist(a, b)');
     eq(help.activeParameter, 1);
   });
 
   it('lists each file once in workspace symbols, from the first project that contains it', () => {
-    const index = scanned({ 'a.p8': 'function a_init()\n  #include common.lua\nend', 'b.p8': '#include common.lua', 'common.lua': 'function helper() end' });
+    const index = scanned({ 'a.p8': CART + 'function a_init()\n  #include common.lua\nend', 'b.p8': CART + '#include common.lua', 'common.lua': 'function helper() end' });
     deepStrictEqual(brief(index.workspaceSymbols('helper')), [[ 'helper()', 'a_init', 'common.lua' ]]);
   });
 
@@ -1193,16 +1195,16 @@ describe('ProjectIndex', () => {
   });
 
   it('gives workspace symbols as SymbolInformation, and none for an empty query', () => {
-    const index = scanned({ 'main.p8': 'entity = {}\nfunction entity:update() end', 'f.lua': 'function f()\n  local x = 1\nend' });
+    const index = scanned({ 'main.p8': CART + 'entity = {}\nfunction entity:update() end', 'f.lua': 'function f()\n  local x = 1\nend' });
     deepStrictEqual(index.workspaceSymbols('update'), [{ name: 'entity:update()', kind: SymbolKind.Method,
-      location: { uri: uriOf('main.p8'), range: { start: { line: 1, character: 16 }, end: { line: 1, character: 22 } } } }]);
+      location: { uri: uriOf('main.p8'), range: { start: { line: 4, character: 16 }, end: { line: 4, character: 22 } } } }]);
     deepStrictEqual(index.workspaceSymbols('x'), [{ name: 'x', kind: SymbolKind.Variable,
       location: { uri: uriOf('f.lua'), range: { start: { line: 1, character: 8 }, end: { line: 1, character: 9 } } }, containerName: 'f' }]);
     deepStrictEqual(index.workspaceSymbols(''), []);
   });
 
   it('lists a file that only an #include reads', () => {
-    const onDisk = new Map([[ 'main.p8', '#include .shared/lib (2).lua\nhelper()' ], [ 'lib (2).lua', 'function helper() end' ]]);
+    const onDisk = new Map([[ 'main.p8', CART + '#include .shared/lib (2).lua\nhelper()' ], [ 'lib (2).lua', 'function helper() end' ]]);
     const index = indexOver({}, { disk: diskOf(onDisk) });
     // The scan leaves out the dot-folder.
     index.scan([ uriOf('main.p8') ]);
@@ -1210,21 +1212,21 @@ describe('ProjectIndex', () => {
   });
 
   it('shows the symbols of the current text', () => {
-    const files: Record<string, string> = { 'main.p8': 'function old_name() end' };
+    const files: Record<string, string> = { 'main.p8': CART + 'function old_name() end' };
     const index = scanned(files);
     deepStrictEqual(brief(index.workspaceSymbols('name')), [[ 'old_name()', undefined, 'main.p8' ]]);
-    files['main.p8'] = 'function new_name() end';
+    files['main.p8'] = CART + 'function new_name() end';
     index.update(uriOf('main.p8'));
     deepStrictEqual(brief(index.workspaceSymbols('name')), [[ 'new_name()', undefined, 'main.p8' ]]);
   });
 
   it('lists nothing from a project whose analysis failed', () => {
-    const { index } = failedAnalysis({ 'main.p8': 'function f() end' });
+    const { index } = failedAnalysis({ 'main.p8': CART + 'function f() end' });
     deepStrictEqual(index.workspaceSymbols('f'), []);
   });
 
   it('gives the outline and workspace symbols with the options asked for', () => {
-    const index = scanned({ 'main.p8': 'function move(p)\n  for i = 1, 2 do local s = i end\nend' });
+    const index = scanned({ 'main.p8': CART + 'function move(p)\n  for i = 1, 2 do local s = i end\nend' });
     deepStrictEqual(outlineLines(index.outline(uriOf('main.p8'))), [ 'move(p) [Function]', '  s [Variable]' ]);
     deepStrictEqual(outlineLines(index.outline(uriOf('main.p8'), ALL_OUTLINE_OPTIONS)),
       [ 'move(p) [Function]', '  p [Variable]', '  for i = 1, 2 [Block]', '    i [Variable]', '    s [Variable]' ]);

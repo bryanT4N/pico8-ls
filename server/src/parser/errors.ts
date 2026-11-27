@@ -38,6 +38,7 @@ export const errMessages = Object.freeze({
   codeTooLong: 'the code is longer than PICO-8 loads: %1 / %2 characters',
   programTooLong: 'program exceeds char limit: %1 / %2 chars',
   returnInCart: 'PICO-8 does not accept a return in the cart\'s outermost block',
+  notACart: 'PICO-8 does not load this .p8 file, whose first line, from its first p, does not start with \'pico-8 cartridge\'',
   endOfLineExpected: '<end of line> expected near \'%1\'',
   unusedLocal: '%1 is defined but not used',
 });

@@ -54,8 +54,8 @@ describe('PICO-8 limits of a cart', () => {
     assert.deepStrictEqual(cartErrors(`--${'a'.repeat(65521)}\r\nprinth("ok")\r\n`), [ 'main.p8 5:0 the code is longer than PICO-8 loads: 65537 / 65536 characters' ]);
     assert.deepStrictEqual(cartErrors(`--${'a'.repeat(65420)}${'⬅️'.repeat(100)}\nprinth("ok")\n`), []);
     assert.deepStrictEqual(cartErrors(`--${'a'.repeat(65420)}${'⬅️'.repeat(101)}\nprinth("ok")\n`), [ 'main.p8 5:0 the code is longer than PICO-8 loads: 65537 / 65536 characters' ]);
-    assert.deepStrictEqual(cartErrors(`--${'é'.repeat(32760)}\nprinth("ok")\n`), []);
-    assert.deepStrictEqual(cartErrors(`--${'é'.repeat(32761)}\nprinth("ok")\n`), [ 'main.p8 5:0 the code is longer than PICO-8 loads: 65538 / 65536 characters' ]);
+    assert.deepStrictEqual(cartErrors(`--${'\u00e9'.repeat(32760)}\nprinth("ok")\n`), []);
+    assert.deepStrictEqual(cartErrors(`--${'\u00e9'.repeat(32761)}\nprinth("ok")\n`), [ 'main.p8 5:0 the code is longer than PICO-8 loads: 65538 / 65536 characters' ]);
     assert.deepStrictEqual(cartErrors(`--${'a'.repeat(65218)}${'⬅'.repeat(101)}\nprinth("ok")\n`), [ 'main.p8 5:0 the code is longer than PICO-8 loads: 65537 / 65536 characters' ]);
   });
 
@@ -95,7 +95,7 @@ describe('PICO-8 limits of a cart', () => {
     // The count PICO-8 prints for each.
     for (const [ line, files, count ] of [
       [ '#include e.txt\n', { 'e.txt': '' }, 65540 ], [ '#include e.txt\n', { 'e.txt': 'x=1' }, 65543 ], [ '#include e.txt\n', { 'e.txt': 'x=1\r\n' }, 65544 ],
-      [ '#include e.txt\n', { 'e.txt': '--\r\r\r\n' }, 65543 ], [ '#include e.txt\n', { 'e.txt': '--⬅️é\n' }, 65546 ], [ '#include e\n', { 'e': 'x=1\n' }, 65544 ],
+      [ '#include e.txt\n', { 'e.txt': '--\r\r\r\n' }, 65543 ], [ '#include e.txt\n', { 'e.txt': '--⬅️\u00e9\n' }, 65546 ], [ '#include e\n', { 'e': 'x=1\n' }, 65544 ],
       [ '#include e.p8\n', { 'e.p8': 'x=1\n' }, 65544 ], [ '#include e.lua.txt\n', { 'e.lua.txt': 'x=1\n' }, 65545 ], [ '#include e.LUA\n', { 'e.LUA': 'x=1\n' }, 65545 ],
       [ '#include e.txt\n', { 'e.txt': `${HEAD}x=1\n` }, 65542 ], [ '#include e.lua\n', { 'e.lua': `${HEAD}x=1\n-->8\ny=2\n` }, 65545 ],
     ] as [string, Record<string, string>, number][]) {
@@ -106,6 +106,30 @@ describe('PICO-8 limits of a cart', () => {
   it('leaves the count with #include files out for a file taken whole that has a line -->8, which PICO-8 counts in a way not known', () => {
     assert.deepStrictEqual(charsWith('#include e.txt\n', { 'e.txt': 'x=1\n-->8\ny=2\n' }), []);
     assert.deepStrictEqual(charsWith('#include e.txt\n', { 'e.txt': 'x=1\n--8\ny=2\n' }), [ 'main.p8 4:0 program exceeds char limit: 65552 / 65536 chars' ]);
+  });
+
+  // The first lines with which PICO-8 0.2.7 loads a main .p8 file, and those with which it does not (5.load.*).
+  it('reports first that PICO-8 does not load a main .p8 file whose first line, from its first p, does not start with pico-8 cartridge, unless its path has .lua in it', () => {
+    const mainErrors = (text: string, filename = 'main.p8', files: Record<string, string> = {}) =>
+      parse(text, { filename, includeFileResolver: new TestFilesResolver(files) }).errors.map(formatError);
+    const notLoaded = 'main.p8 1:0 PICO-8 does not load this .p8 file, whose first line, from its first p, does not start with \'pico-8 cartridge\'';
+    const header = 'pico-8 cartridge // http://www.pico-8.com';
+    for (const text of [ header, `${header}\n`, `${header}\r\nversion 42\r\n__lua__\r\nx = 1\r\n`, 'pico-8 cartridge\n__lua__\n', 'pico-8 cartridgeX\n__lua__\n',
+      `xx ${header}\n`, `\t${header}\n`, `\ufeff${header}\n`, `\ufeff\ufeff${header}\n`, `\u00e9 ${header}\n`, `${header}\nversion 42\n__gfx__\n00\n` ]) {
+      assert.deepStrictEqual(mainErrors(text), [], JSON.stringify(text));
+    }
+    for (const text of [ '__lua__\nx = 1\n', 'pico-8 cart\n__lua__\n', 'PICO-8 CARTRIDGE // http://www.pico-8.com\n__lua__\n', `\n${header}\n`, `\r${header}\n`,
+      `up ${header}\n`, `p${header}\n`, `x = 1\n${header}\n__lua__\n` ]) {
+      assert.strictEqual(mainErrors(text)[0], notLoaded, JSON.stringify(text));
+    }
+    assert.deepStrictEqual([ mainErrors(''), mainErrors('x = 1\n') ], [[ notLoaded ], [ notLoaded ]]);
+    assert.deepStrictEqual(parse('x = 1\ny = 2', { filename: 'main.p8' }).errors.map(e => [ e.bounds.start.column, e.bounds.end.line, e.bounds.end.column ]), [[ 0, 1, 5 ]]);
+    assert.deepStrictEqual(mainErrors('= 1\nx = = 1'), [ notLoaded, 'main.p8 1:0 unexpected symbol \'=\' near \'1\'', 'main.p8 2:4 <expression> expected near \'=\'' ]);
+    assert.deepStrictEqual(mainErrors('x = 1', 'main.lua'), []);
+    for (const filename of [ 'game.lua/main.p8', 'game.LUAx/main.p8', 'main.lua.p8' ]) {
+      assert.deepStrictEqual(mainErrors('x = 1', filename), [], filename);
+    }
+    assert.deepStrictEqual(mainErrors(`${HEAD}#include e.p8\n`, 'main.p8', { 'e.p8': 'x = 1\n' }), []);
   });
 
   it('leaves the character counts out for code that has a U+FFFD, which stands for a byte that is not UTF-8 as well as for itself', () => {

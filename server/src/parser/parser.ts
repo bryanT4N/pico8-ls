@@ -305,6 +305,12 @@ export default class Parser {
     if (this.code.cart) {
       this.checkCharacters();
       this.checkTokens();
+    } else if (this.isCart() && !/\.lua/i.test(this.mainFile.path)) {
+      // PICO-8 does not load such a file, whatever it holds, and reads one whose path has .lua in it as Lua (5.load.*).
+      // The error is the first, on its first line.
+      const start = { index: 0, line: 1, column: 0, filename: this.mainFile };
+      const firstLineEnd = /[\r\n]|$/.exec(this.code.text)!.index;
+      this.errors.unshift(errors.createErr({ start, end: { ...start, index: firstLineEnd, column: firstLineEnd } }, errMessages.notACart));
     }
     this.sortErrors();
 

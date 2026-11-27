@@ -399,7 +399,7 @@ describe('values as PICO-8 reads them', () => {
 });
 
 describe('statements as PICO-8 reads them', () => {
-  const cartErrors = (code: string) => parse(code, { filename: 'main.p8' }).errors.map(formatError);
+  const cartErrors = (code: string) => parse(lines('pico-8 cartridge // http://www.pico-8.com', 'version 42', '__lua__', code), { filename: 'main.p8' }).errors.map(formatError);
 
   it('reads if (c) and while (c) as one-line forms when what follows c is on their line and c ends in no ) of its own', () => {
     assert.deepStrictEqual(errorsOf(lines('a=1', 'if (a)', 'x=1')), [ 'main_test_file 3:0 \'then\' expected near \'x\'' ]);
@@ -441,7 +441,7 @@ describe('statements as PICO-8 reads them', () => {
     assert.strictEqual(errorsOf(lines('function f()', 'return;;', 'end'))[0], 'main_test_file 2:7 \'end\' expected (to close \'function\' at line 1) near \';\'');
     assert.deepStrictEqual(errorsOf('do return 1; ; end'), [ 'main_test_file 1:13 \'end\' expected (to close \'do\' at line 1) near \';\'' ]);
     assert.deepStrictEqual(errorsOf(lines('function f(a)', 'if (a) return;;', 'end')), [ 'main_test_file 2:14 <end of line> expected near \';\'' ]);
-    assert.deepStrictEqual(cartErrors(lines('printh(1)', 'return;;')), [ 'main.p8 2:7 \'<eof>\' expected near \';\'' ]);
+    assert.deepStrictEqual(cartErrors(lines('printh(1)', 'return;;')), [ 'main.p8 5:7 \'<eof>\' expected near \';\'' ]);
   });
 
   it('names the block or bracket that a one-line body leaves open at the end of its line, a block as Lua does', () => {
@@ -453,10 +453,10 @@ describe('statements as PICO-8 reads them', () => {
 
   it('reports, in a cart, a return that ends its outermost block, and a goto there past a local to a label at its end', () => {
     for (const last of [ 'return', 'return 1', 'return;', 'return -- bye' ]) {
-      assert.deepStrictEqual(cartErrors(lines('printh("ok")', last)), [ 'main.p8 2:0 PICO-8 does not accept a return in the cart\'s outermost block' ], last);
+      assert.deepStrictEqual(cartErrors(lines('printh("ok")', last)), [ 'main.p8 5:0 PICO-8 does not accept a return in the cart\'s outermost block' ], last);
     }
-    assert.deepStrictEqual(cartErrors(lines('return 1', 'x=2')), [ 'main.p8 2:0 \'<eof>\' expected near \'x\'' ]);
-    assert.deepStrictEqual(cartErrors(lines('goto l', 'local q', '::l::')), [ 'main.p8 1:0 <goto l> jumps into the scope of local \'q\'' ]);
+    assert.deepStrictEqual(cartErrors(lines('return 1', 'x=2')), [ 'main.p8 5:0 \'<eof>\' expected near \'x\'' ]);
+    assert.deepStrictEqual(cartErrors(lines('goto l', 'local q', '::l::')), [ 'main.p8 4:0 <goto l> jumps into the scope of local \'q\'' ]);
     assert.deepStrictEqual(cartErrors(lines('do return end', 'if (a) return', 'do', 'goto l', 'local q', '::l::', 'end', 'function f()', 'goto m', 'local r', '::m::', 'end')), []);
     assert.deepStrictEqual(errorsOf(lines('printh("ok")', 'return')), []);
     assert.deepStrictEqual(errorsOf(lines('goto l', 'local q', '::l::')), []);
