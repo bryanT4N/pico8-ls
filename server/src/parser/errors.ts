@@ -29,7 +29,6 @@ export const errMessages = Object.freeze({
   labelNotVisible: 'no visible label \'%1\' for <goto>',
   gotoJumpInLocalScope: '<goto %1> jumps into the scope of local \'%2\'',
   cannotUseVararg: 'cannot use \'...\' outside a Vararg function near \'%1\'',
-  invalidCodeUnit: 'code unit U+%1 is not allowed in the current encoding mode',
   undefinedVariable: 'undefined variable: %1',
   tooManyLevels: 'too many nested levels (limit is %1) near \'%2\'',
   tooManyVariables: 'too many local variables (limit is %1) in %2 near \'%3\'',
@@ -80,10 +79,6 @@ export function createErr(bounds: Bounds, fmtMessage: string, ...rest: any[]): P
 export function createWarning(bounds: Bounds, fmtMessage: string, ...rest: any[]): Warning {
   const message = sprintf(fmtMessage, ...rest);
   return new Warning(message, bounds);
-}
-
-export function raiseErr(bounds: Bounds, fmtMessage: string, ...rest: any[]): never {
-  throw createErr(bounds, fmtMessage, ...rest);
 }
 
 export function createErrForToken(token: Token, fmtMessage: string, ...rest: any[]): ParseError {

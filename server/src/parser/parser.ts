@@ -466,12 +466,11 @@ export default class Parser {
       close = ']' + '='.repeat(open.level) + ']';
       if (!open.isComment) {
         const breaks = reached === 'end' && lexer !== this.lexer ? '\n\n' : '';
-        read = lexer.encodingMode.fixup(lexer.getLocation(),
-          lineFeeds(lexer.input.slice(from, reached === 'close' ? lexer.index - open.level - 2 : lexer.index)) + breaks);
+        read = lineFeeds(lexer.input.slice(from, reached === 'close' ? lexer.index - open.level - 2 : lexer.index)) + breaks;
       }
     }
-    if (read !== null && open.token.value !== null) {
-      open.token.value = open.token.value + read;
+    if (read !== null) {
+      open.token.value = (open.token.value as string) + read;
       open.token.quoted = open.token.quoted + read + (reached === 'close' ? close : '');
     }
     if (reached === 'include') {

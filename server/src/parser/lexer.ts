@@ -1,6 +1,5 @@
 import AST from './ast';
 import { Code, Run, textCode } from './code';
-import { EncodingMode, encodingModes, EncodingModeType } from './encoding-modes';
 import * as errors from './errors';
 import { errMessages } from './errors';
 import { Comment_ } from './expressions';
@@ -61,7 +60,6 @@ export default class Lexer {
   private runs?: Run[];
   private lineStarts?: number[];
   private readonly end?: Code['end'];
-  encodingMode: EncodingMode = encodingModes[EncodingModeType.XUserDefined];
 
   // Special flag that indicates we shouldn't skip over a newline, instead
   // treating it as a special newline token. This is useful for the special
@@ -452,7 +450,7 @@ export default class Lexer {
     while (isIdentifierPart(this.input.charCodeAt(this.index))) {
       this.index++;
     }
-    value = this.encodingMode.fixup(this.getLocation(), this.input.slice(this.tokenStart, this.index));
+    value = this.input.slice(this.tokenStart, this.index);
 
     // Decide on the token type and possibly cast the value.
     if (isKeyword(value)) {
@@ -492,7 +490,7 @@ export default class Lexer {
     const { value, reached } = this.readShortString(delimiter, false);
     const token = this.makeToken(TokenType.StringLiteral, value);
     // An unfinished string is quoted as far as it is read, without a closing quote (4.strtext.unf-*).
-    token.quoted = String.fromCharCode(delimiter) + (value ?? '') + (reached === 'close' ? String.fromCharCode(delimiter) : '');
+    token.quoted = String.fromCharCode(delimiter) + value + (reached === 'close' ? String.fromCharCode(delimiter) : '');
     if (reached === 'include' || (reached === 'end' && this.pasted)) {
       const unfinished = errors.createErr(this.getCurrentBounds(), errMessages.unfinishedString, tokenText(token));
       this.openBracket = { quote: delimiter, unfinished, include: reached === 'include' ? this.index : undefined };
@@ -506,13 +504,11 @@ export default class Lexer {
   // it unfinished: 'unfinished'. In the blanks and line breaks after a \z, which skipping starts in, it stops at the
   // end of the text: 'end', or at the # of an #include line of includeLines: 'include'; PICO-8 goes on skipping in the
   // text that comes next.
-  readShortString(delimiter: number, skipping: boolean): { value: string | null, reached: 'close' | 'unfinished' | 'end' | 'include' } {
-    let value = this.encodingMode.discardStrings ? null : '';
+  readShortString(delimiter: number, skipping: boolean): { value: string, reached: 'close' | 'unfinished' | 'end' | 'include' } {
+    let value = '';
     let partStart = this.index;
     const take = (end: number) => {
-      if (value !== null) {
-        value += this.encodingMode.fixup(this.getLocation(), this.input.slice(partStart, end));
-      }
+      value += this.input.slice(partStart, end);
     };
     for (;;) {
       while (skipping) {
@@ -554,10 +550,7 @@ export default class Lexer {
           skipping = true;
           continue;
         }
-        const escapeValue = this.readEscapeSequence();
-        if (value !== null) {
-          value += escapeValue;
-        }
+        value += this.readEscapeSequence();
         partStart = this.index;
       }
     }
@@ -570,12 +563,12 @@ export default class Lexer {
       return this.makeToken(TokenType.Punctuator, '[');
     }
 
-    const value = this.encodingMode.discardStrings ? null : this.encodingMode.fixup(this.getLocation(), lineFeeds(string));
+    const value = lineFeeds(string);
     const token = this.makeToken(TokenType.StringLiteral, value);
     const level = this.input.indexOf('[', this.tokenStart + 1) - this.tokenStart - 1;
     const close = ']' + '='.repeat(level) + ']';
     const closed = this.index - this.tokenStart >= 2 * level + 4 && this.input.startsWith(close, this.index - close.length);
-    token.quoted = '[' + '='.repeat(level) + '[' + (value ?? '') + (closed ? close : '');
+    token.quoted = '[' + '='.repeat(level) + '[' + value + (closed ? close : '');
     return token;
   }
 
