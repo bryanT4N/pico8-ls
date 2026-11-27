@@ -10,7 +10,7 @@
             "args": [
                 "--extensionDevelopmentPath=${workspaceRoot}"
             ],
-            "outFiles": ["${workspaceRoot}/client/out/**/*.js"],
+            "outFiles": ["${workspaceRoot}/client/out-min/**/*.js"],
             "preLaunchTask": {
                 "type": "npm",
                 "script": "compile-nomin"
@@ -24,21 +24,9 @@
             "restart": true,
             "preLaunchTask": {
                 "type": "npm",
-                "script": "compile"
+                "script": "compile-nomin"
             },
-            "outFiles": ["${workspaceRoot}/server/out/**/*.js"]
-        },
-        {
-            "name": "Language Server E2E Test",
-            "type": "extensionHost",
-            "request": "launch",
-            "runtimeExecutable": "${execPath}",
-            "args": [
-                "--extensionDevelopmentPath=${workspaceRoot}",
-                "--extensionTestsPath=${workspaceRoot}/client/out/test/index",
-                "${workspaceRoot}/client/testFixture"
-            ],
-            "outFiles": ["${workspaceRoot}/client/out/test/**/*.js"]
+            "outFiles": ["${workspaceRoot}/server/out-min/**/*.js"]
         },
         {
             "name": "npm test server",
