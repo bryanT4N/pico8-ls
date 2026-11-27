@@ -2,7 +2,6 @@ import * as path from 'path';
 import { ExtensionContext, languages, workspace } from 'vscode';
 import { CloseAction, ErrorAction, ErrorHandler, LanguageClient, LanguageClientOptions, Message, ServerOptions, State, TransportKind } from 'vscode-languageclient/node';
 import { DiagnosticsFilter, diagnosticsFilter, keptLanguages, switchLuaDocuments } from './lua-documents';
-import SemanticTokenProvider, { legend } from './semantic-token-provider';
 
 let defaultErrorHandler: ErrorHandler | undefined;
 
@@ -12,18 +11,6 @@ const picoDocuments = [
 ];
 
 export function activate(context: ExtensionContext): void {
-  languages.registerDocumentSemanticTokensProvider(
-    { language: 'pico-8', scheme: 'file' },
-    SemanticTokenProvider,
-    legend,
-  );
-
-  languages.registerDocumentSemanticTokensProvider(
-    { language: 'pico-8-lua', scheme: 'file' },
-    SemanticTokenProvider,
-    legend,
-  );
-
   const kept = keptLanguages(context);
   const filter = diagnosticsFilter(kept);
   const client = new LanguageClient(
