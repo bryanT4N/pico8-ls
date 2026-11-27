@@ -23,10 +23,25 @@ describe('excludeOf', () => {
       [ true, false, true, true, false, true, false, true, false, true, false ]);
   });
 
+  it('reads ** within a name as * is read there, not crossing a folder', () => {
+    const hidden = hiddenBy({ '**.lua': true, 'a**b': true, '**foo': true });
+    deepStrictEqual([ 'x.lua', 'aXb', 'xfoo', 'foo' ].map(hidden), [ true, true, true, true ]);
+    deepStrictEqual([ 'a/x.lua', 'a/Xb', 'a/xfoo' ].map(hidden), [ false, false, false ]);
+  });
+
   it('reads an absolute pattern over the whole path', () => {
     const exclude = excludeOf({ [`${path.resolve('/ws').split(path.sep).join('/')}/gen/**`]: true })!;
     deepStrictEqual([ 'gen/a.lua', 'b/gen/a.lua' ].map(relativePath => exclude(relativePath, path.join(path.resolve('/ws'), ...relativePath.split('/')))),
       [ true, false ]);
+  });
+
+  (process.platform === 'win32' ? it : it.skip)('reads an absolute pattern whatever the case of its drive letter and the path\'s, with / or \\', () => {
+    const file = 'c:\\Users\\x\\ws\\gen\\a.lua';
+    const upper = 'C:\\Users\\x\\ws\\gen\\a.lua';
+    deepStrictEqual([ 'C:/Users/x/ws/gen/**', 'c:/Users/x/ws/gen/**', 'C:\\Users\\x\\ws\\gen\\**' ].map(pattern => excludeOf({ [pattern]: true })!('gen/a.lua', file)),
+      [ true, true, true ]);
+    eq(excludeOf({ 'c:/Users/x/ws/gen/**': true })!('gen/a.lua', upper), true);
+    eq(excludeOf({ 'C:/Users/x/ws/other/**': true })!('gen/a.lua', file), false);
   });
 
   it('hides a file by a when clause only when the sibling it names is there', () => {
