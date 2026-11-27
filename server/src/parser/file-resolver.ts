@@ -111,6 +111,13 @@ function asWindowsReads(name: string): string {
   }).join('\\');
 }
 
+// A file's text as the editor has it in a document: without one BOM at its start, so that places in it are the editor's.
+// PICO-8 drops the one BOM too, and a second stays a character for both (si.pin.bom.comment, si.line.file.bom-twice).
+export function fileText(bytes: Buffer): string {
+  const text = bytes.toString();
+  return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+}
+
 export interface FileResolver {
   doesFileExist: (filepath: string) => boolean;
   isFile: (filepath: string) => boolean;
@@ -131,7 +138,7 @@ export class RealFileResolver implements FileResolver {
   }
 
   loadFileContents(filepath: string): string {
-    return fs.readFileSync(filepath).toString();
+    return fileText(fs.readFileSync(filepath));
   }
 
   onDiskName(filepath: string): string | undefined {

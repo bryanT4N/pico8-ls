@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import { performance } from 'perf_hooks';
+import { readCode } from '../code';
 import Lexer from '../lexer';
 import Parser from '../parser';
 import { Token, TokenType } from '../tokens';
@@ -12,7 +13,7 @@ const MAX_MS = 2000;
 // The tokens of the code that match, by line from 0: an = or a } in a comment or a string is none.
 function tokensOf(text: string, matches: (token: Token) => boolean): Map<number, Token[]> {
   const result = new Map<number, Token[]>();
-  const lexer = new Lexer(text, testFile());
+  const lexer = new Lexer(readCode(text), testFile());
   do {
     lexer.next();
     if (lexer.token!.type !== TokenType.EOF && matches(lexer.token!)) {

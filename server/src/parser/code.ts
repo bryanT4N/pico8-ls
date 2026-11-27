@@ -1,8 +1,9 @@
-// The code PICO-8 reads from a file: a cart's __lua__ sections, or the text of any other file. It is kept as runs of the
-// file's text, so that each place in the code has its place in the file.
+// The code PICO-8 reads from a file: a cart's __lua__ sections, or the text of any other file less its lone CRs. It is
+// kept as runs of the file's text, so that each place in the code has its place in the file. The text is the file's as
+// an editor has it, without the BOM it may start with (fileText).
 
-// The code from at on is the text from from on, up to the next run; a line break PICO-8 reads in place of a lone CR is
-// at the CR.
+// The code from at on is the text from from on, up to the next run; a line break PICO-8 reads in place of a lone CR in a
+// cart is at the CR.
 export type Run = { at: number, from: number };
 
 export type Code = {
@@ -17,19 +18,34 @@ export type Code = {
 
 const SECTIONS = [ '__lua__', '__gfx__', '__gff__', '__label__', '__map__', '__sfx__', '__music__', '__meta:' ];
 
-// PICO-8 drops one BOM at the start of a file (si.pin.bom.comment), and takes the file as a cart, whatever its name,
-// when its first line, from its first p on, starts with "pico-8 cartridge" (si.pin.kind.txt.text-before-header.0,
-// si.pin.head.blank-first, si.pin.kind.p8.header-mid-line1.1).
+// PICO-8 takes a file as a cart, whatever its name, when its first line, from its first p on, starts with
+// "pico-8 cartridge" (si.pin.kind.txt.text-before-header.0, si.pin.head.blank-first, si.pin.kind.p8.header-mid-line1.1).
+// In any other file it drops each CR that no LF follows: "--<CR>x = = 1" is a comment, and "pri<CR>nth()" calls printh
+// (si.t28.cr-dropped.*).
 export function readCode(text: string): Code {
-  const start = text.charCodeAt(0) === 0xFEFF ? 1 : 0;
-  let p = start;
+  let p = 0;
   while (p < text.length && text[p] !== 'p' && text[p] !== '\n' && text[p] !== '\r') {
     p++;
   }
-  if (!text.startsWith('pico-8 cartridge', p)) {
-    return { text, code: text.slice(start), runs: [{ at: 0, from: start }], cart: false };
+  if (text.startsWith('pico-8 cartridge', p)) {
+    return cartCode(text);
   }
-  return cartCode(text, start);
+  const runs: Run[] = [{ at: 0, from: 0 }];
+  let code = '';
+  let from = 0;
+  for (let cr = text.indexOf('\r'); cr >= 0; cr = text.indexOf('\r', cr + 1)) {
+    if (text.charCodeAt(cr + 1) !== 10) {
+      code += text.slice(from, cr);
+      from = cr + 1;
+      runs.push({ at: code.length, from });
+    }
+  }
+  return { text, code: from === 0 ? text : code + text.slice(from), runs, cart: false };
+}
+
+// A text read as code of its own, by none of the rules of a file.
+export function textCode(text: string): Code {
+  return { text, code: text, runs: [{ at: 0, from: 0 }], cart: false };
 }
 
 // A cart's lines as PICO-8 reads them: a lone CR is a line break that takes the character after it with it, and a CR
@@ -38,7 +54,7 @@ export function readCode(text: string): Code {
 // si.tab.cart.no-version.1). The code is the lines of every section that a line starting with __lua__ starts, up to a
 // line that starts as another section does (si.pin.head.two-lua-tabs-2, si.t28.section.main.gfxx,
 // si.t28.section.main.meta, si.t28.section.main.meta-no-colon).
-function cartCode(text: string, start: number): Code {
+function cartCode(text: string): Code {
   // The runs of the text that the code is made of, each with an LF after it when it ends at a lone CR.
   const pieces: { from: number, to: number, lf: boolean }[] = [];
   // Where the text of the last line of code ends, before its line break.
@@ -47,7 +63,7 @@ function cartCode(text: string, start: number): Code {
   let end: Code['end'];
   let inCode = false;
   let codeStart = text.length;
-  for (let i = start, line = 0; i < text.length; line++) {
+  for (let i = 0, line = 0; i < text.length; line++) {
     let j = i;
     while (j < text.length && text.charCodeAt(j) !== 10 && text.charCodeAt(j) !== 13) {
       j++;

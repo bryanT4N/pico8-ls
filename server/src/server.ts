@@ -10,7 +10,7 @@ import Parser from './parser/parser';
 import { boundsToString } from './parser/types';
 import { isParseError } from './parser/errors';
 import { builtinInfo } from './parser/builtins';
-import ResolvedFile, { pathToFileURL } from './parser/file-resolver';
+import ResolvedFile, { fileText, pathToFileURL } from './parser/file-resolver';
 import { Chunk } from './parser/statements';
 import { isScanned, isUnder, isWatched, listCartFiles, makeFileResolver, nearCart, ProjectDocument, ProjectIndex, scansFolder } from './projects';
 import * as url from 'url';
@@ -257,7 +257,7 @@ async function readFromDisk(uris: string[]) {
       return;
     }
     try {
-      diskText.set(uri, (await fs.promises.readFile(filePath)).toString());
+      diskText.set(uri, fileText(await fs.promises.readFile(filePath)));
     } catch (e) {
       console.error('Error reading ' + filePath, e);
     }
@@ -366,7 +366,7 @@ documents.onDidClose(e => {
   const filePath = pathOf(uri);
   let text: string | undefined;
   try {
-    text = fs.readFileSync(url.fileURLToPath(uri)).toString();
+    text = fileText(fs.readFileSync(url.fileURLToPath(uri)));
   } catch (err) {
     console.error('Error reading closed file ' + uri, err);
   }
@@ -503,7 +503,7 @@ connection.onDidChangeWatchedFiles(change => {
     }
     if (isWatched(filePath, workspaceRoots)) {
       try {
-        diskText.set(uri, fs.readFileSync(filePath).toString());
+        diskText.set(uri, fileText(fs.readFileSync(filePath)));
       } catch (e) {
         console.error('Error reading ' + uri, e);
       }

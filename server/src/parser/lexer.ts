@@ -1,5 +1,5 @@
 import AST from './ast';
-import { Code, readCode, Run } from './code';
+import { Code, Run, textCode } from './code';
 import { EncodingMode, encodingModes, EncodingModeType } from './encoding-modes';
 import * as errors from './errors';
 import { errMessages } from './errors';
@@ -84,9 +84,9 @@ export default class Lexer {
 
   filename: ResolvedFile;
 
-  // A file's text, of which the code PICO-8 reads is taken (readCode), or that code.
+  // The code PICO-8 reads from a file (readCode), or a text read as code of its own.
   constructor(input: string | Code, filename: ResolvedFile) {
-    const code = typeof input === 'string' ? readCode(input) : input;
+    const code = typeof input === 'string' ? textCode(input) : input;
     this.text = code.text;
     this.input = code.code;
     this.length = this.input.length;
@@ -206,11 +206,18 @@ export default class Lexer {
   private endOfCode(): Token {
     const token = this.makeToken(TokenType.EOF, '<eof>');
     if (this.end) {
-      // The section's line comes after the line break that ends the last line of the code.
-      const start = this.runs ? this.textPlace(this.end.index) : {
-        index: this.end.index, line: this.line + this.shift.line + lineBreaks(this.text, this.length + this.shift.index, this.end.index).breaks,
-        column: 0, filename: this.filename,
-      };
+      let start: CodeLocation;
+      if (this.runs) {
+        start = this.textPlace(this.end.index);
+      } else {
+        // The section's line comes after the line break that ends the last line of the code, which a lone CR can end
+        // with the character after it.
+        const { breaks, lineStart } = lineBreaks(this.text, this.length + this.shift.index, this.end.index);
+        start = {
+          index: this.end.index, line: this.line + this.shift.line + breaks,
+          column: this.end.index - (breaks > 0 ? lineStart : this.lineStart + this.shift.index), filename: this.filename,
+        };
+      }
       token.bounds = { start, end: { ...start, index: start.index + this.end.length, column: start.column + this.end.length } };
     }
     return token;

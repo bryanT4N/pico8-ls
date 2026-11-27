@@ -1,8 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 import * as assert from 'assert';
 import { ParseError } from '../errors';
+import { callContextAt } from '../../signature-help';
+import { Code, textCode } from '../code';
 import ResolvedFile from '../file-resolver';
 import Lexer from '../lexer';
+import Parser from '../parser';
 import { Token, TokenType, TokenValue } from '../tokens';
 import { deepEquals, getLexedTokens, lexWithErrors } from './test-utils';
 
@@ -327,6 +330,21 @@ __music__
 `;
     const tokens = getLexedTokens(code);
     assertNoMoreTokens(tokens);
+  });
+
+  it('reads a text given to it as code of its own, by none of the rules of a file, as a parser does code given to it', () => {
+    const text = 'x = "pico-8 cartridge"';
+    const file = new ResolvedFile('comment', 'comment');
+    const lexer = new Lexer(text, file);
+    lexer.next();
+    assert.deepStrictEqual([ lexer.token!.type, lexer.token!.value ], [ TokenType.Identifier, 'x' ]);
+    assert.deepStrictEqual(callContextAt('x = "pico-8 cartridge" .. f(', 28), { path: [ 'f' ], colon: false, argument: 0 });
+    // The text of a file is read as PICO-8 reads it, here a cart with no code.
+    const statements = (input: string | Code) => {
+      const chunk = new Parser(file, input).parseChunk();
+      return [ chunk.errors.length, chunk.block.body.length ];
+    };
+    assert.deepStrictEqual([ statements(text), statements(textCode(text)) ], [[ 0, 0 ], [ 0, 1 ]]);
   });
 
   describe('error handling', () => {

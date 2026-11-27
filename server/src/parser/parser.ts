@@ -113,11 +113,12 @@ export default class Parser {
 
   private levels = 0;
 
+  // The text of a file, read as PICO-8 reads it (readCode), or code, such as a text read as code of its own (textCode).
   // eslint-disable-next-line @typescript-eslint/ban-types
-  constructor(filename: ResolvedFile, input: string, options: ParserOptions = {}) {
+  constructor(filename: ResolvedFile, input: string | Code, options: ParserOptions = {}) {
     this.includeFileResolver = options?.includeFileResolver || new RealFileResolver();
 
-    this.lexer = new Lexer(input, filename);
+    this.lexer = new Lexer(typeof input === 'string' ? readCode(input) : input, filename);
     this.lexer.read = () => this.pull();
     this.lexer.includeLines = includeLinesOf(this.lexer.input);
     this.lexerStack = [ this.lexer ];

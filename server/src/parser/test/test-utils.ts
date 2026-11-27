@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as util from 'util';
 import { spawnSync } from 'child_process';
 import { fail } from 'assert';
+import { readCode } from '../code';
 import Lexer from '../lexer';
 import Parser, { ParserOptions } from '../parser';
 import { Token, TokenType, TokenValue } from '../tokens';
@@ -37,7 +38,7 @@ export function getLexedTokens(input: string): Token[] {
 }
 
 export function lexWithErrors(input: string): { tokens: Token[], errors: ParseError[], comments: Comment_[] } {
-  const lexer = new Lexer(input, new ResolvedFile('main_test_file', 'main_test_file'));
+  const lexer = new Lexer(readCode(input), new ResolvedFile('main_test_file', 'main_test_file'));
 
   const tokens: Token[] = [];
 
