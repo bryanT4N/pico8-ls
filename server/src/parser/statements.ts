@@ -1,5 +1,5 @@
 import { ParseError } from './errors';
-import { Comment_, Expression, Identifier, VarargLiteral, Variable, MemberExpression, getMemberExpressionName, Whitespace } from './expressions';
+import { Comment_, Expression, Identifier, VarargLiteral, Variable, MemberExpression, Whitespace } from './expressions';
 import ResolvedFile from './file-resolver';
 import { ASTNode } from './types';
 
@@ -123,18 +123,6 @@ export type FunctionDeclaration = ASTNode & {
 };
 
 export const AnonymousFunctionName = '<anonymous function>';
-
-export function getFunctionDeclarationName(funcDeclaration: FunctionDeclaration): string {
-  if (!funcDeclaration.identifier) {
-    return AnonymousFunctionName;
-  }
-
-  if (funcDeclaration.identifier.type === 'Identifier') {
-    return funcDeclaration.identifier.name;
-  }
-
-  return getMemberExpressionName(funcDeclaration.identifier) || AnonymousFunctionName;
-}
 
 export type Statement = LabelStatement | BreakStatement | GotoStatement | ReturnStatement | IfStatement
   | WhileStatement | DoStatement | RepeatStatement | LocalStatement | AssignmentStatement | CallStatement

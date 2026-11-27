@@ -18,10 +18,9 @@ export type Reference = { symbol: LuaSymbol, loc: Bounds, read: boolean, write: 
 
 export type Declared = { symbol: LuaSymbol, file: ResolvedFile, visibleFrom: number, order: number };
 
-// For a block whose closing keyword is missing, the end of loc is synthetic: only its index is meaningful. A scope
-// covers its text in every file it is in, whichever file it starts in: loc in the file it starts in, elsewhere in the
-// files after that one, as for a block that runs from an included file into the cart or from the cart into an included
-// file.
+// A scope covers its text in every file it is in, whichever file it starts in: loc in the file it starts in, elsewhere
+// in the files after that one, as for a block that runs from an included file into the cart or from the cart into an
+// included file.
 export type Scope = { kind: 'file' | 'function' | 'block', loc?: Bounds, elsewhere?: Bounds[], parent?: Scope, children: Scope[],
   declarations: Declared[] };
 

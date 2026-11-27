@@ -104,21 +104,6 @@ export type MemberExpression = ASTNode & {
   identifier: Identifier,
 };
 
-export function getMemberExpressionName(memberExpression: MemberExpression): string | undefined {
-  const names = [ memberExpression.identifier.name ];
-  let base = memberExpression.base;
-  while (base.type === 'MemberExpression') {
-    names.push(base.identifier.name);
-    base = base.base;
-  }
-  if (base.type !== 'Identifier') {
-    // It's a more complicated expression like `getValue().blah`
-    return undefined;
-  }
-  names.push(base.name);
-  return names.reverse().join('.');
-}
-
 // base[index]
 export type IndexExpression = ASTNode & {
   type: 'IndexExpression',
