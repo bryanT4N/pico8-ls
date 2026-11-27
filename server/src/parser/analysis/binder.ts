@@ -151,7 +151,7 @@ class Binder extends ASTVisitor<BinderScope> {
 
   createDefaultScope(scopeNode: VisitableASTNode | null): BinderScope {
     const loc = scopeNode?.loc;
-    const scope = new BinderScope(this.topScope().owner, 'block', { kind: 'block', loc, body: blockElsewhere(scopeNode), children: [], declarations: [] },
+    const scope = new BinderScope(this.topScope().owner, 'block', { kind: 'block', loc, elsewhere: scopeNode?.elsewhere, children: [], declarations: [] },
       isStatementWithBody(scopeNode) ? scopeNode.block : undefined);
     const outlineBlock = scopeNode ? this.outlineBlockOf(scopeNode) : undefined;
     if (outlineBlock) {
@@ -313,7 +313,7 @@ class Binder extends ASTVisitor<BinderScope> {
     }
     const owner: Owner = entry ?? this.topScope().owner;
 
-    const scope = new BinderScope(owner, 'function', { kind: 'function', loc: node.loc, body: blockElsewhere(node), children: [], declarations: [] },
+    const scope = new BinderScope(owner, 'function', { kind: 'function', loc: node.loc, elsewhere: node.elsewhere, children: [], declarations: [] },
       node.block);
 
     const firstParam = node.parameters[0];
@@ -1032,12 +1032,6 @@ class Binder extends ASTVisitor<BinderScope> {
     }
     return { kind: 'global', symbol: this.globalSymbol(name.name), entry: this.globalEntry(name) };
   }
-}
-
-// The block of a statement with one, when it is in another file than the statement starts in.
-function blockElsewhere(node: VisitableASTNode | null): Bounds | undefined {
-  const block = isStatementWithBody(node) ? node.block.loc : undefined;
-  return block && node!.loc && !block.start.filename.equals(node!.loc.start.filename) ? block : undefined;
 }
 
 // The range of the entries of target i. With several targets, each gets its own name and value, the first from the start

@@ -42,7 +42,7 @@ import {
 } from './statements';
 import { Token, TokenType } from './tokens';
 import * as path from 'path';
-import { ASTNode, Bounds, boundsClone } from './types';
+import { ASTNode, Bounds, boundsClone, CodeLocation } from './types';
 import Operators from './operators';
 
 // PICO-8 takes 256 #include lines in a cart and stops at the next one with "too many #includes" (3.includes-257).
@@ -69,8 +69,11 @@ export default class Parser {
   private readonly lexerStack: Lexer[];
 
   // The files pasted in, in the order of their #include lines, by the ResolvedFile of each, which its lexer alone has:
-  // the lexer, and the #include line in the main file.
-  private readonly pasted = new Map<ResolvedFile, { lexer: Lexer, line: Bounds }>();
+  // the lexer, the #include line in the main file, and where the file's code starts.
+  private readonly pasted = new Map<ResolvedFile, { lexer: Lexer, line: Bounds, start: CodeLocation }>();
+
+  // Where the #include line of each file pasted in starts, in order.
+  private readonly pasteLines: number[] = [];
 
   // The #include lines not yet placed in a block, each with the token that came after it (placeIncludes).
   private unplaced: { statement: IncludeStatement, next?: Token }[] = [];
@@ -83,8 +86,8 @@ export default class Parser {
   // The end-of-file token of each lexer that has read to its end.
   private readonly ends = new Map<ResolvedFile, Token>();
 
-  // The locations of the nodes that end in another file than the one they start in (finishNode).
-  private readonly crossing: Bounds[] = [];
+  // The nodes that end in another file than the one they start in, or that hold an #include line (finishNode).
+  private readonly spanning: ASTNode[] = [];
 
   // Locations are stored in a stack as a `Marker` object consisting of both
   // `loc` and `range` data. Once a `Marker` is popped off the stack an end
@@ -167,8 +170,8 @@ export default class Parser {
     if (location && endingToken) {
       location.complete(endingToken.bounds.end);
       location.bless(node as any as ASTNode);
-      if (endingToken.bounds.end.filename !== location.loc.start.filename) {
-        this.crossing.push(location.loc);
+      if (this.pasteLines.length > 0 && this.spans(location.loc)) {
+        this.spanning.push(node);
       }
     }
 
@@ -278,14 +281,61 @@ export default class Parser {
 
     // The outline, folding and the analysis take a node that runs from one file into another to end where its first file
     // stops being read: at the #include line of the file it runs into, or at the end of the pasted file it starts in,
-    // which has been read to its end by then.
-    for (const loc of this.crossing) {
-      loc.end = loc.start.filename === this.lexer.filename
-        ? this.pasted.get(loc.end.filename)!.line.end
-        : this.ends.get(loc.start.filename)!.bounds.end;
+    // which has been read to its end by then. Its text in the files after that one is kept apart, for the analysis.
+    for (const node of this.spanning) {
+      const loc = node.loc!;
+      const elsewhere = this.partsAfter(loc.start, loc.end);
+      if (elsewhere.length > 0) {
+        node.elsewhere = elsewhere;
+      }
+      if (loc.end.filename !== loc.start.filename) {
+        loc.end = loc.start.filename === this.lexer.filename
+          ? this.pasted.get(loc.end.filename)!.line.end
+          : this.ends.get(loc.start.filename)!.bounds.end;
+      }
     }
 
     return chunk;
+  }
+
+  // Whether a node ends in another file than it starts in, or holds the #include line of a file pasted in.
+  private spans(loc: Bounds): boolean {
+    if (loc.end.filename !== loc.start.filename) {
+      return true;
+    }
+    if (loc.start.filename !== this.lexer.filename) {
+      return false;
+    }
+    let low = 0;
+    let high = this.pasteLines.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (this.pasteLines[middle] <= loc.start.index) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return low < this.pasteLines.length && this.pasteLines[low] < loc.end.index;
+  }
+
+  // The text from start to end in the files after the one start is in: the main file's, from the #include line of the
+  // file start is in, and the files pasted in after that, whole or up to end.
+  private partsAfter(start: CodeLocation, end: CodeLocation): Bounds[] {
+    const main = this.lexer.filename;
+    const inMain = (at: CodeLocation) => at.filename === main ? at.index : this.pasted.get(at.filename)!.line.start.index + 0.5;
+    const from = inMain(start);
+    const to = inMain(end);
+    const parts: Bounds[] = [];
+    if (start.filename !== main) {
+      parts.push({ start: this.pasted.get(start.filename)!.line.end, end: end.filename === main ? end : this.pasted.get(end.filename)!.line.start });
+    }
+    for (const [ file, { line, start: code }] of this.pasted) {
+      if (from < line.start.index && line.start.index < to) {
+        parts.push({ start: code, end: file === end.filename ? end : this.ends.get(file)!.bounds.end });
+      }
+    }
+    return parts;
   }
 
   private lexerOf(file: ResolvedFile): Lexer {
@@ -354,7 +404,8 @@ export default class Parser {
       const lexer = new Lexer(text, resolvedInclude);
       lexer.pasted = true;
       this.lexerStack.push(lexer);
-      this.pasted.set(resolvedInclude, { lexer, line: line.bounds });
+      this.pasted.set(resolvedInclude, { lexer, line: line.bounds, start: lexer.getCurrentBounds().end });
+      this.pasteLines.push(line.bounds.start.index);
     }
   }
 

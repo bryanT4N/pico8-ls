@@ -178,6 +178,36 @@ describe('completionItems', () => {
     }
   });
 
+  it('offers in a block that runs from one file into another its locals and its own, in every file, whichever file it starts in', () => {
+    const rows: [string, Record<string, string>, number, number, string | undefined, string[]][] = [
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', '  ', 'end'), { 'a.lua': lines('for i = 1, k do', '') }, 4, 2, undefined, [ 'i', 'k', 'q' ]],
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', '  ', 'end'), { 'a.lua': lines('while k do', '') }, 4, 2, undefined, [ 'k', 'q' ]],
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', '  ', 'end'), { 'a.lua': lines('if k then', '') }, 4, 2, undefined, [ 'k', 'q' ]],
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', '  ', 'end'), { 'a.lua': lines('function f(p)', '') }, 4, 2, undefined, [ 'f', 'k', 'p', 'q' ]],
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', '  ', 'end'), { 'a.lua': lines('do', '') }, 4, 2, undefined, [ 'k', 'q' ]],
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', '  ', 'end'), { 'a.lua': lines('for i = 1, k do', '  local z = 1', '') }, 4, 2, undefined, [ 'i', 'k', 'q', 'z' ]],
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', '  ', 'end'), { 'a.lua': lines('function f(p)', '  local z = 1', '') }, 4, 2, undefined, [ 'f', 'k', 'p', 'q', 'z' ]],
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', 'end', ''), { 'a.lua': lines('for i = 1, k do', '') }, 5, 0, undefined, [ 'k' ]],
+      [ lines('local k = 1', 'for i =', '#include r.lua', ''), { 'r.lua': lines('1, k do', '  local q = 1', 'end') }, 4, 0, undefined, [ 'k' ]],
+      [ lines('local k = 1', 'if a then', 'elseif', '#include c.lua', ''), { 'c.lua': lines('k then', '  local q = 1', '  ', 'end') }, 3, 2, 'c.lua', [ 'k', 'q' ]],
+      [ lines('local k = 1', 'for i = 1, 2 do', ' for j =', '#include r.lua', ''), { 'r.lua': lines('1, k do', '  local q = 1', '  ', 'end', 'end') }, 3, 2, 'r.lua', [ 'i', 'j', 'k', 'q' ]],
+      [ lines('local k = 1', 'for i =', '#include r.lua', 'for j =', '#include r.lua', ''), { 'r.lua': lines('1, k do', '  local q = 1', '  ', 'end') }, 3, 2, 'r.lua', [ 'i', 'k', 'q' ]],
+      [ lines('local k = 1', 'while', '#include w.lua', ''), { 'w.lua': lines('k do', '  local q = 1', 'end', 'local after = 1', '  ') }, 5, 2, 'w.lua', [ 'after', 'k' ]],
+      [ lines('local k = 1', 'for i, v in', '#include r.lua', ''), { 'r.lua': lines('pairs(k) do', '  local q = 1', '  ', 'end') }, 3, 2, 'r.lua', [ 'i', 'k', 'q', 'v' ]],
+      [ lines('local k = 1', 'for i =', '#include r.lua', '  local w = 2', '  ', 'end'), { 'r.lua': lines('1, k do', '  local q = 1', '') }, 5, 2, undefined, [ 'i', 'k', 'q', 'w' ]],
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', '  ', 'end'), { 'a.lua': lines('do', '  local z = 1', '') }, 4, 2, undefined, [ 'k', 'q', 'z' ]],
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', '  ', 'end'), { 'a.lua': lines('while k do', '  local z = 1', '') }, 4, 2, undefined, [ 'k', 'q', 'z' ]],
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', '  ', 'end'), { 'a.lua': lines('if k then', '  local z = 1', '') }, 4, 2, undefined, [ 'k', 'q', 'z' ]],
+      [ lines('local k = 1', 'do', '#include a.lua', ''), { 'a.lua': lines('  local q = 1', '  ', 'end') }, 2, 2, 'a.lua', [ 'k', 'q' ]],
+      [ lines('local k = 1', 'function f(p)', '#include a.lua', ''), { 'a.lua': lines('  local q = 1', '  ', 'end') }, 2, 2, 'a.lua', [ 'f', 'k', 'p', 'q' ]],
+      [ lines('local k = 1', '#include a.lua', '  local q = 1', 'end'), { 'a.lua': lines('for i = 1, k do', '  local z = 1', '  ') }, 3, 2, 'a.lua', [ 'i', 'k', 'z' ]],
+      [ lines('local k = 1', 'for i =', '#include r.lua', '  local w = 2', 'end'), { 'r.lua': lines('1, k do', '  local q = 1', '  ') }, 3, 2, 'r.lua', [ 'i', 'k', 'q' ]],
+    ];
+    for (const [ code, files, line, column, file, offered ] of rows) {
+      deepStrictEqual(names(itemsAt(code, line, column, files, file)), offered, `${code} ${JSON.stringify(files)}`);
+    }
+  });
+
   it('sees the locals of the function an #include sits in', () => {
     const main = lines('function _init()', '  local speed = 1', '  #include lib.lua', 'end');
     const lib = { 'lib.lua': lines('local gravity = 2', 'function move()', '  ', 'end') };

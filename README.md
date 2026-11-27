@@ -33,7 +33,7 @@ Full support for `#include` statements:
 - Hover for your own functions, variables, fields, parameters and labels: their declaration and the comment written above them
 - Signature help for your own functions, with their comment and each parameter's `@param` text
 - Auto-completion
-- Support for `#include`ing other files. As in PICO-8, a file's code is read in place of its `#include` line, so a block can open in one file and close in the other, a file can give the value of an `x =` above it, and a long string or comment that a file leaves open goes on after its `#include` line. An included file, unless it is a cart, shows the errors that the code including it has in it with the file read in. Completion and signature help take code that runs from one file into another to end at the `#include` line, or at the end of the included file it starts in.
+- Support for `#include`ing other files. As in PICO-8, a file's code is read in place of its `#include` line, so a block can open in one file and close in the other, a file can give the value of an `x =` above it, and a long string or comment that a file leaves open goes on after its `#include` line. An included file, unless it is a cart, shows the errors that the code including it has in it with the file read in. For completion and signature help, a block whose code runs from one file into another holds its locals in every file it runs through, whichever file it starts in.
 - Snippets for common idioms (functions, loops, etc) as well as pico-8 symbols (`p8-jelpi` -> 🐱, `p8-x-key` -> ❎, etc)
 
 ## Which `.lua` files are PICO-8 Lua
