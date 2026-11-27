@@ -75,8 +75,8 @@ export default class Parser {
   // The #include lines not yet placed in a block, each with the token that came after it (placeIncludes).
   private unplaced: { statement: IncludeStatement, next?: Token }[] = [];
 
-  // A long string or comment that a pasted file left open, still being read (goOnInBracket), with its token: the
-  // string's, or the end of that file for a comment.
+  // A long string or comment that runs past the end of a pasted file or past an #include line (Lexer.openBracket),
+  // still being read (goOnInBracket), with the token lex() gave then, the string's when it is a string.
   private open?: { level: number, isComment: boolean, unfinished: errors.ParseError, token: Token };
 
   // The end-of-file token of each lexer that has read to its end.
@@ -114,6 +114,7 @@ export default class Parser {
 
     this.lexer = new Lexer(input, filename);
     this.lexer.read = () => this.pull();
+    this.lexer.includeLines = includeLinesOf(input, filename);
     this.lexerStack = [ this.lexer ];
   }
 
@@ -306,8 +307,13 @@ export default class Parser {
         continue;
       }
       if (lexer.openBracket) {
-        this.open = { ...lexer.openBracket, token };
+        const { include, ...open } = lexer.openBracket;
+        this.open = { ...open, token };
         lexer.openBracket = undefined;
+        if (include !== undefined) {
+          this.paste(lexer.readIncludeLine(include));
+          continue;
+        }
         if (token.type !== TokenType.EOF) {
           continue;
         }
@@ -319,8 +325,8 @@ export default class Parser {
           this.takeComments(lexer);
           continue;
         }
-      } else if (lexer === this.lexer && token.type === TokenType.Punctuator && token.value === '#' && this.isIncludeLine(token)) {
-        this.paste(lexer.readRestOfLine());
+      } else if (token.type === TokenType.Punctuator && token.value === '#' && lexer.includeLines?.has(token.bounds.start.index)) {
+        this.paste(lexer.readIncludeLine(token.bounds.start.index));
         continue;
       }
       for (let i = this.unplaced.length - 1; i >= 0 && !this.unplaced[i].next; i--) {
@@ -351,21 +357,23 @@ export default class Parser {
     }
   }
 
-  // PICO-8 pastes a file's text in with two line breaks after it, so a long string or comment that the file leaves open
-  // goes on after its #include line, also into the files of #include lines there, to its close (3.open-long-string,
-  // 3f.string-codes, 3f.chain-codes, 3f.comment-include-closes). Undefined when there is no token yet: a comment, or an
-  // #include line read; the end of a pasted file is its end-of-file token, for pull to go on after it.
+  // PICO-8 pastes a file's text in with two line breaks after it, and a long string or comment goes on through the text
+  // so pasted together to its close: one that a pasted file leaves open goes on after its #include line, and one that
+  // reaches an #include line that PICO-8 reads (includeLinesOf) goes on in that file (3.open-long-string,
+  // 3.open-long-string-codes, 3.open-long-comment-include-closes, 3.alone-code-real-comment). Undefined when there is no
+  // token yet: a comment, or an #include line read; the end of a pasted file is its end-of-file token, for pull to go on
+  // after it.
   private goOnInBracket(lexer: Lexer): Token | undefined {
     const open = this.open!;
     const from = lexer.index;
-    const reached = lexer.closeLongBracket(open.level, lexer === this.lexer);
+    const reached = lexer.closeLongBracket(open.level);
     if (!open.isComment && open.token.value !== null) {
       const read = lexer.input.slice(from, reached === 'close' ? lexer.index - open.level - 2 : lexer.index);
       const breaks = reached === 'end' && lexer !== this.lexer ? '\n\n' : '';
       open.token.value = open.token.value + lexer.encodingMode.fixup(lexer.getLocation(), read + breaks);
     }
     if (reached === 'include') {
-      this.paste(lexer.readRestOfLine());
+      this.paste(lexer.readIncludeLine(lexer.index));
       return undefined;
     }
     if (reached === 'end' && lexer !== this.lexer) {
@@ -373,6 +381,10 @@ export default class Parser {
     }
     this.open = undefined;
     if (reached === 'end') {
+      // One of the main file's own stopped at an #include line, but reaches the end of the file, as Lua reports it.
+      if (open.unfinished.bounds.start.filename === lexer.filename) {
+        open.unfinished.bounds.end = lexer.getCurrentBounds().end;
+      }
       this.errors.push(open.unfinished);
     }
     if (open.isComment) {
@@ -1127,14 +1139,6 @@ export default class Parser {
     return args;
   }
 
-  // PICO-8 reads #include only at the start of a line of the cart's own code, in lower case and followed by a space
-  // (3.after-code, 3.upper, 3.tab-after-include, 3.nested): elsewhere the # is the length operator.
-  private isIncludeLine(token: Token): boolean {
-    const { index, column } = token.bounds.start;
-    const input = this.lexer.input;
-    return /^[ \t]*$/.test(input.slice(index - column, index)) && input.startsWith('#include ', index);
-  }
-
   getIncludeStatementError(statement: IncludeStatement, errorMessage: string) {
     return new errors.ParseError(`Can't #include "${statement.filename}" from ${path.basename(this.mainFile.path)}: ${errorMessage}`, statement.loc!);
   }
@@ -1625,6 +1629,29 @@ function isBlockFollow(token: Token) {
 
 function isEndOfFile(token: Token) {
   return token.type === TokenType.EOF;
+}
+
+// Where the # of each #include line that PICO-8 reads is, or undefined for none. PICO-8 reads #include only at the start
+// of a line of the cart's own code, in lower case and followed by a space (3.after-code, 3.upper, 3.tab-after-include,
+// 3.nested), and only where the cart's own text, read alone, is outside a long string or comment, whatever a pasted
+// file leaves open (3.alone-str-cart-comment-level, 3.alone-code-real-comment); short strings and line comments are
+// read as Lua reads them (3.scan-dq-string, 3.scan-line-comment-space, 3.scan-slash-long). Elsewhere the # is the length
+// operator.
+function includeLinesOf(input: string, filename: ResolvedFile): Set<number> | undefined {
+  if (!input.includes('#include ')) {
+    return undefined;
+  }
+  const lines = new Set<number>();
+  const alone = new Lexer(input, filename);
+  for (let token = alone.lex(); token.type !== TokenType.EOF; token = alone.lex()) {
+    const { index, column } = token.bounds.start;
+    if (token.type === TokenType.Punctuator && token.value === '#' && /^[ \t]*$/.test(input.slice(index - column, index))
+        && input.startsWith('#include ', index)) {
+      lines.add(index);
+      alone.readIncludeLine(index);
+    }
+  }
+  return lines;
 }
 
 // An #include line is no statement to Lua, which reads the file's code in its place.

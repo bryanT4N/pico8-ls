@@ -65,9 +65,12 @@ export default class Lexer {
   // Set for a file that the parser pastes in, where a long string or comment can go on past the end of the text
   // (openBracket).
   pasted = false;
-  // A long string or comment that a pasted file leaves open: its level, and the error to give when nothing after the
-  // file closes it.
-  openBracket?: { level: number, isComment: boolean, unfinished: errors.ParseError };
+  // Set for the main file: where the # of each #include line that PICO-8 reads is. A long string or comment stops at
+  // one, for the parser to paste the file in and go on in it (openBracket).
+  includeLines?: Set<number>;
+  // A long string or comment that goes on past the end of a pasted file, or past an #include line of the main file that
+  // PICO-8 reads, whose # is at include: its level, and the error to give when nothing closes it.
+  openBracket?: { level: number, isComment: boolean, unfinished: errors.ParseError, include?: number };
 
   filename: ResolvedFile;
 
@@ -818,12 +821,15 @@ export default class Lexer {
     }
 
     const stringStart = this.index;
-    if (this.closeLongBracket(level) === 'close') {
+    const reached = this.closeLongBracket(level);
+    if (reached === 'close') {
       return this.input.slice(stringStart, this.index - level - 2);
     }
     const unfinished = errors.createErr(this.getCurrentBounds(), isComment ? errMessages.unfinishedLongComment : errMessages.unfinishedLongString,
       firstLine, '<eof>');
-    if (this.pasted) {
+    if (reached === 'include') {
+      this.openBracket = { level, isComment, unfinished, include: this.index };
+    } else if (this.pasted) {
       this.openBracket = { level, isComment, unfinished };
     } else {
       this.errors.push(unfinished);
@@ -832,23 +838,25 @@ export default class Lexer {
   }
 
   // Reads on to the close of a long bracket of the level, ]] or ]=] and so on, and past it; or to the end of the code;
-  // or, with atInclude, to the # of the next line that starts with #include.
-  closeLongBracket(level: number, atInclude = false): 'close' | 'end' | 'include' {
+  // or to the # of an #include line of includeLines.
+  closeLongBracket(level: number): 'close' | 'end' | 'include' {
     // PICO-8 ends a cart's code at the next section even inside a long string
     // or comment. The line break is left for lex(), which ends the code there.
     while (this.index < this.length && !this.isBeforeNextSection()) {
-      if (this.consumeEOL()) {
+      if (this.includeLines && this.index === this.lineStart) {
         let hash = this.index;
-        while (atInclude && (this.input.charCodeAt(hash) === 32 || this.input.charCodeAt(hash) === 9)) {
+        while (this.input.charCodeAt(hash) === 32 || this.input.charCodeAt(hash) === 9) {
           hash++;
         }
-        if (atInclude && this.input.startsWith('#include ', hash)) {
-          this.index = this.tokenStart = hash;
-          this.tokenStartLine = this.line;
-          this.tokenStartLineIdx = this.lineStart;
+        if (this.includeLines.has(hash)) {
+          this.index = hash;
           return 'include';
         }
-      } else if (this.input.charAt(this.index++) === ']' && this.input.startsWith('='.repeat(level) + ']', this.index)) {
+      }
+      if (this.consumeEOL()) {
+        continue;
+      }
+      if (this.input.charAt(this.index++) === ']' && this.input.startsWith('='.repeat(level) + ']', this.index)) {
         this.index += level + 1;
         return 'close';
       }
@@ -910,12 +918,15 @@ export default class Lexer {
     }
   }
 
-  // The token lex() just read and the rest of its line, as one token: the line of an #include.
-  readRestOfLine(): Token {
+  // The #include line whose # is at from, on the line being read, as one token up to the end of the line.
+  readIncludeLine(from: number): Token {
+    this.index = this.tokenStart = from;
+    this.tokenStartLine = this.line;
+    this.tokenStartLineIdx = this.lineStart;
     while (this.index < this.length && !isLineTerminator(this.input.charCodeAt(this.index))) {
       this.index++;
     }
-    return this.makeToken(TokenType.Raw, this.input.slice(this.tokenStart, this.index));
+    return this.makeToken(TokenType.Raw, this.input.slice(from, this.index));
   }
 
   // Consume a token if its value matches. Once consumed or not, return the

@@ -147,6 +147,31 @@ describe('#include', function () {
       [ 'a.lua 1:2 unfinished long string (starting at line 1) near \'<eof>\'' ]);
   });
 
+  it('reads an #include line only where the cart\'s own text, read alone, is outside a long string or comment, as PICO-8 does', () => {
+    const read = (code: string, files: Record<string, string>): [string[], unknown] => {
+      const chunk = parseWith(code, files);
+      const assignment = chunk.block.body.find((s): s is AssignmentStatement => s.type === 'AssignmentStatement');
+      return [ chunk.errors.map(formatError), (assignment?.init[0] as StringLiteral | undefined)?.value ];
+    };
+    assert.deepStrictEqual(read('#include a.lua\n--[[\n#include nope.lua\n]]\nprinth("ok")', { 'a.lua': 's=[[abc\n' }),
+      [[], 'abc\n\n\n\n--[[\n#include nope.lua\n' ]);
+    assert.deepStrictEqual(read('#include a.lua\nx=[[\n#include nope.lua\n]]\nprinth("ok")', { 'a.lua': '--[[\n' }), [[], undefined ]);
+    assert.deepStrictEqual(read('#include a.lua\n--[==[\n]]\n#include nope.lua\n]==]\nprinth("ok")', { 'a.lua': 's=[[abc\n' })[0][0],
+      'main_test_file 4:0 unexpected symbol \'#\' near \'include\'');
+    const opensHere = '#include a.lua\n--[==[\n]]\n--[[\n]==]\n';
+    assert.deepStrictEqual(read(opensHere + '#include nope.lua\n]]\nprinth("ok")', { 'a.lua': 's=[[\n' })[0],
+      [ 'main_test_file 6:0 Can\'t #include "nope.lua" from main_test_file: File does not exist' ]);
+    assert.deepStrictEqual(read(opensHere + '#include b.lua\nprinth("ok")', { 'a.lua': 's=[[\n', 'b.lua': ']]\n' })[0], []);
+    const unclosed = parseWith(opensHere + '#include b.lua\nprinth("x")', { 'a.lua': 's=[[\n', 'b.lua': 'y=1\n' }).errors;
+    assert.deepStrictEqual([ unclosed.map(formatError), unclosed[0].bounds.end.line, unclosed[0].bounds.end.column ],
+      [[ 'main_test_file 4:0 unfinished long comment (starting at line 4) near \'<eof>\'' ], 7, 11 ]);
+    assert.deepStrictEqual(read('#include x[[.lua\n#include nope.lua', { 'x[[.lua': 'a=1' })[0],
+      [ 'main_test_file 2:0 Can\'t #include "nope.lua" from main_test_file: File does not exist' ]);
+    for (const above of [ 's="[["', 's=\'[[\'', '-- [[', '// [[', '//[[' ]) {
+      assert.deepStrictEqual(read(above + '\n#include nope.lua', {})[0], [ 'main_test_file 2:0 Can\'t #include "nope.lua" from main_test_file: File does not exist' ], above);
+    }
+  });
+
   it('resolves an #include after an included file next to the cart', () => {
     const { errors, block } = parseWith('#include sub/a.lua\n#include b.lua\nprint(1)', {
       'sub/a.lua': 'x = 1',
