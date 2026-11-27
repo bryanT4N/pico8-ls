@@ -442,6 +442,22 @@ __music__
       assert.deepStrictEqual(lexWithErrors('0b. 0b.1 0b1.').errors.map(formatLexError), [ '1:0 malformed number near \'0b.\'' ]);
     });
 
+    it('errors on a number that starts with .0x or .0b, as PICO-8 reads its hexadecimal or binary digits and dots', () => {
+      const { tokens, errors } = lexWithErrors('.0x1.8 .0x1g .0b12 .0B .0X1p4 .0b1..1 .00x1 .1x1 10x1');
+      for (const type of [ 'N', 'N', 'I', 'N', 'N', 'N', 'N', 'I', 'N', 'N', 'I', 'N', 'I', 'N', 'I' ]) {
+        assertNextToken(tokens, type === 'N' ? TokenType.NumericLiteral : TokenType.Identifier);
+      }
+      assertNoMoreTokens(tokens);
+      assert.deepStrictEqual(errors.map(formatLexError), [
+        '1:0 malformed number near \'.0x1.8\'',
+        '1:7 malformed number near \'.0x1\'',
+        '1:13 malformed number near \'.0b1\'',
+        '1:19 malformed number near \'.0B\'',
+        '1:23 malformed number near \'.0X1\'',
+        '1:30 malformed number near \'.0b1..1\'',
+      ]);
+    });
+
     it('errors on a decimal escape over 255', () => {
       const { tokens, errors } = lexWithErrors('"\\256" "\\255" "\\2555"');
       assertNextToken(tokens, TokenType.StringLiteral);

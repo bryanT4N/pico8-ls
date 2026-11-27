@@ -936,13 +936,13 @@ __music__
         deepEquals(messagesOf(`x = 1 ${number}`), [ `main_test_file 1:6 unexpected number '${number}' near '<eof>'` ]);
         deepEquals(messagesOf(`f(1 ${number})`), [ `main_test_file 1:4 ')' expected near '${number}'` ]);
       }
-      deepEquals([ 'if 1 0x10 then end', 'while 1 0b11 do end', 'local 0x10', 'x 0x10', 'x.0x1 = 1', '?1 0x10',
+      deepEquals([ 'if 1 0x10 then end', 'while 1 0b11 do end', 'local 0x10', 'x 0x10', 'x.50 = 1', '?1 0x10',
         'function f() return 1 0x1.8 end', 'x = (1 0x10)', 'x = 1 0b1 0x10', 'f(1 nil)', 'x = 1 nil', 'x = 1 ...' ].map(messagesOf), [
         [ 'main_test_file 1:5 \'then\' expected near \'0x10\'' ],
         [ 'main_test_file 1:8 \'do\' expected near \'0b11\'' ],
         [ 'main_test_file 1:6 <name> expected near \'0x10\'' ],
         [ 'main_test_file 1:2 assignment operator expected near \'0x10\'' ],
-        [ 'main_test_file 1:1 assignment operator expected near \'.0\'' ],
+        [ 'main_test_file 1:1 assignment operator expected near \'.50\'' ],
         [ 'main_test_file 1:3 <end of line> expected near \'0x10\'' ],
         [ 'main_test_file 1:22 \'end\' expected (to close \'function\' at line 1) near \'0x1.8\'' ],
         [ 'main_test_file 1:7 \')\' expected near \'0x10\'' ],

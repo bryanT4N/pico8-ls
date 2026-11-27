@@ -579,6 +579,11 @@ export default class Lexer {
       } else if ([ 'b', 'B' ].includes(next)) {
         literal = this.readBinaryLiteral();
       }
+    } else if (character === '.' && next === '0' && /[xXbB]/.test(this.input.charAt(this.index + 2))) {
+      // PICO-8 reads the 0x or 0b after the dot as it reads one at the start of a number, and the number is then
+      // malformed (4.numtext.dot-hex).
+      this.index += 3;
+      literal = this.malformedWithDots(/[xX]/.test(this.input.charAt(this.index - 1)) ? isHexDigit : isBinaryDigit);
     }
 
     if (literal === undefined) {
