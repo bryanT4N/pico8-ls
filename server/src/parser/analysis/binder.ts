@@ -6,7 +6,7 @@ import { ASTVisitor, VisitableASTNode } from '../visitor';
 import { addEntry, CodeSymbolType, isColonMethod, moveEntry, OutlineBlock, OutlineEntry, Owner, signatureOf } from '../outline/model';
 import { defineMember, pathMember, receiveTable, tableTypeOf, unwrapValue } from '../outline/members';
 import { findBoundaryLines, groupMethodRuns, StatementInfo } from '../outline/method-runs';
-import { ByName } from '../p8scii';
+import { ByName, pico8Text } from '../p8scii';
 import { Analysis, LuaSymbol, Reference, Scope } from './model';
 
 type Decl = {
@@ -930,8 +930,9 @@ class Binder extends ASTVisitor<BinderScope> {
     return first;
   }
 
-  private visibleDecl(scope: BinderScope, name: string): Decl | undefined {
-    let decl = scope.decls.get(name);
+  // held: the name as ByName holds it.
+  private visibleDecl(scope: BinderScope, held: string): Decl | undefined {
+    let decl = scope.decls.getHeld(held);
     while (decl) {
       const { stmt } = decl;
       if (!stmt || !this.nodeStack.some(n => n.node === stmt)) {
@@ -986,8 +987,9 @@ class Binder extends ASTVisitor<BinderScope> {
   }
 
   private resolve(name: Identifier): Binding {
+    const held = pico8Text(name.name);
     for (let i = this.scopeStack.length - 1; i >= 0; i--) {
-      const decl = this.visibleDecl(this.scopeStack[i], name.name);
+      const decl = this.visibleDecl(this.scopeStack[i], held);
       if (decl) {
         return decl;
       }

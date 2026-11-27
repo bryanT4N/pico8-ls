@@ -94,26 +94,33 @@ function isOwnText(c: number): boolean {
 // A map by name, as PICO-8 tells names, and the keys of a table, apart: by the bytes it holds for them, so that
 // U+1D622 is the name A, and t.é is t["é"] (4.puny.name, 4.name.e-acute-key).
 export class ByName<T> {
-  private readonly map = new Map<string, T>();
+  // Made for the first name: most symbols and outline entries never hold one, and the analysis makes thousands.
+  private map?: Map<string, T>;
 
   get(name: string): T | undefined {
-    return this.map.get(pico8Text(name));
+    return this.map?.get(pico8Text(name));
   }
 
   set(name: string, value: T): void {
-    this.map.set(pico8Text(name), value);
+    (this.map ??= new Map()).set(pico8Text(name), value);
   }
 
   has(name: string): boolean {
-    return this.map.has(pico8Text(name));
+    return this.map?.has(pico8Text(name)) ?? false;
+  }
+
+  // For a name already as pico8Text gives it, which spares going through it again: the binder looks a name up in each
+  // scope around it.
+  getHeld(held: string): T | undefined {
+    return this.map?.get(held);
   }
 
   values(): IterableIterator<T> {
-    return this.map.values();
+    return (this.map ?? new Map<string, T>()).values();
   }
 
   get size(): number {
-    return this.map.size;
+    return this.map?.size ?? 0;
   }
 }
 
