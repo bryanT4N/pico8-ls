@@ -1,20 +1,61 @@
 # Changelog
 
+## 0.8.0 (unreleased)
+
+- Syntax errors are reported where reading stops, as in PICO-8 and Lua: at the token where the code can no longer be read, such as the `=` of `player.x = 3` below an unfinished `x =`. The statement with the error is left out, also from the outline, and reading goes on at the line after the one where it stopped. The recovery that 0.2.0 to 0.7.0 added, which kept such statements, handed code back by indentation and moved the first error to where the code looked unfinished, is removed.
+- A block whose `end` is still missing at the end of the file keeps what it read, the code after it too, and its error is Lua's, on the file's last token: `'end' expected (to close 'function' at line 1) near '<eof>'`. Several such blocks give one error each, the innermost first.
+- Code nested more than 200 levels deep is read no further than where it goes past 200, as PICO-8 stops there, instead of on to 500 levels; the lines after it can give errors of their own. The targets of an assignment count as levels, as in PICO-8, so an assignment to about 200 targets is reported.
+- While a cart has any error, such as a syntax error or an `#include` that finds no file, none of its files shows undefined-variable warnings, since a statement with an error leaves out the names it defines. The errors are still shown, and the warnings come back once the cart has none.
+- A `.p8` file whose first line, from its first `p`, does not start with `pico-8 cartridge` is reported, as PICO-8 does not load it, unless its path has `.lua` in it, as PICO-8 then reads it as Lua.
+- Parameter hints no longer show another table's method for a call through a table that nothing defines, as in `a.nosuch.f(`.
+- Deleting or renaming a folder updates Go to Symbol in Workspace, the problems and the carts, and a folder created or renamed into the workspace is read. Folders and files reached through links, Windows junctions among them, are read too, but not a link back to a folder above it. As no file watcher reports changes there, such a file is read from the disk each time it is parsed.
+- An `#include` in a cart whose folder is reached through a junction, a `subst` drive or a short 8.3 name finds its file under that same folder, taking the disk's spelling only for the part the `#include` adds, so the file no longer shows up twice or gets false warnings. An `#include` into another workspace folder whose name differs from the disk's only in case links as soon as that folder is read.
+- Removing a workspace folder makes the extension check its open `.lua` files again, as one of them can now belong to a cart. A file that joins a cart and leaves it within one change no longer makes it check them.
+- A new cart in the workspace sends each file's problems once, not twice.
+- With blocks shown in the outline, a function written in the head of a `for`, `while`, `if` or `elseif` is listed in that block, and the breadcrumbs follow.
+- The outline of a file `#include`d inside a function lists its loop variables when they are shown, as Go to Symbol in Workspace does, and its blocks when blocks are shown.
+- A comment is a file's title only when no statement comes before it, so the comment above a function after `do end`, or inside `do … end`, is that function's doc.
+- A change of a file's language less than a second before or after a change of `files.associations`, to the language that change gives the file, is taken as caused by it, not as your choice, as VS Code makes such a change to the open files whose language you have not chosen, the file you are in too, for example when settings.json is saved as you click into a `.lua` file. So a `.lua` file of a cart is PICO-8 Lua again, with its warnings, once the association is removed.
+- `//` comments are coloured as comments in `.lua` files too, and a `//` inside a string, as in `"http://x"`, or inside a `--[[ ]]` comment no longer colours the rest of the line as a comment.
+- A chain of 30,000 function values or table arguments, far beyond what a cart holds, is analysed in milliseconds instead of seconds.
+- Checked against PICO-8 0.2.7 itself, case by case:
+  - `~` between two values is exclusive or, binding as `^^` does, as in PICO-8 0.2.5 and later.
+  - Numbers are read as PICO-8 reads them: a hexadecimal number takes no `p` exponent (`0x1p4` is `0x1` and then `p4`), and a second dot makes a number malformed, as in `1..2` and `1.."a"`, as does a number that starts with `.0x` or `.0b`, such as `.0x1`. `0b2`, a decimal escape over 255, `{,}` and `f(,1)` are reported as PICO-8 reports them.
+  - Messages quote the code as PICO-8 does: a number as it is written (`near '0x10'`, not `near '16'`), `nil` as `nil`, not `null`, and a string in its quotes or long brackets, as the text of the bytes PICO-8 holds for it, so with its escapes read as PICO-8 reads them (`"a\65"` is quoted `"aA"`) and a character PICO-8 has no glyph for as its bytes (`"é"` is quoted `"れた"`, as PICO-8 shows it). Names and `#include` names are quoted the same way. An unexpected `...` is called a symbol.
+  - When a token is both badly written and in the wrong place, as in `x 1..2`, the malformed number or unfinished string is reported first, as PICO-8 does. A `\` at the very end of the code is an unfinished string, as Lua reports it, not an invalid escape.
+  - `?` takes the rest of its line and can be a value, as in `x=?"a"`. A `?` with nothing after it on its line prints nothing, and the next line is a statement of its own.
+  - A compound assignment such as `+=` takes one target of any kind, a call or a value in brackets too; `local a+=1` and `a,b+=1` are reported.
+  - `if (c) …` and `while (c) …` are the one-line forms only when what follows the condition is on that line, and not when the condition ends with a call of its own, as in `(a)(f)()`. Any part of a one-line `if` can be empty, as in `if (a);`; an `else` at the end of its line is an empty one, and the line below is a statement of its own, as PICO-8 0.2.7 reads it. An `elseif` after `if (c) …` needs its `then`.
+  - Code after a `return` in its block is reported. In a cart, a `return` that ends the outermost block, even on the last line, and a `goto` past a `local` to a label at the end of the cart are reported, as PICO-8 rejects them.
+  - PICO-8's limits are reported as it counts them:
+    - more than 200 local variables in scope in a function, parameters included, counting the hidden ones that a compound assignment such as `t.x += 1` holds to the end of its block; at a cart's top level more than 141, as PICO-8 keeps 59 of its own there;
+    - more than 255 upvalues of a function; in a cart each API function it uses, such as `sin`, is one of them, as PICO-8 keeps 58 of them as locals of the main function;
+    - in a cart, with its `#include` files pasted in, more than 8,192 tokens or more than 65,536 characters; the characters of the cart's own code are also checked as PICO-8 loads them.
+    - The cart limits apply to a main file that is a cart by its first line. PICO-8's "function or expression too complex" and a few rarer limits are not checked; the README lists them.
+  - `#include` is read only at the start of a line of the cart's own text, after nothing but spaces or tabs, in lower case and followed by a space, and only where that text is outside a long string or comment. An `#include` in an included file, or after code on its line, is an error, as in PICO-8, and a cart's project holds only the files it includes itself. A cart that another cart includes keeps its own outline and warnings.
+  - The name is the rest of the line, split at its first colon for a tab. Every character with a code up to 32, such as a space or a tab, and every character that is not ASCII, is dropped at both ends, and an error quotes the rest of the line, untrimmed. A name that starts with `/`, ends with `/` or `\`, or has a character that is not ASCII, and an absolute path such as `C:/lib.lua`, finds no file, as in PICO-8. On Windows a name is read as Windows reads a path (`GetFullPathNameW`), so `lib.lua.` finds `lib.lua`, as in PICO-8.
+  - `#include other.p8:N` pastes tab N of a cart, or of a file whose path has `.lua` in it; any other file is pasted whole. N is read as PICO-8 reads it, in hexadecimal from 0: with no number, or with -1, the whole file is pasted, and a number outside 0 to 15 pastes nothing. A tab the file does not have is reported. Tabs are split at each line that is exactly `-->8`, and a cart or `.lua` file pasted whole gives its first 16 tabs with nothing between them.
+  - An included file's code is read in place of its `#include` line, as PICO-8 pastes it: blocks can open in one file and close in the other, a file can give the value of an `x =` above it, and a long string or comment that a file leaves open goes on after its `#include` line. Completion and signature help see a block's locals in every file it runs through. In the outline and folding, code that starts in the including file ends at the `#include` line, and code that starts in an included file ends at that file's end. An included file that is not a cart shows the errors found in it when the cart that includes it is read.
+  - A file is read as PICO-8 reads it: it is a cart, whatever its name, when its first line, from its first `p`, starts with `pico-8 cartridge`, after one BOM; its second line is its version line, whatever it holds; its code is every `__lua__` section, each up to a line that starts as another section does. A lone CR is a line break that takes the next character with it in a cart, and is dropped in any other file.
+  - A file read from the disk loses one leading BOM, as in the editor, so that its places are the editor's.
+  - Where an error is reported can differ from the line PICO-8 names: PICO-8 names the line where the statement began, this extension the token where reading stops. PICO-8 also reports load, `#include` and token errors before the compiler's errors; the editor shows each error at its place, so another error can come first.
+- The extension package no longer carries the `.github` folder.
+
 ## 0.7.1 (unreleased)
 
 - Formatting is turned off for now: Format Document and the PICO-8-LS: Format File commands are gone. The formatter could change what code means, for example by dropping parentheses that matter, as in `(-a) ^ 2` or `return (f())`, or by turning `- -a` into a comment.
 
 ## 0.7.0 (unreleased)
 
-- Code being typed no longer takes in the line below:
+- Code being typed no longer takes in the line below (until 0.8.0):
   - `x =` with a statement on the next line, such as `player.x = 3`, is reported at the `=` as a value still to write, and the next line stays a statement of its own. `x` stays in the outline. So do `local x =`, `x +=` and the like, `return`, and an operator at the end of a line, as in `x = a +`.
   - A value written on the next line, as in `x =` and then `foo()`, is still the value of `x`.
   - A table, an argument list or an index left open, as in `t = {` with code below it, ends at the next line that starts with `local`, `function` and a name, `if`, `for`, `while`, `repeat`, `return`, `goto`, `break`, `end`, `else`, `elseif` or `until` and is indented no deeper than the line of the `{`. The error is reported at the `{`, and the table keeps its fields in the outline.
   - A place where several of these meet gets one error.
-- Code nested more than 200 levels deep, as PICO-8 counts them, is reported where it goes over, since PICO-8 rejects it too; a chain of about 200 strings joined with `..` is enough. The code is still read, up to 500 levels deep, so the outline keeps it.
+- Code nested more than 200 levels deep, as PICO-8 counts them, is reported where it goes over, since PICO-8 rejects it too; a chain of about 200 strings joined with `..` is enough. The code is still read, up to 500 levels deep, so the outline keeps it (until 0.8.0).
 - Very long expressions, such as a line of 30,000 `+1` terms or `a.b.b.b…`, no longer make folding, the outline, hover or formatting fail. A path of more than 200 keys, as in `a.b.b…b = 1`, is left out of the outline.
 - A request that fails in the language server gets an empty answer, instead of the message "A request has failed".
-- `#include file.lua -- comment` still reports that the file does not exist, and now says that the rest of the line is taken as the file name.
+- `#include file.lua -- comment` still reports that the file does not exist, and now says that the rest of the line is taken as the file name. Since 0.8.0 the error quotes the name instead.
 - `#region` and `#endregion` in a `--[[ ]]` comment no longer mark regions, as in VS Code: only `--` and `//` comments do.
 - A file that `files.associations` gives a language other than PICO-8 or PICO-8 Lua shows no PICO-8 warnings, open or closed, like a file you switch to another language yourself. As in VS Code, a key matches whatever the case of its letters.
 - Switching a file to PICO-8, the language of `.p8` files, counts as choosing PICO-8 Lua: its warnings stay, and an earlier choice of another language is forgotten, also for a file you set back to PICO-8 Lua while the extension was not running.
@@ -27,7 +68,7 @@
   - `pico-8-ls.outline.showLoopVariables` lists the variables of each `for` loop under the function the loop is in, or under the loop when blocks are shown.
   - `pico-8-ls.outline.showBlocks` groups the outline by the `for`, `while`, `repeat` and `do` blocks and the branches of `if` that hold something it lists. A block is named after its first line, as in `for i=1,#enemies` or `if x > 0`, and has the icon of a tab or a `#region`.
   - Go to Symbol in Workspace lists parameters and loop variables when the outline does, next to their function. Blocks are not listed.
-- A `.lua` file is PICO-8 Lua when it belongs to a cart: a `.p8` file is in its folder or a folder above it in the workspace, or a cart `#include`s it, directly or through other files. Other `.lua` files open as plain Lua: they get no PICO-8 warnings, are not in Go to Symbol in Workspace, and the server does not read them, so a folder full of other Lua code no longer slows the start.
+- A `.lua` file is PICO-8 Lua when it belongs to a cart: a `.p8` file is in its folder or a folder above it in the workspace, or a cart `#include`s it, directly or through other files. Since 0.8.0 only directly, as PICO-8 does not follow an `#include` in an included file. Other `.lua` files open as plain Lua: they get no PICO-8 warnings, are not in Go to Symbol in Workspace, and the server does not read them, so a folder full of other Lua code no longer slows the start.
   - A `.lua` file that belongs to a cart switches to PICO-8 Lua when you open it, or when a new cart or `#include` makes it belong while it is open. It does not switch back when it stops belonging.
   - A file you change from PICO-8 Lua to another language is not switched again in this workspace, also after a reload, until you choose PICO-8 Lua for it again, and it shows no PICO-8 warnings. So a `.lua` file near a cart that is not PICO-8 code, such as a build script, can be kept as plain Lua.
   - A file that `files.associations` gives a language is not switched either.
@@ -42,7 +83,7 @@
 
 ## 0.5.0 (unreleased)
 
-- Go to Symbol in Workspace (Ctrl+T) finds the functions, methods, tables, fields and variables that the outline lists, in every file of the workspace and in the files they `#include`, also those outside the workspace or in a folder whose name starts with a dot.
+- Go to Symbol in Workspace (Ctrl+T) finds the functions, methods, tables, fields and variables that the outline lists, in every file of the workspace and in the files they `#include`, also those outside the workspace or in a folder whose name starts with a dot. Since 0.8.0 an `#include` in an included file is not followed, as in PICO-8.
   - Names are written as in the code, with their tables: `entity:update()`, `player.x`, `game.state.level`. Functions and methods end in `()`.
   - Next to a name is where it is defined: the function a local or a field is in, or the variable that holds a function written in a table passed to a call, as with `on_damaged()` in `player`.
   - Choosing one goes to its name, where Go to Definition goes.
@@ -119,8 +160,8 @@
 - Fixed: the language server hung or crashed, and then kept restarting, when an included file's last line was an `#include` leading back to a file already being included, or when a file ended with an unfinished parameter list like `function foo(`.
 - Fixed: a character the parser does not know, like a backtick, stopped the outline and errors from updating.
 - While you type, the outline, folding, Go to Definition and errors keep working:
-  - A block with a missing `end` keeps its contents, and the code after it is no longer swallowed into it. The error points at the block that is missing its `end`.
-  - A statement that starts with a keyword, like `function` or `local`, is no longer hidden by an unfinished line before it, and the error is shown at the end of the unfinished line. A line that starts with a name can still be taken into an unfinished `x =` above it.
+  - A block with a missing `end` keeps its contents, and the code after it is no longer swallowed into it. The error points at the block that is missing its `end`. Since 0.8.0 the block takes in the code after it, up to the end of the file, where its error is.
+  - A statement that starts with a keyword, like `function` or `local`, is no longer hidden by an unfinished line before it, and the error is shown at the end of the unfinished line. A line that starts with a name can still be taken into an unfinished `x =` above it. Removed in 0.8.0.
   - Syntax errors are no longer hidden by "undefined variable" warnings.
   - A `goto` whose label is not written yet no longer drops the whole function.
   - An unfinished string no longer shifts the line numbers of everything after it.
@@ -128,9 +169,9 @@
   - In a `.p8` file, an unclosed `--[[` comment or `[[` string stops at the end of the code instead of running on into `__gfx__` and the sections after it.
 - With `#include`:
   - Each file's folding shows only its own code.
-  - A block left open at the end of an included file is reported in that file and no longer swallows the code after the `#include`.
-  - An `#include` on the last line of an included file is resolved relative to that file, and its errors are shown.
-  - `#include`s nested more than 32 levels deep, or more than 256 included files to parse in all, are reported, and symlinked files can be included.
+  - A block left open at the end of an included file is reported in that file and no longer swallows the code after the `#include`. Since 0.8.0 the file is pasted in as PICO-8 pastes it, so the block goes on after the `#include` line.
+  - An `#include` on the last line of an included file is resolved relative to that file, and its errors are shown. Since 0.8.0 an `#include` in an included file is an error, as in PICO-8.
+  - `#include`s nested more than 32 levels deep, or more than 256 included files to parse in all, are reported, and symlinked files can be included. Since 0.8.0 `#include`s do not nest, and the 257th `#include` line is reported, as PICO-8 reports it.
   - An included file that cannot be read, for example because it is locked, is reported on its `#include` instead of freezing the file's outline and errors.
   - Formatting a file is no longer refused because an included file has errors.
 - Tabs and regions:

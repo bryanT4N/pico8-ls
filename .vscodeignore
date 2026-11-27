@@ -8,6 +8,7 @@
 scripts/**
 testfiles/**
 .superpowers/**
+.github/**
 docs/**
 server/src/test/goldens/**
 .eslintignore
