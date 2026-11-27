@@ -124,6 +124,10 @@ export default class Lexer {
     return this.textPlace(runs[low].from + at - runs[low].at + (after ? 1 : 0));
   }
 
+  locationAt(index: number, end: boolean): CodeLocation {
+    return this.runs ? this.placeOf(index, end) : this.textPlace(index + this.shift.index);
+  }
+
   private textPlace(index: number): CodeLocation {
     const starts = this.lineStarts ??= lineStartsOf(this.text);
     let low = 0;
@@ -1012,6 +1016,111 @@ export default class Lexer {
 // break comes before an #include line and after the file.
 export function onOneLine(a: Token | undefined, b: Token): boolean {
   return a !== undefined && a.bounds.start.filename === b.bounds.start.filename && (a.line ?? a.bounds.start.line) === (b.line ?? b.bounds.start.line);
+}
+
+// PICO-8 counts the tokens of a cart with its #include files pasted in, with a lexer of its own, before Lua reads the
+// code. Its tokens are Lua's, but a short string ends at a line break also after a \z, a character that is no token is
+// one, and "#include " outside a string or comment hides the rest of its line (5.tok.*). Each token counts one but for
+// these:
+const FREE_TOKENS = new Set([ ',', '.', ':', ';', '::', ')', ']', '}', 'local', 'end' ]);
+// and a - or ~ right before a number after one of these, which counts with the number.
+const JOINS_AFTER = new Set([ '=', '(', ',', '{', '[', '==', '~=', '!=', '<', '>', '<=', '>=', '+', '-', '*', '/', '\\', '%', '^', '&', '|',
+  '^^', '~', '<<', '>>', '>>>', '<<>', '>><', 'and', 'or', 'not', 'return', 'if', 'elseif', 'while', 'until', '?', '+=', '-=', '*=', '/=',
+  '\\=', '%=', '^=', '..=', '|=', '&=', '^^=', '<<=', '>>=', '>>>=', '<<>=', '>><=' ]);
+// The operators by their first character, the longest first.
+const COUNTED_OPERATORS = new Map<number, string[]>();
+for (const operator of [ '>>>=', '<<>=', '>><=', '^^=', '>>>', '<<>', '>><', '..=', '...', '<<=', '>>=', '==', '~=', '!=', '<=', '>=', '<<', '>>',
+  '^^', '..', '::', '+=', '-=', '*=', '/=', '\\=', '%=', '^=', '|=', '&=', '+', '-', '*', '/', '\\', '%', '^', '#', '&', '|', '~', '<', '>', '=',
+  '(', ')', '{', '}', '[', ']', ';', ':', ',', '.', '@', '$', '?' ]) {
+  const first = operator.charCodeAt(0);
+  COUNTED_OPERATORS.set(first, [ ...COUNTED_OPERATORS.get(first) ?? [], operator ]);
+}
+
+// The count, and where the token that passes the limit starts and ends.
+export function countTokens(code: string, limit: number): { count: number, over?: { start: number, end: number } } {
+  let count = 0;
+  let over: { start: number, end: number } | undefined;
+  // Where the token before starts and ends, and where a - or ~ that counts with the number after it starts.
+  let beforeStart = 0;
+  let beforeEnd = 0;
+  let joined: number | undefined;
+  const length = code.length;
+  const longBracket = (at: number) => {
+    let level = 0;
+    while (code.charCodeAt(at + 1 + level) === 61) {
+      level++;
+    }
+    return code.charCodeAt(at) === 91 && code.charCodeAt(at + 1 + level) === 91 ? level : -1;
+  };
+  const afterClose = (from: number, level: number) => {
+    const close = code.indexOf(']' + '='.repeat(level) + ']', from);
+    return close < 0 ? length : close + level + 2;
+  };
+  const lineEnd = (from: number) => {
+    const at = code.indexOf('\n', from);
+    return at < 0 ? length : at;
+  };
+  for (let i = 0; i < length;) {
+    const c = code.charCodeAt(i);
+    if (c === 32 || c === 9 || c === 13 || c === 10) {
+      i++;
+      continue;
+    }
+    if ((c === 45 || c === 47) && code.charCodeAt(i + 1) === c) {
+      const level = c === 45 ? longBracket(i + 2) : -1;
+      i = level >= 0 ? afterClose(i + 2, level) : lineEnd(i);
+      continue;
+    }
+    if (c === 35 && code.startsWith('include ', i + 1)) {
+      i = lineEnd(i);
+      continue;
+    }
+    const start = i;
+    let free = false;
+    if (c === 34 || c === 39) {
+      for (i++; i < length && code.charCodeAt(i) !== c && code.charCodeAt(i) !== 10; i++) {
+        if (code.charCodeAt(i) === 92) {
+          i += code.charCodeAt(i + 1) === 13 && code.charCodeAt(i + 2) === 10 ? 2 : 1;
+        }
+      }
+      i = Math.min(i + (code.charCodeAt(i) === c ? 1 : 0), length);
+    } else if (c === 91 && longBracket(i) >= 0) {
+      i = afterClose(i, longBracket(i));
+    } else if (isDecDigit(c) || (c === 46 && isDecDigit(code.charCodeAt(i + 1)))) {
+      // A number takes its digits and every dot: 1..2 is one.
+      const next = code.charCodeAt(i + 1) | 32;
+      const isDigit = c === 48 && next === 120 ? isHexDigit : c === 48 && next === 98 ? isBinaryDigit : isDecDigit;
+      i += isDigit === isDecDigit ? 1 : 2;
+      while (isDigit(code.charCodeAt(i)) || code.charCodeAt(i) === 46) {
+        i++;
+      }
+    } else if (isIdentifierStart(c)) {
+      do {
+        i++;
+      } while (i < length && isIdentifierPart(code.charCodeAt(i)));
+      // Of the names, only local and end are free.
+      free = (i - start === 3 || i - start === 5) && FREE_TOKENS.has(code.slice(start, i));
+    } else {
+      const operator = COUNTED_OPERATORS.get(c)?.find(candidate => code.startsWith(candidate, i));
+      i += operator?.length ?? 1;
+      free = operator !== undefined && FREE_TOKENS.has(operator);
+      if ((operator === '-' || operator === '~') && (isDecDigit(code.charCodeAt(i)) || (code.charCodeAt(i) === 46 && isDecDigit(code.charCodeAt(i + 1))))
+        && JOINS_AFTER.has(code.slice(beforeStart, beforeEnd))) {
+        joined = start;
+        free = true;
+      }
+    }
+    beforeStart = start;
+    beforeEnd = i;
+    if (free) {
+      continue;
+    }
+    if (++count === limit + 1) {
+      over = { start: joined ?? start, end: i };
+    }
+    joined = undefined;
+  }
+  return { count, over };
 }
 
 // ### Validation functions

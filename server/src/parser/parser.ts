@@ -1,5 +1,5 @@
 import AST from './ast';
-import { FlowContext } from './control-flow';
+import { FlowContext, LocalVariable } from './control-flow';
 import * as errors from './errors';
 import { errMessages, raiseErrForToken } from './errors';
 import {
@@ -16,8 +16,8 @@ import {
   VarargLiteral,
 } from './expressions';
 import ResolvedFile, { FileResolver, RealFileResolver, resolveIncludeFile } from './file-resolver';
-import { Code, joined, readCode, tabsOf } from './code';
-import Lexer, { onOneLine, OpenBracket } from './lexer';
+import { characterCount, Code, joined, readCode, tabsOf } from './code';
+import Lexer, { countTokens, onOneLine, OpenBracket } from './lexer';
 import Marker from './marker';
 import {
   AssignmentStatement,
@@ -55,6 +55,21 @@ const MAX_INCLUDE_PARSES = 256;
 // within the call stack.
 const MAX_LEVELS = 200;
 
+// PICO-8, as Lua 5.2, allows a function this many local variables in scope at once (lparser.c, MAXVARS), and this many
+// upvalues (lfunc.h, MAXUPVAL).
+const MAX_VARIABLES = 200;
+const MAX_UPVALUES = 255;
+// The locals PICO-8 gives the main function of a cart, before its code: these API functions, which a function that uses
+// one takes as an upvalue, and one more that is not known, so the cart's code there can have 141 (2.locals-*.top,
+// 2.upvalues-api).
+const PICO8_MAIN_LOCALS = [ 'circ', 'ovalfill', 'circfill', 'fget', 'pget', 'color', 'rect', 'line', 'palt', 'pset', 'oval', 'fillp', 'spr',
+  'sget', 'sset', 'pal', 'clip', 'mset', 'mget', 'band', 'fset', 'sub', 'rectfill', 'sin', 'memcpy', 'memset', 'flr', 'sspr', 'deli', 'peek',
+  'atan2', 'min', 'lshr', 'cos', 'mid', 'tline', 'bnot', 'ceil', 'srand', 'poke', 'shl', 'add', 'rotl', 'del', 'max', 'bor', 'rotr', 'shr',
+  'tonum', 'chr', 'bxor', 'ord', 'tostr', 'poke4', 'poke2', 'peek2', 'peek4', 'time', '' ];
+// PICO-8's limits on the tokens of a cart and on the characters of its code.
+const MAX_TOKENS = 8192;
+const MAX_CHARACTERS = 65536;
+
 export type ParserOptions = {
   includeFileResolver?: FileResolver,
 };
@@ -66,6 +81,12 @@ export default class Parser {
   // (pull).
   readonly lexer: Lexer;
 
+  // The code read from the main file.
+  private readonly code: Code;
+
+  // The first token of the main file's code, the # of an #include line among them.
+  private first?: Token;
+
   // The lexers being read from: the main file's, and above it the one of the file that an #include line pastes in.
   private readonly lexerStack: Lexer[];
 
@@ -75,6 +96,10 @@ export default class Parser {
 
   // Where the #include line of each file pasted in starts, in order.
   private readonly pasteLines: number[] = [];
+
+  // Each #include line whose file is pasted in, in order: where its # is in the main file's code and where the line
+  // ends, the file's lexer, and the characters PICO-8 counts for the file there (pastedCharacters).
+  private readonly pastes: { hash: number, end: number, lexer: Lexer, characters: number }[] = [];
 
   // The #include lines not yet placed in a block, each with the token that came after it (placeIncludes).
   private unplaced: { statement: IncludeStatement, next?: Token }[] = [];
@@ -118,7 +143,8 @@ export default class Parser {
   constructor(filename: ResolvedFile, input: string | Code, options: ParserOptions = {}) {
     this.includeFileResolver = options?.includeFileResolver || new RealFileResolver();
 
-    this.lexer = new Lexer(typeof input === 'string' ? readCode(input) : input, filename);
+    this.code = typeof input === 'string' ? readCode(input) : input;
+    this.lexer = new Lexer(this.code, filename);
     this.lexer.read = () => this.pull();
     this.lexer.includeLines = includeLinesOf(this.lexer.input);
     this.lexerStack = [ this.lexer ];
@@ -247,6 +273,9 @@ export default class Parser {
     const flowContext = new FlowContext(this.gotoErrors, found => this.stoppedBefore(found));
     flowContext.allowVararg = true;
     flowContext.pushScope();
+    if (this.isCart()) {
+      this.addVariables(flowContext, PICO8_MAIN_LOCALS);
+    }
     const body = this.parseBlock(flowContext, isEndOfFile);
     if (this.token.type !== TokenType.EOF) {
       this.errors.push(errors.createErrForToken(this.token, errMessages.expected, '<eof>', this.token.value));
@@ -271,6 +300,11 @@ export default class Parser {
     }
     for (const error of this.gotoErrors) {
       this.errors.push(error);
+    }
+    // PICO-8 checks these before Lua reads the code, so they come after the errors that stoppedBefore looks at.
+    if (this.isCart()) {
+      this.checkCharacters();
+      this.checkTokens();
     }
     this.sortErrors();
 
@@ -359,6 +393,7 @@ export default class Parser {
       if (!token) {
         continue;
       }
+      this.first ??= token;
       if (lexer.openBracket) {
         const { include, ...open } = lexer.openBracket;
         this.open = { ...open, token };
@@ -405,13 +440,15 @@ export default class Parser {
     const name = colon < 0 ? filename : filename.slice(0, colon);
     const resolvedInclude = resolveIncludeFile(this.mainFile, name, this.includeFileResolver);
     statement.resolvedFile = resolvedInclude;
-    const code = this.codeToPaste(statement, written, name, resolvedInclude, colon < 0 ? undefined : filename.slice(colon + 1));
-    if (code !== undefined) {
-      const lexer = new Lexer(code, resolvedInclude);
+    const pasted = this.codeToPaste(statement, written, name, resolvedInclude, colon < 0 ? undefined : filename.slice(colon + 1));
+    if (pasted !== undefined) {
+      const lexer = new Lexer(pasted.code, resolvedInclude);
       lexer.pasted = true;
       this.lexerStack.push(lexer);
       this.pasted.set(resolvedInclude, { lexer, line: line.bounds, start: lexer.getCurrentBounds().end });
       this.pasteLines.push(line.bounds.start.index);
+      // The main file's lexer has read the line, from its #.
+      this.pastes.push({ hash: this.lexer.tokenStart, end: this.lexer.index, lexer, characters: pasted.characters });
     }
   }
 
@@ -595,8 +632,10 @@ export default class Parser {
     return this.finishNode(AST.block(block), true);
   }
 
-  // The code that an #include pastes in, or undefined when there is none, with the error saying why.
-  private codeToPaste(statement: IncludeStatement, written: string, name: string, resolvedInclude: ResolvedFile, tabSuffix?: string): Code | undefined {
+  // The code that an #include pastes in, with the characters PICO-8 counts for it in a cart, or undefined when there is
+  // none, with the error saying why.
+  private codeToPaste(statement: IncludeStatement, written: string, name: string, resolvedInclude: ResolvedFile, tabSuffix?: string)
+    : { code: Code, characters: number } | undefined {
     if (this.includeParses >= MAX_INCLUDE_PARSES) {
       if (!this.reportedTooManyIncludeParses) {
         this.reportedTooManyIncludeParses = true;
@@ -633,13 +672,15 @@ export default class Parser {
     }
 
     this.includes.push({ stmt: statement, resolvedFile: resolvedInclude });
-    const code = includedCode(readCode(fileContents), resolvedInclude.path, tabSuffix);
+    const file = readCode(fileContents);
+    const tab = tabSuffix !== undefined ? tabIndex(tabSuffix) : undefined;
+    const code = includedCode(file, resolvedInclude.path, tab);
     if (typeof code === 'number') {
       this.errors.push(this.getIncludeStatementError(statement, written, `${path.basename(resolvedInclude.path)} has no tab ${code}`));
       return undefined;
     }
     this.includeParses++;
-    return code;
+    return { code, characters: this.isCart() ? pastedCharacters(file, code, resolvedInclude.path, tab) : 0 };
   }
 
   private unresolvedInclude(statement: IncludeStatement, written: string, resolvedInclude: ResolvedFile, reason: string): undefined {
@@ -700,8 +741,8 @@ export default class Parser {
       case 'if':       this.lexerNext(); return this.parseIfStatement(flowContext);
       case 'return':   this.lexerNext(); return this.parseReturnStatement(flowContext);
       case 'function': this.lexerNext();
-        const name = this.parseFunctionName();
-        return this.parseFunctionDeclaration(name, false);
+        const name = this.parseFunctionName(flowContext);
+        return this.parseFunctionDeclaration(name, false, flowContext);
       case 'while':    this.lexerNext(); return this.parseWhileStatement(flowContext);
       case 'for':      this.lexerNext(); return this.parseForStatement(flowContext);
       case 'repeat':   this.lexerNext(); return this.parseRepeatStatement(flowContext);
@@ -981,6 +1022,11 @@ export default class Parser {
     let variable = this.parseIdentifier();
     let body;
 
+    // Lua declares the 3 hidden variables of either loop and its first name here.
+    if ([ '=', ',', 'in' ].includes(this.token.value as string)) {
+      this.checkVariables(flowContext, 4);
+    }
+
     // If the first expression is followed by a `=` punctuator, this is a
     // Numeric For Statement.
     if (this.lexer.consume('=')) {
@@ -994,6 +1040,7 @@ export default class Parser {
 
       this.lexer.expect('do');
       flowContext.pushScope(true);
+      this.addVariables(flowContext, [ '(for index)', '(for limit)', '(for step)', variable.name ]);
       body = this.parseBlock(flowContext);
       flowContext.popScope();
       const closed = this.expectBlockEnd('end', opener, 'for');
@@ -1006,6 +1053,7 @@ export default class Parser {
       while (this.lexer.consume(',')) {
         variable = this.parseIdentifier();
         variables.push(variable);
+        this.checkVariables(flowContext, 3 + variables.length);
       }
       this.lexer.expect('in');
       const iterators: Expression[] = [];
@@ -1018,6 +1066,7 @@ export default class Parser {
 
       this.lexer.expect('do');
       flowContext.pushScope(true);
+      this.addVariables(flowContext, [ '(for generator)', '(for state)', '(for control)', ...variables.map(v => v.name) ]);
       body = this.parseBlock(flowContext);
       flowContext.popScope();
       const closed = this.expectBlockEnd('end', opener, 'for');
@@ -1049,6 +1098,7 @@ export default class Parser {
 
         variables.push(name);
         flowContext.addLocal(name.name, declToken);
+        this.checkVariables(flowContext, variables.length);
       } while (this.lexer.consume(','));
 
       let operator: string | undefined = undefined;
@@ -1061,14 +1111,17 @@ export default class Parser {
         } while (this.lexer.consume(','));
       }
 
+      this.addVariables(flowContext, variables.map(variable => variable.name));
       return this.finishNode(AST.localStatement(variables, operator, init));
     }
     if (this.lexer.consume('function')) {
       name = this.parseIdentifier();
       flowContext.addLocal(name.name, declToken);
+      this.checkVariables(flowContext, 1);
+      this.addVariables(flowContext, [ name.name ]);
 
       // MemberExpressions are not allowed in local statements.
-      return this.parseFunctionDeclaration(name, true);
+      return this.parseFunctionDeclaration(name, true, flowContext);
     } else {
       errors.raiseUnexpectedToken('<name>', this.token);
     }
@@ -1099,6 +1152,7 @@ export default class Parser {
 
       if (this.token.type === TokenType.Identifier) {
         base = this.parseIdentifier();
+        this.useName(flowContext, base.name);
         lvalue = true;
       } else if ('(' === this.token.value) {
         this.lexerNext();
@@ -1147,11 +1201,14 @@ export default class Parser {
 
     // PICO-8 takes a compound operator, such as +=, after one target of any kind, a call too.
     const compound = isAssignmentOperator(this.token) && this.token.value !== '=';
+    let hidden = 0;
     if (compound && targets.length === 1) {
       // The brackets are kept because PICO-8 assigns to nothing then: (a)+=1 leaves a as it is.
       if (lvalue === false) {
         targets[0].parens = true;
       }
+      hidden = this.compoundVariables(flowContext, targets[0]);
+      this.checkVariables(flowContext, hidden, this.token);
     } else if (targets.length === 1 && lvalue === null) {
       this.pushLocation(marker);
       return this.finishNode(AST.callStatement(targets[0]));
@@ -1173,6 +1230,7 @@ export default class Parser {
     }
     while (this.lexer.consume(','));
 
+    this.addVariables(flowContext, Array.from({ length: hidden }, () => ''));
     this.pushLocation(startMarker);
     return this.finishNode(AST.assignmentStatement(targets, operator, values));
   }
@@ -1244,12 +1302,15 @@ export default class Parser {
   //     funcdecl ::= '(' [parlist] ')' block 'end'
   //     parlist ::= Name {',' Name} | [',' '...'] | '...'
 
-  parseFunctionDeclaration(name: Identifier | MemberExpression | null, isLocal: boolean): FunctionDeclaration {
+  parseFunctionDeclaration(name: Identifier | MemberExpression | null, isLocal: boolean, outer: FlowContext): FunctionDeclaration {
     const opener = this.locations[this.locations.length - 1].loc;
-    const flowContext = new FlowContext(this.gotoErrors, found => this.stoppedBefore(found));
+    const flowContext = new FlowContext(this.gotoErrors, found => this.stoppedBefore(found), outer, opener.start, MAX_UPVALUES);
     flowContext.pushScope();
 
     const parameters = [];
+    if (name?.type === 'MemberExpression' && name.indexer === ':') {
+      this.addVariables(flowContext, [ 'self' ]);
+    }
     this.lexer.expect('(');
 
     // The declaration has arguments
@@ -1260,6 +1321,8 @@ export default class Parser {
         if (this.token.type === TokenType.Identifier) {
           const parameter = this.parseIdentifier();
           parameters.push(parameter);
+          this.checkVariables(flowContext, 1);
+          this.addVariables(flowContext, [ parameter.name ]);
         } else if (this.token.type === TokenType.VarargLiteral) {
           flowContext.allowVararg = true;
           parameters.push(this.parsePrimaryExpression(flowContext) as VarargLiteral);
@@ -1302,11 +1365,12 @@ export default class Parser {
   //
   //     Name {'.' Name} [':' Name]
 
-  parseFunctionName() {
+  parseFunctionName(flowContext: FlowContext) {
     let base, name;
 
     const marker = this.createLocationMarker();
     base = this.parseIdentifier();
+    this.useName(flowContext, base.name);
 
     while (this.lexer.consume('.')) {
       this.pushLocation(marker);
@@ -1415,6 +1479,158 @@ export default class Parser {
     const expression = this.parseSubExpressionInLevel(minPrecedence, flowContext);
     this.levels--;
     return expression;
+  }
+
+  // declared: how many variables the statement has declared so far, this one among them; Lua counts them from where
+  // they are declared, though they are in scope only after it (lparser.c, new_localvar).
+  private checkVariables(flowContext: FlowContext, declared: number, at = this.previousToken): void {
+    if (!flowContext.reportedTooManyVariables && flowContext.activeVariables() + declared > MAX_VARIABLES) {
+      flowContext.reportedTooManyVariables = true;
+      this.errors.push(errors.createErrForToken(at, errMessages.tooManyVariables, MAX_VARIABLES, functionNamed(flowContext, at), this.token.value));
+    }
+  }
+
+  private addVariables(flowContext: FlowContext, names: string[]): void {
+    const variables = flowContext.currentScope().variables;
+    for (const name of names) {
+      variables.push({ name });
+    }
+  }
+
+  // A name that is not a local of this function is an upvalue of it and of each function between it and the one that
+  // declares the name, or the main function, whose _ENV holds the globals (lparser.c, singlevaraux). Lua makes the
+  // outermost one first, and stops there when it is one too many. Only counted in a function nested in others with
+  // enough locals to take it past the limit.
+  private useName(flowContext: FlowContext, name: string): void {
+    if (flowContext.upvalues === null || flowContext.variableNamed(name)) {
+      return;
+    }
+    const below: FlowContext[] = [ flowContext ];
+    let upvalue: LocalVariable | 'ENV' = 'ENV';
+    for (let outer = flowContext.parent; outer; outer = outer.parent) {
+      const variable = outer.variableNamed(name);
+      if (variable) {
+        upvalue = variable;
+        break;
+      }
+      below.push(outer);
+    }
+    let reported = false;
+    for (let i = below.length - 1; i >= 0; i--) {
+      const context = below[i];
+      if (context.upvalues === null) {
+        continue;
+      }
+      context.upvalues.add(upvalue);
+      if (context.upvalues.size > MAX_UPVALUES && !context.reportedTooManyUpvalues) {
+        context.reportedTooManyUpvalues = true;
+        if (!reported) {
+          reported = true;
+          this.errors.push(errors.createErrForToken(this.previousToken, errMessages.tooManyUpvalues, MAX_UPVALUES, functionNamed(context, this.previousToken),
+            this.token.value));
+        }
+      }
+    }
+  }
+
+  // The hidden locals PICO-8 holds to the end of the block for a compound assignment such as t[k] += 1: one for a call,
+  // one for the table of a field unless it is a local or an upvalue, and one for a key that is not a local and cannot
+  // be a constant. A key of only literals and operators can be, as 1+1 is folded and ~1 is not, and none is counted for
+  // it, nor for a target in brackets (2.compound.*).
+  private compoundVariables(flowContext: FlowContext, target: Expression): number {
+    if (target.parens) {
+      return 0;
+    }
+    const table = (base: Expression) => (base.type === 'Identifier' ? !this.isLocalOrUpvalue(flowContext, base.name)
+      : [ 'MemberExpression', 'IndexExpression', 'CallExpression', 'StringCallExpression', 'TableCallExpression' ].includes(base.type)) ? 1 : 0;
+    switch (target.type) {
+    case 'CallExpression': case 'StringCallExpression': case 'TableCallExpression':
+      return 1;
+    case 'MemberExpression':
+      return table(target.base);
+    case 'IndexExpression': {
+      const key = target.index;
+      const local = key.type === 'Identifier' && !!flowContext.variableNamed(key.name);
+      return table(target.base) + (local || mayBeConstant(key) ? 0 : 1);
+    }
+    default:
+      return 0;
+    }
+  }
+
+  private isLocalOrUpvalue(flowContext: FlowContext, name: string): boolean {
+    for (let context: FlowContext | null = flowContext; context; context = context.parent) {
+      if (context.variableNamed(name)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // A cart whose code has more characters than PICO-8 loads, or, when it loads, whose code with its #include files pasted
+  // in has more than PICO-8 runs. PICO-8 names no place in the code: the error is on its first token.
+  private checkCharacters(): void {
+    const { code: main, end, lostLineBreak } = this.code;
+    const first = this.first!;
+    // PICO-8 counts the line break that the code is read without, before a section or a CR that ends the file, and 2 more
+    // when the code ends without one (5.chars.gfx, 5.chars.cr-end-*, 5.chars.no-final-newline).
+    const loaded = characterCount(main) + (end !== undefined || lostLineBreak ? 1 : main.endsWith('\n') ? 0 : 2);
+    if (loaded > MAX_CHARACTERS) {
+      this.errors.push(errors.createErrForToken(first, errMessages.codeTooLong, loaded, MAX_CHARACTERS));
+      return;
+    }
+    const includeLines = this.lexer.includeLines;
+    if (!includeLines) {
+      return;
+    }
+    // PICO-8 counts the lines of the code with a line break between each two, each #include line replaced by the
+    // characters it counts for the file, and one more when the last line is an #include line (5.chars.include-*).
+    const linesEnd = end === undefined && main.endsWith('\n') ? main.length - (main.endsWith('\r\n') ? 2 : 1) : main.length;
+    let lastLine = linesEnd;
+    while (lastLine > 0 && main.charCodeAt(lastLine - 1) !== 10 && main.charCodeAt(lastLine - 1) !== 13) {
+      lastLine--;
+    }
+    const pasted = new Map(this.pastes.map(({ hash, characters }) => [ hash, characters ]));
+    let characters = characterCount(main.slice(0, linesEnd));
+    for (const hash of includeLines) {
+      let lineStart = hash;
+      while (lineStart > 0 && (main.charCodeAt(lineStart - 1) === 32 || main.charCodeAt(lineStart - 1) === 9)) {
+        lineStart--;
+      }
+      characters += (pasted.get(hash) ?? 0) - characterCount(main.slice(lineStart, lineEnd(main, hash))) + (lineStart === lastLine ? 1 : 0);
+    }
+    if (characters > MAX_CHARACTERS) {
+      this.errors.push(errors.createErrForToken(first, errMessages.programTooLong, characters, MAX_CHARACTERS));
+    }
+  }
+
+  // PICO-8 counts the tokens of a cart with its #include files pasted in, each in place of its line with two line breaks
+  // after it, and reports the count when it is over the limit; the error is on the token one too many.
+  private checkTokens(): void {
+    const parts: { at: number, lexer: Lexer, from: number, length: number }[] = [];
+    let code = '';
+    const add = (lexer: Lexer, from: number, to: number) => {
+      parts.push({ at: code.length, lexer, from, length: to - from });
+      code += lexer.input.slice(from, to);
+    };
+    let from = 0;
+    for (const { hash, end, lexer } of this.pastes) {
+      add(this.lexer, from, hash);
+      add(lexer, 0, lexer.input.length);
+      code += '\n\n';
+      from = end;
+    }
+    add(this.lexer, from, this.lexer.input.length);
+    const { count, over } = countTokens(code, MAX_TOKENS);
+    if (over) {
+      let k = parts.length - 1;
+      while (parts[k].at > over.start) {
+        k--;
+      }
+      const { at, lexer, from: offset, length } = parts[k];
+      const bounds = { start: lexer.locationAt(offset + over.start - at, false), end: lexer.locationAt(offset + Math.min(over.end - at, length), true) };
+      this.errors.push(errors.createErr(bounds, errMessages.programTooLarge, count, MAX_TOKENS));
+    }
   }
 
   private tooManyLevels(): never {
@@ -1540,6 +1756,7 @@ export default class Parser {
     // The prefix
     if (TokenType.Identifier === this.token.type) {
       base = this.parseIdentifier();
+      this.useName(flowContext, base.name);
     } else if (this.lexer.consume('(')) {
       // Parentheses surrounding a new expression.
       base = this.parseExpectedExpression(flowContext);
@@ -1623,7 +1840,7 @@ export default class Parser {
     } else if (type === TokenType.Keyword && 'function' === value) {
       this.pushLocation(marker);
       this.lexerNext();
-      return this.parseFunctionDeclaration(null, false);
+      return this.parseFunctionDeclaration(null, false, flowContext);
     } else if (this.lexer.consume('{')) {
       this.pushLocation(marker);
       return this.parseTableConstructor(flowContext);
@@ -1706,6 +1923,43 @@ function isBlockFollow(token: Token) {
 
 function isEndOfFile(token: Token) {
   return token.type === TokenType.EOF;
+}
+
+// Lua names the function in its errors by the line it starts on; the file is named when the error is in another.
+function functionNamed(flowContext: FlowContext, at: Token): string {
+  const start = flowContext.start;
+  if (!start) {
+    return 'main function';
+  }
+  return start.filename.equals(at.bounds.start.filename) ? `function at line ${start.line}`
+    : `function at line ${start.line} in ${path.basename(start.filename.path)}`;
+}
+
+function mayBeConstant(expression: Expression): boolean {
+  switch (expression.type) {
+  case 'NumericLiteral': case 'StringLiteral': case 'BooleanLiteral': case 'NilLiteral':
+    return true;
+  case 'UnaryExpression':
+    return mayBeConstant(expression.argument);
+  case 'BinaryExpression': case 'LogicalExpression':
+    return mayBeConstant(expression.left) && mayBeConstant(expression.right);
+  default:
+    return false;
+  }
+}
+
+// The characters PICO-8 counts for the code an #include pastes, in place of the line's: of a cart, the code; of a .lua,
+// the code and 2 more when it takes the file's last tab (5.chars.include-*). PICO-8's count for any other file is not
+// known, and none are counted, which can only count fewer.
+function pastedCharacters(file: Code, pasted: Code, filePath: string, tab: number | undefined): number {
+  if (file.cart && /\.p8$/i.test(filePath)) {
+    return characterCount(pasted.code);
+  }
+  if (!/\.lua$/i.test(filePath)) {
+    return 0;
+  }
+  const tabs = tabsOf(file).length;
+  return characterCount(pasted.code) + ((tab === undefined ? tabs <= 16 : tab < 16 && tab === tabs - 1) ? 2 : 0);
 }
 
 // Where the # of each #include line that PICO-8 reads is in the code, or undefined for none.
@@ -1839,12 +2093,11 @@ function tabIndex(suffix: string): number | undefined {
 // si.t28.ext-alua). Whole, a file of tabs is its first 16 tabs with nothing between them (si.tab.t18.whole,
 // si.t28.join.tabs-fuse); a number that is not one of the 16 tabs a cart can have gives nothing (3.p8-tab-11,
 // 3.p8-tab-minus-2).
-function includedCode(code: Code, filePath: string, tabSuffix: string | undefined): Code | number {
+function includedCode(code: Code, filePath: string, tab: number | undefined): Code | number {
   if (!code.cart && !/\.lua/i.test(filePath)) {
     return code;
   }
   const tabs = tabsOf(code);
-  const tab = tabSuffix !== undefined ? tabIndex(tabSuffix) : undefined;
   if (tab === undefined) {
     return joined(tabs.slice(0, 16));
   }

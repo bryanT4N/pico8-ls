@@ -2,6 +2,7 @@ import * as path from 'path';
 import { createErrForToken, errMessages, ParseError } from './errors';
 import ResolvedFile from './file-resolver';
 import { Token } from './tokens';
+import { CodeLocation } from './types';
 
 export type Goto = {
   token: Token,
@@ -21,9 +22,13 @@ export type Local = {
   token: Token,
 };
 
+// One for each local variable Lua makes, the hidden ones of a for loop among them.
+export type LocalVariable = { name: string };
+
 export type FlowScope = {
   labels: { [key: string]: Label },
   locals: Local[],
+  variables: LocalVariable[],
   deferredGotos: Goto[],
   isLoop: boolean,
 };
@@ -43,7 +48,19 @@ export class FlowContext {
   errors: ParseError[];
   stoppedBefore: (found: Token) => boolean;
 
-  constructor(errors: ParseError[], stoppedBefore: (found: Token) => boolean) {
+  // The local variables of the functions around this one that are in scope where it starts: it can have no more
+  // upvalues than these and _ENV.
+  readonly outerVariables: number;
+  // Null unless outerVariables could take this function past the upvalue limit.
+  upvalues: Set<LocalVariable | 'ENV'> | null;
+  reportedTooManyVariables = false;
+  reportedTooManyUpvalues = false;
+
+  // start: where the function starts, null for the main function.
+  constructor(errors: ParseError[], stoppedBefore: (found: Token) => boolean, readonly parent: FlowContext | null = null,
+    readonly start: CodeLocation | null = null, maxUpvalues = Infinity) {
+    this.outerVariables = parent ? parent.outerVariables + parent.activeVariables() : 0;
+    this.upvalues = this.outerVariables + 1 > maxUpvalues ? new Set() : null;
     this.allowVararg = false;
     this.scopes = [];
     this.pendingGotos = [];
@@ -65,10 +82,32 @@ export class FlowContext {
     return this.scopes[this.scopes.length - 1];
   }
 
+  activeVariables(): number {
+    let count = 0;
+    for (const scope of this.scopes) {
+      count += scope.variables.length;
+    }
+    return count;
+  }
+
+  // The variable a name refers to in this function, if it is one of its locals.
+  variableNamed(name: string): LocalVariable | undefined {
+    for (let i = this.scopes.length - 1; i >= 0; i--) {
+      const variables = this.scopes[i].variables;
+      for (let j = variables.length - 1; j >= 0; j--) {
+        if (variables[j].name === name) {
+          return variables[j];
+        }
+      }
+    }
+    return undefined;
+  }
+
   pushScope(isLoop?: boolean) {
     const scope = {
       labels: {},
       locals: [],
+      variables: [],
       deferredGotos: [],
       isLoop: !!isLoop,
     };

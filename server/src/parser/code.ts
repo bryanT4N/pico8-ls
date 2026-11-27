@@ -14,6 +14,8 @@ export type Code = {
   // The line that ends a cart's code by starting another section, as __gfx__ does: where it starts in the text, and the
   // length of the start that makes it one.
   end?: { index: number, length: number },
+  // Set when a CR that ends a cart takes the line break before it, which ends the code.
+  lostLineBreak?: boolean,
 };
 
 const SECTIONS = [ '__lua__', '__gfx__', '__gff__', '__label__', '__map__', '__sfx__', '__music__', '__meta:' ];
@@ -61,6 +63,7 @@ function cartCode(text: string): Code {
   let lastLineEnd = 0;
   let lastWasCode = false;
   let end: Code['end'];
+  let lostLineBreak = false;
   let inCode = false;
   let codeStart = text.length;
   for (let i = 0, line = 0; i < text.length; line++) {
@@ -85,6 +88,7 @@ function cartCode(text: string): Code {
         if (lastWasCode && last) {
           last.to = lastLineEnd;
           last.lf = false;
+          lostLineBreak = true;
         }
         break;
       }
@@ -136,7 +140,7 @@ function cartCode(text: string): Code {
   if (runs.length === 0) {
     runs.push({ at: 0, from: codeStart });
   }
-  return { text, code, runs, cart: true, end };
+  return { text, code, runs, cart: true, end, lostLineBreak };
 }
 
 // PICO-8 splits a cart's code, without its last line break, at each line -->8 between two line breaks, the first first,
@@ -156,6 +160,40 @@ export function tabsOf(code: Code): Code[] {
   }
   tabs.push({ ...slice(code, from, body.length), end: code.end });
   return tabs;
+}
+
+// The characters that PICO-8 counts as one each in code, by the code point: the glyphs of P8SCII as it writes them in a
+// file, and others it reads as one of its characters (5.chars.glyph-*). Some glyphs are written with a U+FE0F after the
+// code point, and count as one with it.
+const GLYPHS = new Set([ ...'¹²³⁴⁵⁶⁷⁸ᵇᶜᵉᶠ▮■□⁙⁘‖◀▶「」¥•、。゛゜○█▒🐱░✽●♥☉웃⌂😐♪◆\u2026★⧗ˇ∧❎▤▥◜◝'
+  + 'あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんっゃゅょ'
+  + 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンッャュョ' ].map(glyph => glyph.codePointAt(0)!)
+  .concat(Array.from({ length: 26 }, (_, k) => 0x1d622 + k)));
+const BEFORE_VARIATION_SELECTOR = new Set([ 0x2b05, 0x2b06, 0x2b07, 0x27a1, 0x1f17e ]);
+
+// PICO-8's count of the characters of code: a line break is one, a CRLF too, a glyph one, and any other character that
+// is not ASCII its bytes in UTF-8 (5.chars.*). U+FFFD, which stands for bytes that are not UTF-8, counts one, which they
+// are at the least.
+export function characterCount(code: string): number {
+  let count = 0;
+  for (let i = 0; i < code.length; i++) {
+    const c = code.charCodeAt(i);
+    if (c < 0x80) {
+      count += c === 13 && code.charCodeAt(i + 1) === 10 ? 0 : 1;
+      continue;
+    }
+    const point = code.codePointAt(i)!;
+    if (point > 0xffff) {
+      i++;
+    }
+    if (BEFORE_VARIATION_SELECTOR.has(point) && code.charCodeAt(i + 1) === 0xfe0f) {
+      i++;
+      count++;
+    } else {
+      count += GLYPHS.has(point) || point === 0xfffd ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+    }
+  }
+  return count;
 }
 
 // The code of the tabs one after the other, with nothing between them.
