@@ -53,9 +53,17 @@ describe('excludeOf', () => {
       const exclude = excludeOf({ '**/*.lua': { when: '$(basename).p8' } })!;
       eq(exclude('a.lua', path.join(dir, 'a.lua')), true);
       eq(exclude('b.lua', path.join(dir, 'b.lua')), false);
+      // Only the first $(basename) stands for the name.
+      fs.writeFileSync(path.join(dir, 'a.$(basename)'), '');
+      eq(excludeOf({ '*.lua': { when: '$(basename).$(basename)' } })!('a.lua', path.join(dir, 'a.lua')), true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('hides by a pattern set to anything but false or a when clause, as an object without when', () => {
+    const hidden = hiddenBy({ 'a.lua': {}, 'b.lua': { when: 1 }, 'c.lua': null, 'd.lua': false });
+    deepStrictEqual([ 'a.lua', 'b.lua', 'c.lua', 'd.lua' ].map(hidden), [ true, true, true, false ]);
   });
 
   it('gives nothing for a setting that hides nothing', () => {
