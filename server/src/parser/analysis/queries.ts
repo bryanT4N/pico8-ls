@@ -112,7 +112,7 @@ export function visibleAt(analysis: Analysis, file: ResolvedFile, index: number)
 }
 
 function innermostScope(scope: Scope, file: ResolvedFile, index: number): Scope {
-  const inner = scope.children.find(child => child.loc && containsIndex(child.loc, file, index));
+  const inner = scope.children.find(child => (child.loc && containsIndex(child.loc, file, index)) || (child.body && containsIndex(child.body, file, index)));
   return inner ? innermostScope(inner, file, index) : scope;
 }
 

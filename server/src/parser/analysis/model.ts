@@ -18,8 +18,10 @@ export type Reference = { symbol: LuaSymbol, loc: Bounds, read: boolean, write: 
 // A local, parameter or loop variable, visible in its scope from index visibleFrom of file on.
 export type Declared = { symbol: LuaSymbol, file: ResolvedFile, visibleFrom: number, order: number };
 
-// For a block whose closing keyword is missing, the end of loc is synthetic: only its index is meaningful.
-export type Scope = { kind: 'file' | 'function' | 'block', loc?: Bounds, parent?: Scope, children: Scope[], declarations: Declared[] };
+// For a block whose closing keyword is missing, the end of loc is synthetic: only its index is meaningful. body: the
+// block of a statement whose header is in one file and whose block is in a file pasted after it, as when an #include
+// gives a for loop's header; loc, in the header's file, does not cover it.
+export type Scope = { kind: 'file' | 'function' | 'block', loc?: Bounds, body?: Bounds, parent?: Scope, children: Scope[], declarations: Declared[] };
 
 export class LuaSymbol {
   readonly members = new Map<string, LuaSymbol>();
