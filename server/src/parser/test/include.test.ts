@@ -172,6 +172,27 @@ describe('#include', function () {
     }
   });
 
+  it('finds #include lines past a \\z as PICO-8 does, and goes on with the string the \\z takes into the file of one', () => {
+    const read = (code: string, files: Record<string, string>): [string[], unknown] => {
+      const chunk = parseWith(code, files);
+      const assignment = chunk.block.body.find((s): s is AssignmentStatement => s.type === 'AssignmentStatement');
+      return [ chunk.errors.map(formatError), (assignment?.init[0] as StringLiteral | undefined)?.value ];
+    };
+    assert.deepStrictEqual(read('s="a\\z\n#include b.lua\n"\nprinth(s)', { 'b.lua': 'printh("in b")\n' }), [[
+      'main_test_file 3:0 unexpected string \'\' near \'printh\'', 'main_test_file 3:0 unfinished string near \'"\'',
+      'b.lua 1:8 unexpected keyword \'in\' near \'b\'', 'b.lua 1:12 unfinished string near \'")\'',
+    ], 'aprinth(' ]);
+    assert.deepStrictEqual(read('s="a\\z\n[["\n#include nope.lua\nprinth("ok")', {}), [[ 'main_test_file 3:0 unexpected symbol \'#\' near \'include\'' ], 'a[[' ]);
+    assert.deepStrictEqual(read('s="a\\z\n#include nope.lua"\nprinth(s)', {})[0], [
+      'main_test_file 1:2 unfinished string near \'"a\\z\n\'', 'main_test_file 2:0 Can\'t #include "nope.lua"" from main_test_file: File does not exist',
+    ]);
+    assert.deepStrictEqual(read('s="a\\\n#include nope.lua\\\n"\nprinth(s)', {}), [[], 'a\n#include nope.lua\n' ]);
+    assert.deepStrictEqual(read('s="a\\\n[["\n#include nope.lua', {})[0],
+      [ 'main_test_file 3:0 Can\'t #include "nope.lua" from main_test_file: File does not exist' ]);
+    assert.deepStrictEqual(read('#include a.lua\nb"\nprinth(s)', { 'a.lua': 's="a\\z\n' }), [[], 'ab' ]);
+    assert.deepStrictEqual(read('#include a.lua\n#include b.lua\nprinth(s)', { 'a.lua': 's="a\\z\n', 'b.lua': '  c"' }), [[], 'ac' ]);
+  });
+
   it('resolves an #include after an included file next to the cart', () => {
     const { errors, block } = parseWith('#include sub/a.lua\n#include b.lua\nprint(1)', {
       'sub/a.lua': 'x = 1',

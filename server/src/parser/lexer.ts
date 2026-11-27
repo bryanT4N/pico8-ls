@@ -25,6 +25,8 @@ import { Bounds, CodeLocation } from './types';
 // is always enabled to provide proper debug messages).
 //
 // `lex()` starts lexing and returns the following token in the stream.
+export type OpenBracket = { unfinished: errors.ParseError, include?: number } & ({ level: number, isComment: boolean } | { quote: number });
+
 export default class Lexer {
   charCode: number = 0;
   peekCharCodeindex: number = 0;
@@ -68,9 +70,10 @@ export default class Lexer {
   // Set for the main file: where the # of each #include line that PICO-8 reads is. A long string or comment stops at
   // one, for the parser to paste the file in and go on in it (openBracket).
   includeLines?: Set<number>;
-  // A long string or comment that goes on past the end of a pasted file, or past an #include line of the main file that
-  // PICO-8 reads, whose # is at include: its level, and the error to give when nothing closes it.
-  openBracket?: { level: number, isComment: boolean, unfinished: errors.ParseError, include?: number };
+  // A long string or comment, or a short string in the blanks after a \z, that goes on past the end of a pasted file, or
+  // past an #include line of the main file that PICO-8 reads, whose # is at include: its level or quote, and the error
+  // to give when nothing closes it.
+  openBracket?: OpenBracket;
 
   filename: ResolvedFile;
 
@@ -451,43 +454,77 @@ export default class Lexer {
   scanStringLiteral(): Token {
     // which quote, either single or double quote
     const delimiter = this.input.charCodeAt(this.index++);
+    const { value, reached } = this.readShortString(delimiter, false);
+    if (reached === 'include' || (reached === 'end' && this.pasted)) {
+      const unfinished = errors.createErr(this.getCurrentBounds(), errMessages.unfinishedString, this.input.slice(this.tokenStart, this.index));
+      this.openBracket = { quote: delimiter, unfinished, include: reached === 'include' ? this.index : undefined };
+    } else if (reached !== 'close') {
+      this.addError(errMessages.unfinishedString, this.input.slice(this.tokenStart, this.index));
+    }
+    return this.makeToken(TokenType.StringLiteral, value);
+  }
 
-    let stringStart = this.index;
-    let string = this.encodingMode.discardStrings ? null : '';
-
+  // Reads a short string on to its delimiter and past it: 'close'; or to the line break or end of the text that leaves
+  // it unfinished: 'unfinished'. In the blanks and line breaks after a \z, which skipping starts in, it stops at the end
+  // of the text: 'end', or at the # of an #include line of includeLines: 'include'; PICO-8 goes on skipping in the text
+  // that comes next.
+  readShortString(delimiter: number, skipping: boolean): { value: string | null, reached: 'close' | 'unfinished' | 'end' | 'include' } {
+    let value = this.encodingMode.discardStrings ? null : '';
+    let partStart = this.index;
+    const take = (end: number) => {
+      if (value !== null) {
+        value += this.encodingMode.fixup(this.getLocation(), this.input.slice(partStart, end));
+      }
+    };
     for (;;) {
+      while (skipping) {
+        while (isWhiteSpace(this.input.charCodeAt(this.index))) {
+          this.index++;
+        }
+        if (!this.consumeEOL()) {
+          if (this.index >= this.length) {
+            return { value, reached: 'end' };
+          }
+          skipping = false;
+          partStart = this.index;
+        } else if (this.includeLines) {
+          let hash = this.index;
+          while (this.input.charCodeAt(hash) === 32 || this.input.charCodeAt(hash) === 9) {
+            hash++;
+          }
+          if (this.includeLines.has(hash)) {
+            this.index = hash;
+            return { value, reached: 'include' };
+          }
+        }
+      }
       this.charCode = this.input.charCodeAt(this.index++);
       if (delimiter === this.charCode) {
-        break;
+        take(this.index - 1);
+        return { value, reached: 'close' };
       }
       // EOF or `\n` terminates a string literal. If we haven't found the
       // ending delimiter by now, the string is unfinished.
       if (this.index > this.length || isLineTerminator(this.charCode)) {
-        break;
+        take(this.index - 1);
+        // Leave the line break to skipWhiteSpace, so that the line gets counted.
+        this.index--;
+        return { value, reached: 'unfinished' };
       }
       if (92 === this.charCode) { // backslash
-        if (!this.encodingMode.discardStrings) {
-          const beforeEscape = this.input.slice(stringStart, this.index - 1);
-          string += this.encodingMode.fixup(this.getLocation(), beforeEscape);
+        take(this.index - 1);
+        if (this.input.charAt(this.index) === 'z') {
+          this.index++;
+          skipping = true;
+          continue;
         }
         const escapeValue = this.readEscapeSequence();
-        if (!this.encodingMode.discardStrings) {
-          string += escapeValue;
+        if (value !== null) {
+          value += escapeValue;
         }
-        stringStart = this.index;
+        partStart = this.index;
       }
     }
-    if (!this.encodingMode.discardStrings) {
-      string += this.encodingMode.encodeByte(null);
-      string += this.encodingMode.fixup(this.getLocation(), this.input.slice(stringStart, this.index - 1));
-    }
-    if (delimiter !== this.charCode) {
-      // Leave the line break to skipWhiteSpace, so that the line gets counted.
-      this.index--;
-      this.addError(errMessages.unfinishedString, this.input.slice(this.tokenStart, this.index));
-    }
-
-    return this.makeToken(TokenType.StringLiteral, string);
   }
 
   // Expect a multiline string literal and return it as a regular string
@@ -685,11 +722,6 @@ export default class Lexer {
     case '\n':
       this.consumeEOL();
       return '\n';
-
-    case 'z':
-      ++this.index;
-      this.skipWhiteSpace();
-      return '';
 
     case 'x':
       // \xXX, where XX is a sequence of exactly two hexadecimal digits
