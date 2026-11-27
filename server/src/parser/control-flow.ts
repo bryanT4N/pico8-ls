@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { createErrForToken, errMessages, ParseError } from './errors';
+import { pico8Text } from './p8scii';
 import ResolvedFile from './file-resolver';
 import { Token } from './tokens';
 import { CodeLocation } from './types';
@@ -126,7 +127,7 @@ export class FlowContext {
     if (first) {
       this.report(found, first.target === 'break'
         ? createErrForToken(first.token, errMessages.noLoopToBreak, 'break')
-        : createErrForToken(first.token, errMessages.labelNotVisible, first.target));
+        : createErrForToken(first.token, errMessages.labelNotVisible, pico8Text(first.target)));
     }
     this.scopes.pop();
   }
@@ -165,8 +166,8 @@ export class FlowContext {
     if (Object.prototype.hasOwnProperty.call(scope.labels, name)) {
       const first = scope.labels[name];
       this.report(found, first.file.equals(token.bounds.start.filename)
-        ? createErrForToken(token, errMessages.labelAlreadyDefined, name, first.line)
-        : createErrForToken(token, errMessages.labelAlreadyDefinedInFile, name, first.line, path.basename(first.file.path)));
+        ? createErrForToken(token, errMessages.labelAlreadyDefined, pico8Text(name), first.line)
+        : createErrForToken(token, errMessages.labelAlreadyDefinedInFile, pico8Text(name), first.line, path.basename(first.file.path)));
       return;
     }
 
@@ -211,8 +212,8 @@ export class FlowContext {
       this.report(found, createErrForToken(
         theGoto.token,
         errMessages.gotoJumpInLocalScope,
-        theGoto.target,
-        scope.locals[theGoto.localCounts[this.scopes.length - 1]].name,
+        pico8Text(theGoto.target),
+        pico8Text(scope.locals[theGoto.localCounts[this.scopes.length - 1]].name),
       ));
     }
     // Reported once: this runs again before every statement of the scope.

@@ -396,17 +396,17 @@ describe('#include', function () {
     assert.strictEqual(analyze(chunk).includeStarts.has(path.normalize('lib.lua')), true);
   });
 
-  it('takes the rest of the line after #include as the name, less the bytes up to a space and those of other characters than ASCII around it, and quotes it as written in an error', () => {
+  it('takes the rest of the line after #include as the name, less the bytes up to a space and those of other characters than ASCII around it, and quotes it as written, in its bytes, in an error', () => {
     const files = { 'lib.lua': 'function helper() end' };
     assert.deepStrictEqual(parseWith('#include lib.lua -- helpers\nhelper()', files).errors.map(formatError), [
       'main_test_file 1:0 Can\'t #include "lib.lua -- helpers" from main_test_file: File does not exist',
     ]);
     assert.deepStrictEqual(parseWith('#include  missing.lua\v ', files).errors.map(formatError), [
-      'main_test_file 1:0 Can\'t #include " missing.lua\v " from main_test_file: File does not exist',
+      'main_test_file 1:0 Can\'t #include " missing.luaᵇ " from main_test_file: File does not exist',
     ]);
     // DEL stays (si.pin.trim.trail-del).
     assert.deepStrictEqual(parseWith('#include lib.lua\x7f', files).errors.map(formatError), [
-      'main_test_file 1:0 Can\'t #include "lib.lua\x7f" from main_test_file: File does not exist',
+      'main_test_file 1:0 Can\'t #include "lib.lua○" from main_test_file: File does not exist',
     ]);
     for (const line of [ '#include lib.lua ', '#include lib.lua  ', '#include lib.lua\t', '#include  lib.lua', '#include lib.lua\v', '#include \flib.lua',
       '#include lib.lua\x01', '#include \x1flib.lua', '#include lib.lua\u00a0', '#include \u00e9lib.lua\u2605', '#include lib.lua\u00e9' ]) {
@@ -420,10 +420,11 @@ describe('#include', function () {
     const message = (name: string, why: string) => `main_test_file 1:0 Can't #include "${name}" from main_test_file: PICO-8 does not open a name ${why}`;
     const fromFolder = 'that starts with / from the cart\'s folder';
     const endsWith = 'that ends with / or \\';
-    for (const [ name, why ] of [[ '/lib.lua', fromFolder ], [ '/sub/lib.lua', fromFolder ], [ 'lib.lua/', endsWith ], [ 'lib.lua\\', endsWith ],
-      [ 'a\u00e9.lua', 'with a character that is not ASCII' ], [ '\u00fc/lib.lua', fromFolder ]]) {
+    // A name is quoted in its bytes: \u00e9 is 195 169 and \u00fc 195 188.
+    for (const [ name, why, quoted ] of [[ '/lib.lua', fromFolder ], [ '/sub/lib.lua', fromFolder ], [ 'lib.lua/', endsWith ], [ 'lib.lua\\', endsWith ],
+      [ 'a\u00e9.lua', 'with a character that is not ASCII', 'a\u308c\u305f.lua' ], [ '\u00fc/lib.lua', fromFolder, '\u308c\u3082/lib.lua' ]]) {
       const chunk = parseWith(`#include ${name}`, files);
-      assert.deepStrictEqual([ chunk.errors.map(formatError), chunk.unresolvedIncludes!.length ], [[ message(name, why) ], 0 ], name);
+      assert.deepStrictEqual([ chunk.errors.map(formatError), chunk.unresolvedIncludes!.length ], [[ message(quoted ?? name, why) ], 0 ], name);
     }
     const chunk = parseWith('#include \\lib.lua', files);
     assert.deepStrictEqual([ chunk.errors, statementsOf(chunk) ], [[], [ 'IncludeStatement', 'FunctionDeclaration*' ]]);

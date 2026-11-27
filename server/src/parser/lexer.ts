@@ -4,7 +4,7 @@ import * as errors from './errors';
 import { errMessages } from './errors';
 import { Comment_ } from './expressions';
 import ResolvedFile from './file-resolver';
-import { P8SCII_TEXT } from './p8scii';
+import { firstByteText, P8SCII_TEXT, pico8Text } from './p8scii';
 import { Token, tokenText, TokenType, TokenValue } from './tokens';
 import { Bounds, CodeLocation } from './types';
 
@@ -508,7 +508,7 @@ export default class Lexer {
     let value = '';
     let partStart = this.index;
     const take = (end: number) => {
-      value += this.input.slice(partStart, end);
+      value += pico8Text(this.input.slice(partStart, end));
     };
     for (;;) {
       while (skipping) {
@@ -563,7 +563,7 @@ export default class Lexer {
       return this.makeToken(TokenType.Punctuator, '[');
     }
 
-    const value = lineFeeds(string);
+    const value = pico8Text(lineFeeds(string));
     const token = this.makeToken(TokenType.StringLiteral, value);
     const level = this.input.indexOf('[', this.tokenStart + 1) - this.tokenStart - 1;
     const close = ']' + '='.repeat(level) + ']';
@@ -761,10 +761,9 @@ export default class Lexer {
         this.index += 3;
         return P8SCII_TEXT[parseInt(this.input.slice(sequenceStart + 1, this.index), 16)];
       }
-      // Up to the first character that is not a hexadecimal digit, as PICO-8 quotes it, which at the end of the code is
-      // the line break PICO-8 reads after it (4.strtext.bad-hex1, 4.strtext.eof-hex).
-      const end = this.index + (isHexDigit(this.input.charCodeAt(this.index + 1)) ? 3 : 2);
-      this.addError(errMessages.hexadecimalDigitExpected, '\\' + this.input.slice(sequenceStart, end) + (end > this.length ? '\n' : ''));
+      // Up to the first byte that is not a hexadecimal digit, as PICO-8 quotes it (4.strtext.bad-hex1).
+      const other = this.index + (isHexDigit(this.input.charCodeAt(this.index + 1)) ? 2 : 1);
+      this.addError(errMessages.hexadecimalDigitExpected, '\\' + this.input.slice(sequenceStart, other) + this.firstByteTextAt(other));
       return this.input.charAt(this.index++);
     }
 
@@ -788,8 +787,14 @@ export default class Lexer {
     if (this.index >= this.length) {
       return '\n';
     }
-    this.addError(errMessages.invalidEscape, '\\' + this.input.slice(sequenceStart, this.index + 1));
-    return this.index < this.length ? this.input.charAt(this.index++) : '';
+    this.addError(errMessages.invalidEscape, '\\' + this.firstByteTextAt(this.index));
+    return '';
+  }
+
+  // The text of the first byte PICO-8 reads at index of the code, to quote it alone: a line break as the LF PICO-8 holds
+  // for it, as also after the code (4.strtext.eof-hex, 4.strtext.crlf-hex).
+  private firstByteTextAt(index: number): string {
+    return index >= this.length || isLineTerminator(this.input.charCodeAt(index)) ? '\n' : firstByteText(this.input, index);
   }
 
   scanComment(canBeLongComment: boolean) {

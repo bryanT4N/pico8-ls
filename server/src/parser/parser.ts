@@ -19,6 +19,7 @@ import ResolvedFile, { FileResolver, RealFileResolver, resolveIncludeFile } from
 import { characterCount, Code, joined, readCode, tabsOf } from './code';
 import Lexer, { countTokens, includeLinesOf, lineEnd, lineFeeds, onOneLine, OpenBracket } from './lexer';
 import Marker from './marker';
+import { pico8Text } from './p8scii';
 import {
   AssignmentStatement,
   Block,
@@ -423,7 +424,7 @@ export default class Parser {
   private paste(line: Token): void {
     // PICO-8 finds the file with every byte up to a space, and every byte of a character that is not ASCII, left out at
     // both ends of the name (3.trailing-spaces, si.line.form.none.sp.vt, si.pin.trim.lead-e-acute), and names it in its
-    // error as it is written (si.line.missing.none.sp2.none).
+    // error as it is written, in its bytes (si.line.missing.none.sp2.none, 4.strtext.include-e).
     const written = (line.value as string).slice('#include '.length);
     const filename = written.replace(/^[\0-\x20\x80-\uffff]+|[\0-\x20\x80-\uffff]+$/g, '');
     const statement: IncludeStatement = { type: 'IncludeStatement', filename, loc: boundsClone(line.bounds), included: false };
@@ -466,7 +467,7 @@ export default class Parser {
       close = ']' + '='.repeat(open.level) + ']';
       if (!open.isComment) {
         const breaks = reached === 'end' && lexer !== this.lexer ? '\n\n' : '';
-        read = lineFeeds(lexer.input.slice(from, reached === 'close' ? lexer.index - open.level - 2 : lexer.index)) + breaks;
+        read = pico8Text(lineFeeds(lexer.input.slice(from, reached === 'close' ? lexer.index - open.level - 2 : lexer.index))) + breaks;
       }
     }
     if (read !== null) {
@@ -1248,7 +1249,7 @@ export default class Parser {
   }
 
   getIncludeStatementError(statement: IncludeStatement, written: string, errorMessage: string) {
-    return new errors.ParseError(`Can't #include "${written}" from ${path.basename(this.mainFile.path)}: ${errorMessage}`, statement.loc!);
+    return new errors.ParseError(`Can't #include "${pico8Text(written)}" from ${path.basename(this.mainFile.path)}: ${errorMessage}`, statement.loc!);
   }
 
   // ### Non-statements

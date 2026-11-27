@@ -71,6 +71,13 @@ describe('Lexer', () => {
       assert.deepStrictEqual(values('[[\na]] [[\r\na]] [[a\r\nb\nc]] [==[a]]b]==] [[a\\65]]'), [ 'a', 'a', 'a\nb\nc', 'a]]b', 'a\\65' ]);
     });
 
+    it('StringLiteral - the code as the bytes PICO-8 holds for it, a glyph as its byte and any other character as its UTF-8 bytes', () => {
+      const values = (code: string) => getLexedTokens(code).filter(t => t.type === TokenType.StringLiteral).map(t => t.value);
+      // é is the bytes 195 169, and ⬅ without its ️ the bytes 226 172 133.
+      assert.deepStrictEqual(values('"é" "\\195\\169" [[é]] "⬅" "⬅️" "¹\x01" "a\tb"'),
+        [ 'れた', 'れた', 'れた', 'ヌて✽', '⬅️', '¹¹', 'a\tb' ]);
+    });
+
     it('Keyword', () => {
       const tokens = getLexedTokens('function break goto if then while end');
       assertNextToken(tokens, TokenType.Keyword, 'function');

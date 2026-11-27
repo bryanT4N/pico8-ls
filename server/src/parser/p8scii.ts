@@ -1,5 +1,5 @@
 // The text PICO-8 writes for each byte of a string, as printh writes it and as a .p8 file holds it, and reads back as
-// that byte (4.str.chr, 4.str.glyph-*). Byte 0, which printh cannot write, is the character 0.
+// that byte (4.str.chr, 4.str.glyphs-*). Byte 0, which printh cannot write, is the character 0.
 export const P8SCII_TEXT: readonly string[] = [
   '\0', '\u00b9', '\u00b2', '\u00b3', '\u2074', '\u2075', '\u2076', '\u2077',
   '\u2078', '\t', '\n', '\u1d47', '\u1d9c', '\r', '\u1d49', '\u1da0',
@@ -34,3 +34,46 @@ export const P8SCII_TEXT: readonly string[] = [
   '\u30e6', '\u30e8', '\u30e9', '\u30ea', '\u30eb', '\u30ec', '\u30ed', '\u30ef',
   '\u30f2', '\u30f3', '\u30c3', '\u30e3', '\u30e5', '\u30e7', '\u25dc', '\u25dd',
 ];
+
+// The texts of the bytes that are not ASCII, by the code unit each starts with, the longest first.
+const GLYPHS = new Map<number, { text: string, byte: number }[]>();
+P8SCII_TEXT.forEach((text, byte) => {
+  const first = text.charCodeAt(0);
+  if (first >= 0x80) {
+    GLYPHS.set(first, [ ...GLYPHS.get(first) ?? [], { text, byte }].sort((a, b) => b.text.length - a.text.length));
+  }
+});
+
+// PICO-8 reads the code as bytes: a byte's text as that byte, and any other character as its UTF-8 bytes, as an
+// e-acute is 195 169 (4.str.glyphs-*, 4.str.others). The bytes for the code at index, and the length they take.
+function bytesAt(code: string, index: number): { bytes: number[], length: number } {
+  const unit = code.charCodeAt(index);
+  if (unit < 0x80) {
+    return { bytes: [ unit ], length: 1 };
+  }
+  const glyph = GLYPHS.get(unit)?.find(({ text }) => code.startsWith(text, index));
+  if (glyph) {
+    return { bytes: [ glyph.byte ], length: glyph.text.length };
+  }
+  const character = String.fromCodePoint(code.codePointAt(index)!);
+  return { bytes: [ ...Buffer.from(character, 'utf8') ], length: character.length };
+}
+
+// The code as the text of the bytes PICO-8 holds for it.
+export function pico8Text(code: string): string {
+  if (!/[\x01-\x08\x0b\x0c\x0e-\x1f\x7f-\uffff]/.test(code)) {
+    return code;
+  }
+  let text = '';
+  for (let i = 0; i < code.length;) {
+    const { bytes, length } = bytesAt(code, i);
+    text += bytes.map(byte => P8SCII_TEXT[byte]).join('');
+    i += length;
+  }
+  return text;
+}
+
+// The text of the first byte PICO-8 holds for the code at index, which a message quotes alone after a \.
+export function firstByteText(code: string, index: number): string {
+  return P8SCII_TEXT[bytesAt(code, index).bytes[0]];
+}
