@@ -527,6 +527,23 @@ describe('outline', () => {
         lines('player [Table]', '  update() [Method]'));
     });
 
+    it('lists an assignment to a name under a parameter or loop variable _ENV as the same one to _ENV.name, with no global', () => {
+      const bare = lines('function init(_ENV)', '  function update() end', '  x = 0', '  t = { f = function() end, n = 1 }', '  y += 1', 'end',
+        'for _ENV in all(ps) do function hit() end end');
+      const explicit = lines('function init(_ENV)', '  function _ENV.update() end', '  _ENV.x = 0', '  _ENV.t = { f = function() end, n = 1 }',
+        '  _ENV.y += 1', 'end', 'for _ENV in all(ps) do function _ENV.hit() end end');
+      assert.strictEqual(outlineOf(bare), lines('init(_ENV) [Function]', '  _ENV.update() [Method]', '  _ENV.t.f() [Method]', '_ENV.hit() [Method]'));
+      assert.strictEqual(outlineOf(bare), outlineOf(explicit));
+    });
+
+    it('lists an assignment to a name under a local _ENV as the same one to _ENV.name, with no global', () => {
+      const bare = lines('local _ENV = {}', 'function update() end', 'x = 0', 't = { f = function() end, n = 1 }', 'y += 1');
+      const explicit = lines('local _ENV = {}', 'function _ENV.update() end', '_ENV.x = 0', '_ENV.t = { f = function() end, n = 1 }', '_ENV.y += 1');
+      assert.strictEqual(outlineOf(bare),
+        lines('_ENV [Table]', '  update() [Method]', '  x [Field]', '  t [Table]', '    f() [Method]', '    n [Field]', '  y [Field]'));
+      assert.strictEqual(outlineOf(bare), outlineOf(explicit));
+    });
+
     it('does not see a local self inside its own initializer', () => {
       assert.strictEqual(outlineOf('T = {}\nfunction T:m()\n  local self = { cb = function() self.x = 1 end }\nend'),
         lines('T [Table]', '  m() [Method]', '    self [Table]', '      cb() [Method]', '  x [Field]'));
