@@ -17,7 +17,7 @@ PICO-8 Lua Language Server (PICO-8-LS) is a Visual Studio Code extension with a 
 
 ## Errors
 
-PICO-8-LS marks the first error at the token where PICO-8 stops reading the code. PICO-8 itself names the line on which the statement with the error begins, so the two lines can differ. Errors after the first may be less exact. While a cart has an error, its undefined-variable warnings are not shown.
+PICO-8-LS marks the first error at the token where PICO-8 stops reading the code. PICO-8 itself names the line on which the statement with the error begins, so the two lines can differ. Errors after the first may be less exact. While a cart has an error, its undefined-variable warnings are not shown. They are not shown either for a cart that refers to its global table `_ENV`, for example to create globals from a string, because such a cart can define globals that the analysis cannot see. Where `_ENV` is a local variable, a parameter or a loop variable, a name that no local declares is a field of that table, so it gets no undefined-variable warning, and an assignment to it does not define a global. Go to Definition, hover, completion, Find References and parameter hints still take such a name as the global of that name, since tables used this way often inherit their globals through `__index`.
 
 PICO-8-LS checks these limits of PICO-8:
 

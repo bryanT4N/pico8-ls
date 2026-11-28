@@ -2,6 +2,23 @@
 
 This file lists the main changes in each version of PICO-8 Lua Language Server (PICO-8-LS), in the style of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions 0.1.0 to 0.7.1 were built locally and not published. Version 0.8.0 is the first version published to the Visual Studio Marketplace. Version 0.1.0 starts from PICO-8 LS 0.8.0, whose history is in the [PICO-8 LS changelog](https://github.com/japhib/pico8-ls/blob/master/CHANGELOG.md).
 
+## 0.8.1
+
+### Added
+
+- Hover, completion and parameter hints for `inext`, `rawequal` and `ls`.
+
+### Changed
+
+- A cart that refers to its global table `_ENV`, for example to create globals from a string, gets no undefined-variable warnings, because it can define globals that the analysis cannot see.
+
+### Fixed
+
+- Names that PICO-8 0.2.7 defines for every cart, such as `inext`, `rawequal` and `ls`, are not reported as undefined variables.
+- Where `_ENV` is a local variable, a parameter or a loop variable, as in `for _ENV in all(objects)`, a name that no local declares gets no undefined-variable warning, and an assignment to it does not define a global.
+- Completion no longer offers `rawequals` and `coyield`, which PICO-8 does not have, and code that reads them gets an undefined-variable warning.
+- Hover and parameter hints show correct signatures for `music`, `tline`, `chr`, `ipairs`, `map` and `mapdraw`, and parameter hints cover `t`, `time`, `reset` and `info`.
+
 ## 0.8.0
 
 ### Added
