@@ -1,5 +1,6 @@
 import { strictEqual } from 'assert';
-import { hoverMarkdown } from '../hover';
+import { builtinMarkdown, hoverMarkdown } from '../hover';
+import { builtinInfo } from '../parser/builtins';
 import { analyzeCode, referenceAtPos } from '../parser/test/test-utils';
 
 const lines = (...l: string[]) => l.join('\n');
@@ -102,6 +103,12 @@ describe('hoverMarkdown', () => {
   it('lets a user function shadow a builtin of the same name', () => {
     strictEqual(hoverAt(lines('function print(s) end', 'print(1)'), 2, 0), block('function print(s)'));
     strictEqual(hoverAt('cls()', 1, 0), undefined);
+  });
+
+  it('shows the signatures of music and tline from PICO-8\'s manual', () => {
+    const signatureOf = (name: string) => builtinMarkdown(name, builtinInfo(name)!).split('\n')[2];
+    strictEqual(signatureOf('music'), '`music( n, [fadems,] [channelmask] )`');
+    strictEqual(signatureOf('tline'), '`tline( x0, y0, x1, y1, mx, my, [mdx, mdy,] [layers] )`');
   });
 
   it('renders LDoc tags as TypeScript does', () => {

@@ -1,5 +1,5 @@
 import { deepStrictEqual, ok, strictEqual } from 'assert';
-import { builtinInfo, isBuiltinName } from '../builtins';
+import { builtinInfo, Builtins, isBuiltinName } from '../builtins';
 import { outlineOf } from './outline-utils';
 import { analyzeCode, Analyzed, definitionsAtPos, describeSymbol, referencesAtPos, symbolAt, warningsIn } from './test-utils';
 
@@ -500,5 +500,10 @@ describe('isBuiltinName', () => {
     strictEqual(builtinInfo('constructor'), undefined);
     strictEqual(builtinInfo('toString'), undefined);
     strictEqual(builtinInfo('__proto__'), undefined);
+  });
+
+  it('gives every builtin but the ? shorthand for print a signature that calls it by its own name', () => {
+    const unsigned = Object.entries(Builtins).filter(([ name, info ]) => name !== '?' && !(info.sig?.startsWith(name + '( ') && info.sig.endsWith(')')));
+    deepStrictEqual(unsigned.map(([ name, info ]) => `${name}: ${info.sig}`), []);
   });
 });
