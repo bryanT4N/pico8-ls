@@ -690,6 +690,9 @@ class Binder extends ASTVisitor<BinderScope> {
       return this.addMemberField(selfTable, segments, value, loc);
     }
 
+    // A path from a name that no local declares stays on the global also under a local _ENV, unlike an assignment to the
+    // name itself: the path only reads the name, which such an _ENV usually inherits from the globals, and listed as
+    // _ENV's, a field that only x.k += 1 sets would leave Go to Definition nowhere to go.
     const binding = this.resolve(root);
     if (binding.kind === 'param' || binding.kind === 'loopvar') {
       if (value?.type === 'FunctionDeclaration') {
