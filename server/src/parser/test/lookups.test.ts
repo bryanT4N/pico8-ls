@@ -420,6 +420,11 @@ describe('Go to Definition and Find References', () => {
     deepStrictEqual(field.d(4, 6), [ 'main_test_file 1:0-1:1', 'main_test_file 3:0-3:1' ]);
   });
 
+  it('does not go from a use of a global to a compound assignment of its name under a local _ENV', () => {
+    const { d } = probe(analyzeCode(lines('local _ENV = {}', 'y += 1', 'y = 2', 'print(y)')));
+    deepStrictEqual(d(4, 6), [ 'main_test_file 3:0-3:1' ]);
+  });
+
   it('takes self in a method of a table assigned to a name under a local _ENV for that global', () => {
     const param = probe(analyzeCode(lines('function init(_ENV)', '  obj = { f = function(self) return self.x end }', 'end', 'obj.x = 1')));
     deepStrictEqual([ param.d(2, 36), param.r(4, 4) ], [[ 'main_test_file 2:2-2:5' ], [ 'main_test_file 2:41-2:42', 'main_test_file 4:4-4:5' ]]);
