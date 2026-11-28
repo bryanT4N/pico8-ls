@@ -9,12 +9,17 @@ export type SymbolKind = 'global' | 'local' | 'param' | 'loopvar' | 'member' | '
 // node: the statement, table field or label the definition comes from; a loop variable's for statement; a parameter's:
 // the statement or table field that defines its function, where that function's doc is read, or else the
 // FunctionDeclaration. value: what it assigns, as an initializer, a table field's value, or a function statement's
-// FunctionDeclaration. Docs read the comments above node.
-export type Definition = { loc: Bounds, nameLoc: Bounds, node: ASTNode, value?: Expression, isFunction: boolean, compound: boolean };
+// FunctionDeclaration. Docs read the comments above node. underLocalEnv: as for Reference.
+export type Definition = { loc: Bounds, nameLoc: Bounds, node: ASTNode, value?: Expression, isFunction: boolean, compound: boolean,
+  underLocalEnv: boolean };
 
 // One per identifier that names something; loc covers that identifier only. A compound target (x += 1) reads and
 // writes. order: when the analysis came to it, counted together with Declared.order; for a goto, where the goto is.
-export type Reference = { symbol: LuaSymbol, loc: Bounds, read: boolean, write: boolean, isCall: boolean, order: number };
+// underLocalEnv: the name of a global where a local, a parameter or a loop variable _ENV is visible. Lua reads it as a
+// field of that table, which the analysis still takes for the global, since such tables often inherit the globals
+// through __index.
+export type Reference = { symbol: LuaSymbol, loc: Bounds, read: boolean, write: boolean, isCall: boolean, underLocalEnv: boolean,
+  order: number };
 
 export type Declared = { symbol: LuaSymbol, file: ResolvedFile, visibleFrom: number, order: number };
 

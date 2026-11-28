@@ -80,10 +80,11 @@ export function warningsOf(analysis: Analysis): Warning[] {
   }
   const warnings: Warning[] = [];
   for (const symbol of analysis.globals.values()) {
-    if (symbol.definitions.length > 0 || isBuiltinName(symbol.name) || symbol.name === 'self') {
+    // Under a local _ENV, Lua assigns the field of that table, and a read can find a field that code elsewhere sets.
+    if (symbol.definitions.some(definition => !definition.underLocalEnv) || isBuiltinName(symbol.name) || symbol.name === 'self') {
       continue;
     }
-    const reads = uniqueInOrder(symbol.references.filter(reference => reference.read).map(reference => reference.loc));
+    const reads = uniqueInOrder(symbol.references.filter(reference => reference.read && !reference.underLocalEnv).map(reference => reference.loc));
     warnings.push(...reads.map(loc => createWarning(loc, errMessages.undefinedVariable, symbol.name)));
   }
   return warnings.sort((a, b) => byPlace(a.bounds, b.bounds));

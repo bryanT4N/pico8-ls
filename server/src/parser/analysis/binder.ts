@@ -20,7 +20,11 @@ type Decl = {
   forward?: boolean,
 };
 
-type Binding = Decl | { kind: 'global', symbol: LuaSymbol, entry?: OutlineEntry };
+// env: the local, parameter or loop variable _ENV visible where the name is, of which Lua reads the name as a field.
+type Binding = Decl | { kind: 'global', symbol: LuaSymbol, entry?: OutlineEntry, env?: Decl };
+
+// As ByName holds the name, so that _𝘦𝘯𝘷, which PICO-8 reads as _ENV, counts too.
+const ENV = '_ENV';
 
 // For a deeper method path (e.g. T.a:m), the last intermediate table may not exist yet;
 // selfPath holds the info to create it on the first self.k = v that needs it, and stays after that, since the keys
@@ -425,7 +429,7 @@ class Binder extends ASTVisitor<BinderScope> {
     for (const { label, blocks, order } of scope.gotos) {
       const target = blocks.find(block => block.labels.has(label.name))?.labels.get(label.name);
       if (target) {
-        this.addReference({ symbol: target, loc: label.loc!, read: true, write: false, isCall: false }, order);
+        this.addReference({ symbol: target, loc: label.loc!, read: true, write: false, isCall: false, underLocalEnv: false }, order);
       }
     }
   }
@@ -436,7 +440,8 @@ class Binder extends ASTVisitor<BinderScope> {
     if (this.recorded.has(node) || node.name === '?' || (parent?.type === 'MemberExpression' && parent.identifier === node)) {
       return;
     }
-    this.read(this.resolve(node).symbol, node.loc!);
+    const binding = this.resolve(node);
+    this.read(binding.symbol, node.loc!, false, underLocalEnv(binding));
   }
 
   override visitMemberExpression(node: MemberExpression): void {
@@ -551,10 +556,10 @@ class Binder extends ASTVisitor<BinderScope> {
     const binding = this.resolve(name);
     if (compound && binding.kind === 'global') {
       // In PICO-8, x += 1 fails on a global that was never assigned, so a plain assignment elsewhere defines it.
-      this.write(binding.symbol, name, true);
+      this.write(binding.symbol, name, true, underLocalEnv(binding));
       return binding.entry && { about: binding.entry };
     }
-    this.define(binding.symbol, name, statement.loc!, statement, value, compound);
+    this.define(binding.symbol, name, statement.loc!, statement, value, compound, underLocalEnv(binding));
     const unwrapped = unwrapValue(value);
 
     if (binding.kind !== 'global') {
@@ -751,25 +756,26 @@ class Binder extends ASTVisitor<BinderScope> {
     }
   }
 
-  private define(symbol: LuaSymbol, name: Identifier, loc: Bounds, node: ASTNode, value?: Expression, compound = false): void {
+  private define(symbol: LuaSymbol, name: Identifier, loc: Bounds, node: ASTNode, value?: Expression, compound = false,
+    underLocalEnv = false): void {
     const isFunction = value?.type === 'FunctionDeclaration';
-    symbol.definitions.push({ loc, nameLoc: name.loc!, node, value, isFunction, compound });
+    symbol.definitions.push({ loc, nameLoc: name.loc!, node, value, isFunction, compound, underLocalEnv });
     if (isFunction) {
       symbol.signature = signatureOf(value);
       if (!this.functionDocNodes.has(value)) {
         this.functionDocNodes.set(value, node);
       }
     }
-    this.write(symbol, name, compound);
+    this.write(symbol, name, compound, underLocalEnv);
   }
 
-  private write(symbol: LuaSymbol, name: Identifier, compound: boolean): void {
+  private write(symbol: LuaSymbol, name: Identifier, compound: boolean, underLocalEnv = false): void {
     this.recorded.add(name);
-    this.addReference({ symbol, loc: name.loc!, read: compound, write: true, isCall: false });
+    this.addReference({ symbol, loc: name.loc!, read: compound, write: true, isCall: false, underLocalEnv });
   }
 
-  private read(symbol: LuaSymbol, loc: Bounds, isCall = false): void {
-    this.addReference({ symbol, loc, read: true, write: false, isCall });
+  private read(symbol: LuaSymbol, loc: Bounds, isCall = false, underLocalEnv = false): void {
+    this.addReference({ symbol, loc, read: true, write: false, isCall, underLocalEnv });
   }
 
   private addReference(unordered: Omit<Reference, 'order'>, order?: number): void {
@@ -988,11 +994,14 @@ class Binder extends ASTVisitor<BinderScope> {
 
   private resolve(name: Identifier): Binding {
     const held = pico8Text(name.name);
+    let env: Decl | undefined;
     for (let i = this.scopeStack.length - 1; i >= 0; i--) {
-      const decl = this.visibleDecl(this.scopeStack[i], held);
+      const scope = this.scopeStack[i];
+      const decl = this.visibleDecl(scope, held);
       if (decl) {
         return decl;
       }
+      env ??= this.visibleDecl(scope, ENV);
     }
     // A self that nothing declares belongs to the innermost function alone, so that self.k never links two
     // functions. Outside every function it is the global of that name, as in Lua.
@@ -1001,8 +1010,12 @@ class Binder extends ASTVisitor<BinderScope> {
       fn.implicitSelf ??= { kind: 'param', symbol: new LuaSymbol('self', 'self') };
       return fn.implicitSelf;
     }
-    return { kind: 'global', symbol: this.globalSymbol(name.name), entry: this.globalEntry(name) };
+    return { kind: 'global', symbol: this.globalSymbol(name.name), entry: this.globalEntry(name), env };
   }
+}
+
+function underLocalEnv(binding: Binding): boolean {
+  return binding.kind === 'global' && binding.env !== undefined;
 }
 
 function targetRange(statement: AssignmentStatement | LocalStatement, i: number): Bounds {
