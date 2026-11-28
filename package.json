@@ -1,7 +1,7 @@
 {
 	"name": "pico-8-ls",
 	"displayName": "PICO-8 Lua Language Server",
-	"description": "A personal fork of PICO-8 LS that provides a language server for PICO-8 Lua in .p8 carts and .lua files.",
+	"description": "Language server for PICO-8 Lua in .p8 carts and .lua files.",
 	"icon": "img/icon.png",
 	"author": "Bryan Tan",
 	"contributors": [
