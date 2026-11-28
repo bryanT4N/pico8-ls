@@ -31,13 +31,15 @@ const ENV = '_ENV';
 // of self's fields count on top of its segments. loc: the range of the method's target.
 type SelfPath = { root: OutlineEntry, segments: Identifier[], loc: Bounds };
 
-// selfSymbol: the table self means in a method, as far as names tell. A flat target's symbol: the member a function
-// defines, or the variable or member that holds a table. natural: the function or file a function is in, when
-// callbackOwner put it under an entry there instead.
+// selfSymbol: the table self means in a method, as far as names tell; on a flat table, in its methods. A flat target's
+// symbol: the member a function defines, or the variable or member that holds a table. natural: the function or file a
+// function is in, when callbackOwner put it under an entry there instead.
 type ValueTarget =
   | { kind: 'entry', entry: OutlineEntry, selfTable?: OutlineEntry | null, selfPath?: SelfPath, selfSymbol?: LuaSymbol }
-  // a table the outline doesn't list, as a parameter's or one no name holds: its functions are still listed
-  | { kind: 'flat', owner: Owner, natural?: Owner, name: string, loc?: Bounds, selectionLoc?: Bounds, symbol?: LuaSymbol }
+  // a table the outline doesn't list, as a parameter's, one no name holds or one assigned to a name under a parameter or
+  // loop variable _ENV: its functions are still listed
+  | { kind: 'flat', owner: Owner, natural?: Owner, name: string, loc?: Bounds, selectionLoc?: Bounds, symbol?: LuaSymbol,
+      selfSymbol?: LuaSymbol }
   | { kind: 'anonymous', owner: Owner, natural?: Owner };
 
 type PendingGoto = { label: Identifier, blocks: BinderScope[], order: number };
@@ -314,7 +316,7 @@ class Binder extends ASTVisitor<BinderScope> {
       } else {
         scope.selfTable = null;
       }
-      selfSymbol = target?.kind === 'entry' ? target.selfSymbol : undefined;
+      selfSymbol = target?.kind === 'entry' || target?.kind === 'flat' ? target.selfSymbol : undefined;
     } else if (node.parameters.some(p => p.type === 'Identifier' && p.name === 'self')) {
       scope.selfTable = null;
     }
@@ -441,7 +443,7 @@ class Binder extends ASTVisitor<BinderScope> {
       return;
     }
     const binding = this.resolve(node);
-    this.read(binding.symbol, node.loc!, false, underLocalEnv(binding));
+    this.read(binding.symbol, node.loc!, false, binding.kind === 'global' && binding.env !== undefined);
   }
 
   override visitMemberExpression(node: MemberExpression): void {
@@ -489,6 +491,7 @@ class Binder extends ASTVisitor<BinderScope> {
       const { owner, natural } = target?.kind === 'flat' ? target : this.callbackOwner();
       const prefix = target?.kind === 'flat' ? target.name : '';
       const named = target?.kind === 'flat' ? target.symbol : undefined;
+      const selfSymbol = target?.kind === 'flat' ? target.selfSymbol : undefined;
       // The keys of a table that no name holds still get symbols, so that a method call on some other table
       // can find its methods by key.
       const table = named ?? new LuaSymbol('value', '');
@@ -498,12 +501,12 @@ class Binder extends ASTVisitor<BinderScope> {
           this.define(member, field.key, field.loc!, field, field.value);
           if (field.value.type === 'FunctionDeclaration') {
             this.targets.set(field.value, { kind: 'flat', owner, natural, name: prefix ? `${prefix}.${field.key.name}` : field.key.name,
-              loc: field.loc!, selectionLoc: field.key.loc!, symbol: named && member });
+              loc: field.loc!, selectionLoc: field.key.loc!, symbol: named && member, selfSymbol });
           } else {
             const unwrapped = unwrapValue(field.value);
             if (unwrapped?.type === 'TableConstructorExpression') {
               this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner, natural,
-                name: prefix ? `${prefix}.${field.key.name}` : '', symbol: named && member });
+                name: prefix ? `${prefix}.${field.key.name}` : '', symbol: named && member, selfSymbol: selfSymbol && member });
             }
           }
         } else if (field.type === 'TableValue' || field.type === 'TableKey') {
@@ -554,12 +557,16 @@ class Binder extends ASTVisitor<BinderScope> {
   private assignName(name: Identifier, value: Expression | undefined, statement: Statement, loc: Bounds,
     compound: boolean): StatementInfo | undefined {
     const binding = this.resolve(name);
+    const env = binding.kind === 'global' ? binding.env : undefined;
     if (compound && binding.kind === 'global') {
       // In PICO-8, x += 1 fails on a global that was never assigned, so a plain assignment elsewhere defines it.
-      this.write(binding.symbol, name, true, underLocalEnv(binding));
-      return binding.entry && { about: binding.entry };
+      this.write(binding.symbol, name, true, env !== undefined);
+      return env ? this.assignEnvField(env, name, value, loc) : binding.entry && { about: binding.entry };
     }
-    this.define(binding.symbol, name, statement.loc!, statement, value, compound, underLocalEnv(binding));
+    this.define(binding.symbol, name, statement.loc!, statement, value, compound, env !== undefined);
+    if (env) {
+      return this.assignEnvField(env, name, value, loc, binding.symbol);
+    }
     const unwrapped = unwrapValue(value);
 
     if (binding.kind !== 'global') {
@@ -612,6 +619,31 @@ class Binder extends ASTVisitor<BinderScope> {
     return { about: table, defines: table };
   }
 
+  // Lua assigns the field of the _ENV, so the outline lists what the same assignment to _ENV.name lists. The entry
+  // stands for the global the analysis takes the name for, so that Go to Definition from a use elsewhere still reaches
+  // it; a compound assignment defines no global, so it passes none. The methods of a table take self for that global, as
+  // they do outside such an _ENV.
+  private assignEnvField(env: Decl, name: Identifier, value: Expression | undefined, loc: Bounds, global?: LuaSymbol): StatementInfo | undefined {
+    if (value?.type === 'FunctionDeclaration') {
+      return this.addMethod(value, env.symbol.name, [ name ], '.', env.entry, loc, global);
+    }
+    if (env.kind !== 'local') {
+      this.assignUnknownRoot(env.symbol.name, [ name ], value, global, global);
+      return undefined;
+    }
+    if (!env.entry) {
+      return undefined;
+    }
+    if (global) {
+      this.addField(env.entry, name, value, loc, global);
+    } else if (!env.entry.members.has(name.name)) {
+      // Implicit, as the table of a path is: an assignment that defines the field later takes the entry over, so that
+      // Go to Definition goes there and not to x += 1.
+      defineMember(env.entry, name.name, CodeSymbolType.Field, loc, name.loc!).implicit = true;
+    }
+    return { about: env.entry };
+  }
+
   // local f, then f = function() end in the same function: the function's entry is enough. Not when the function is in
   // another file, whose outline lists it: the declaration's file would lose the name.
   private hideForwardDeclaration(binding: Binding, functionEntry: OutlineEntry): void {
@@ -642,7 +674,7 @@ class Binder extends ASTVisitor<BinderScope> {
 
     if (root.name === 'self' && this.resolveSelfBinding() !== 'local-or-loopvar') {
       if (value?.type === 'FunctionDeclaration') {
-        return this.addMethod(value, root, segments, variable.indexer, undefined, loc, member);
+        return this.addMethod(value, root.name, segments, variable.indexer, undefined, loc, member);
       }
       // In a method such as function a.b:m(), self's fields go at the end of the method's path, so the keys of both
       // count as those of one path. Checked first: resolveSelfTable makes an entry for each key of the method's path.
@@ -652,7 +684,7 @@ class Binder extends ASTVisitor<BinderScope> {
       }
       const selfTable = this.resolveSelfTable();
       if (!selfTable) {
-        this.assignUnknownRoot(root, segments, value, member);
+        this.assignUnknownRoot(root.name, segments, value, member);
         return undefined;
       }
       return this.addMemberField(selfTable, segments, value, loc);
@@ -661,10 +693,10 @@ class Binder extends ASTVisitor<BinderScope> {
     const binding = this.resolve(root);
     if (binding.kind === 'param' || binding.kind === 'loopvar') {
       if (value?.type === 'FunctionDeclaration') {
-        return this.addMethod(value, root, segments, variable.indexer, undefined, loc, member);
+        return this.addMethod(value, root.name, segments, variable.indexer, undefined, loc, member);
       }
       // the outline can't know which table a parameter or loop variable holds
-      this.assignUnknownRoot(root, segments, value, member);
+      this.assignUnknownRoot(root.name, segments, value, member);
       return undefined;
     }
 
@@ -672,7 +704,7 @@ class Binder extends ASTVisitor<BinderScope> {
       // Grouping takes this file's entry only, but self.k = v still goes under the table when another file has its
       // entry.
       const selfTable = binding.entry ?? (binding.kind === 'global' ? this.anyGlobalEntry(root.name) : undefined);
-      return this.addMethod(value, root, segments, variable.indexer, binding.entry, loc, member, selfTable);
+      return this.addMethod(value, root.name, segments, variable.indexer, binding.entry, loc, member, selfTable);
     }
 
     let rootEntry = binding.entry;
@@ -692,35 +724,41 @@ class Binder extends ASTVisitor<BinderScope> {
     if (segments.length > MAX_OUTLINE_KEYS) {
       return { about: rootEntry };
     }
-    const unwrapped = unwrapValue(value);
     let tableEntry = rootEntry;
     for (let i = 0; i < segments.length - 1; i++) {
       const seg = segments[i];
       tableEntry = this.pathEntry(tableEntry, seg.name, loc, seg.loc!);
     }
     const lastSeg = segments[segments.length - 1];
+    this.addField(tableEntry, lastSeg, value, loc, tableEntry.symbol?.member(lastSeg.name));
+    return { about: rootEntry };
+  }
+
+  private addField(table: OutlineEntry, key: Identifier, value: Expression | undefined, loc: Bounds, symbol: LuaSymbol | undefined): void {
+    const unwrapped = unwrapValue(value);
     const memberType = unwrapped?.type === 'TableConstructorExpression'
       ? tableTypeOf(unwrapped as TableConstructorExpression) : CodeSymbolType.Field;
-    const member = this.memberEntry(tableEntry, lastSeg.name, memberType, loc, lastSeg.loc!);
+    const member = this.link(defineMember(table, key.name, memberType, loc, key.loc!), symbol);
     if (unwrapped?.type === 'TableConstructorExpression') {
       const ctor = unwrapped as TableConstructorExpression;
       receiveTable(member, ctor);
       this.targets.set(ctor, { kind: 'entry', entry: member });
     }
     this.recordValue(member, value);
-    return { about: rootEntry };
   }
 
-  private addMethod(fn: FunctionDeclaration, root: Identifier, segments: Identifier[], indexer: Indexer,
-    table: OutlineEntry | undefined, loc: Bounds, member: LuaSymbol, selfTable = table): StatementInfo | undefined {
+  // rootName: the path's first name as the code writes it, or, for a name that stands for _ENV.name, as the _ENV is
+  // declared.
+  private addMethod(fn: FunctionDeclaration, rootName: string, segments: Identifier[], indexer: Indexer,
+    table: OutlineEntry | undefined, loc: Bounds, member: LuaSymbol | undefined, selfTable = table): StatementInfo | undefined {
     const key = segments[segments.length - 1];
-    const name = [ root, ...segments.slice(0, -1) ].map(id => id.name).join('.') + indexer + key.name;
+    const name = [ rootName, ...segments.slice(0, -1).map(id => id.name) ].join('.') + indexer + key.name;
     const entry = this.link(this.addEntry(this.topScope().owner, name, CodeSymbolType.Method, loc, key.loc!), member);
     const intermediates = segments.slice(0, -1);
     const firstParam = fn.parameters[0];
     const isSelfMethod = indexer === ':' || (firstParam?.type === 'Identifier' && firstParam.name === 'self');
     if (isSelfMethod) {
-      const selfSymbol = member.owner;
+      const selfSymbol = member?.owner;
       if (intermediates.length === 0) {
         this.targets.set(fn, { kind: 'entry', entry, selfTable: selfTable ?? null, selfSymbol });
       } else if (selfTable) {
@@ -737,11 +775,13 @@ class Binder extends ASTVisitor<BinderScope> {
     return table && { about: table };
   }
 
-  private assignUnknownRoot(root: Identifier, segments: Identifier[], value: Expression | undefined, member: LuaSymbol): void {
+  private assignUnknownRoot(rootName: string, segments: Identifier[], value: Expression | undefined, member: LuaSymbol | undefined,
+    selfSymbol?: LuaSymbol): void {
     const unwrapped = unwrapValue(value);
     if (unwrapped?.type === 'TableConstructorExpression') {
-      const pathName = [ root, ...segments ].map(id => id.name).join('.');
-      this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: this.topScope().owner, name: pathName, symbol: member });
+      const pathName = [ rootName, ...segments.map(id => id.name) ].join('.');
+      this.targets.set(unwrapped as TableConstructorExpression, { kind: 'flat', owner: this.topScope().owner, name: pathName, symbol: member,
+        selfSymbol });
     }
   }
 
@@ -1012,10 +1052,6 @@ class Binder extends ASTVisitor<BinderScope> {
     }
     return { kind: 'global', symbol: this.globalSymbol(name.name), entry: this.globalEntry(name), env };
   }
-}
-
-function underLocalEnv(binding: Binding): boolean {
-  return binding.kind === 'global' && binding.env !== undefined;
 }
 
 function targetRange(statement: AssignmentStatement | LocalStatement, i: number): Bounds {

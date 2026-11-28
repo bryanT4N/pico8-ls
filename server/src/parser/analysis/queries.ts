@@ -52,9 +52,9 @@ export function targetsOf(symbol: LuaSymbol): Bounds[] {
   if (symbol.kind === 'local' && functions.length > 0) {
     return functions;
   }
-  if (symbol.entries.length > 0) {
-    const explicit = symbol.entries.filter(entry => !entry.implicit);
-    return (explicit.length > 0 ? explicit : symbol.entries).map(entry => entry.selectionLoc);
+  const explicit = symbol.entries.filter(entry => !entry.implicit);
+  if (explicit.length > 0) {
+    return explicit.map(entry => entry.selectionLoc);
   }
   const firstPerFile = new Map<string, Bounds>();
   for (const definition of symbol.definitions) {
@@ -63,7 +63,8 @@ export function targetsOf(symbol: LuaSymbol): Bounds[] {
       firstPerFile.set(file, definition.nameLoc);
     }
   }
-  return [ ...firstPerFile.values(), ...functions ];
+  const defined = [ ...firstPerFile.values(), ...functions ];
+  return defined.length > 0 ? defined : symbol.entries.map(entry => entry.selectionLoc);
 }
 
 export function referencesOf(symbol: LuaSymbol, includeDeclaration: boolean): Bounds[] {
