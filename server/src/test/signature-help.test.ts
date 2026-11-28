@@ -222,6 +222,12 @@ describe('signatureHelpAt', () => {
     deepStrictEqual(label(lines('for _ENV in all(ps) do', '  circ(')), [ builtinInfo('circ')!.sig ]);
   });
 
+  it('gives the signatures of t, time, reset and info, which take no arguments', () => {
+    const help = [ 't(', 'time(', 'reset(', 'info(' ].map(call => helpAt(lines('x = 1', call)));
+    deepStrictEqual(help.map(h => h?.signatures[0].label), [ 't( )', 'time( )', 'reset( )', 'info( )' ]);
+    deepStrictEqual(help.map(h => h?.signatures[0].parameters), [[], [], [], []]);
+  });
+
   it('gives the signatures of inext, rawequal and ls', () => {
     deepStrictEqual([ 'inext(', 'rawequal(', 'ls(' ].map(call => helpAt(lines('x = 1', call))?.signatures[0].label),
       [ 'inext( tbl, [i] )', 'rawequal( tbl1, tbl2 )', 'ls( [directory] )' ]);
