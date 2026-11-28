@@ -442,6 +442,19 @@ describe('undefined variable warnings', () => {
       [ 'main_test_file 1:6 undefined variable: constructor', 'main_test_file 3:4 undefined variable: toString' ]);
   });
 
+  it('gives no warnings to a cart that refers to its global _ENV, in any of its files', () => {
+    const uses = [ 'print(_ENV)', 'assigntable("a:1", _ENV)', '_ENV[k] = 1', '_ENV = {}', '_\u{1d626}\u{1d62f}\u{1d637}[k] = 1' ];
+    for (const use of uses) {
+      deepStrictEqual(warnings(lines(use, 'print(nope)')), [], use);
+    }
+    deepStrictEqual(warningsIn(analyzeCode(lines('#include lib.lua', 'print(nope)'), { 'lib.lua': 'global = _ENV' })), []);
+  });
+
+  it('still warns in a cart whose only _ENV is a local one, and in one with no _ENV', () => {
+    deepStrictEqual(warnings(lines('function f(_ENV) print(_ENV) end', 'print(nope)')), [ 'main_test_file 2:6 undefined variable: nope' ]);
+    deepStrictEqual(warnings(lines('t = {}', 'print(t.k, nope)')), [ 'main_test_file 2:11 undefined variable: nope' ]);
+  });
+
   it('does not warn about the globals PICO-8 0.2.7 defines for every cart, documented or not', () => {
     deepStrictEqual(warnings(lines('t = {}', 'for i, v in inext, t do print(rawequal(v, t), ls()) end', 'reboot()', 'holdframe()')), []);
   });
