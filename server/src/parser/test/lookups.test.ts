@@ -413,6 +413,16 @@ describe('Go to Definition and Find References', () => {
     deepStrictEqual([ written.d(4, 6), written.d(4, 10) ], [[ 'main_test_file 1:0-1:3' ], [ 'main_test_file 1:8-1:13' ]]);
   });
 
+  it('takes a table assigned through a path from a name under a local _ENV for the global\'s, with self in its methods', () => {
+    const param = probe(analyzeCode(lines('function upd(_ENV)', '  cfg.pos = { f = function(self) return self.x end }', 'end', 'cfg.pos.x = 1',
+      'cfg.pos.f()')));
+    deepStrictEqual([ param.r(4, 8), param.d(5, 8), param.d(2, 40) ],
+      [[ 'main_test_file 2:45-2:46', 'main_test_file 4:8-4:9' ], [ 'main_test_file 2:14-2:15' ], [ 'main_test_file 2:6-2:9' ]]);
+    const local = probe(analyzeCode(lines('local _ENV = {}', 'cfg.pos = { f = function(self) return self.x end }', 'cfg.pos.x = 1', 'cfg.pos.f()')));
+    deepStrictEqual([ local.r(3, 8), local.d(4, 8), local.d(2, 38) ],
+      [[ 'main_test_file 2:43-2:44', 'main_test_file 3:8-3:9' ], [ 'main_test_file 2:12-2:13' ], [ 'main_test_file 2:4-2:7' ]]);
+  });
+
   it('goes from a use of a global also to an assignment of its name under a local _ENV', () => {
     const method = probe(analyzeCode(lines('function init(_ENV) function update() end end', 'function update() end', 'update()')));
     deepStrictEqual(method.d(3, 0), [ 'main_test_file 1:29-1:35', 'main_test_file 2:9-2:15' ]);

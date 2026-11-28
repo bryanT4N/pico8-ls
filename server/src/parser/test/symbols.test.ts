@@ -544,6 +544,11 @@ describe('outline', () => {
       assert.strictEqual(outlineOf(bare), outlineOf(explicit));
     });
 
+    it('lists an assignment through a path from a name under a local _ENV under the global of that name, which the path reads', () => {
+      assert.strictEqual(outlineOf(lines('player = {}', 'function upd(_ENV)', '  player.skipturn = true', '  function player.go() end', 'end')),
+        lines('player [Table]', '  skipturn [Field]', 'upd(_ENV) [Function]', '  player.go() [Method]'));
+    });
+
     it('does not see a local self inside its own initializer', () => {
       assert.strictEqual(outlineOf('T = {}\nfunction T:m()\n  local self = { cb = function() self.x = 1 end }\nend'),
         lines('T [Table]', '  m() [Method]', '    self [Table]', '      cb() [Method]', '  x [Field]'));
