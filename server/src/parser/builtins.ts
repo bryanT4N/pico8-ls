@@ -212,7 +212,11 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
       'return-value: An x,y tuple representing the previous camera offset.',
     ],
   },
-  ipairs: {},
+  ipairs: {
+    sig: 'ipairs( tbl )',
+    desc: 'Used in for loops to iterate over a table indexed starting from 1, providing both the index and value for each item, in order, up to the first nil value.',
+    params: [ 'tbl: The table.' ],
+  },
   clip: {
     sig: 'clip( x, y, w, h, [clip_previous] )',
     desc: 'Sets the clipping region in the draw state.',
@@ -493,7 +497,7 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
     ],
   },
   tline: {
-    sig: 'New in PICO-8 0.2.0.',
+    sig: 'tline( x0, y0, x1, y1, mx, my, [mdx, mdy,] [layers] )',
     desc: 'Draws a textured line between two points, sampling the map for texture data.',
     params: [
       'x0: The x coordinate of the start of the line.',
@@ -503,7 +507,8 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
       'mx: The x coordinate to begin sampling the map, expressed in (fractional) map tiles.',
       'my: The y coordinate to begin sampling the map, expressed in (fractional) map tiles.',
       'mdx: The amount to add to mx after each pixel is drawn, expressed in (fractional) map tiles. Default is 1/8 (move right one map pixel).',
-      'mdy: The amount to add to mx after each pixel is drawn, expressed in (fractional) map tiles. Default is 0 (a horizontal line).',
+      'mdy: The amount to add to my after each pixel is drawn, expressed in (fractional) map tiles. Default is 0 (a horizontal line).',
+      'layers: If specified, only sprites with matching sprite flags are drawn, as for map().',
     ],
   },
   bnot: {
@@ -558,7 +563,7 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
     params: [ 'val: The seed value.' ],
   },
   map: {
-    sig: 'map( celx, cely, sx, sy, celw, celh, [layer] )',
+    sig: 'map( celx, cely, [sx, sy,] [celw, celh,] [layer] )',
     desc: 'Draws a portion of the map to the graphics buffer.',
     params: [
       'celx: The column location of the map cell in the upper left corner of the region to draw, where 0 is the leftmost column.',
@@ -587,7 +592,7 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
     ],
   },
   music: {
-    sig: '',
+    sig: 'music( n, [fadems,] [channelmask] )',
     desc: 'Plays a music pattern, or stops playing.',
     params: [
       'n: The pattern number to start playing (0-63), or -1 to stop playing music.',
@@ -734,11 +739,12 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
     ],
   },
   chr: {
-    sig: 'New in PICO-8 0.2.0.',
-    desc: 'Gets the character(s) corresponding to an ordinal(s) (numeric) value.',
+    sig: 'chr( val0, [val1, ...] )',
+    desc: 'Converts one or more ordinal character codes to a string.',
     params: [
-      'ord [, ord1, ordn]: The ordinal value to be converted to a single-character string. Accepts an array of ordinals and will return a string of characters',
-      'return-value: A string consisting of a single character corresponding to the given ordinal number or a string of characters if an array was provided',
+      'val0: The ordinal character code (0..255) of the first character.',
+      'val1: The code of the next character, and so on for each further argument.',
+      'return-value: The string of those characters.',
     ],
   },
   rawset: {
@@ -938,7 +944,7 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
   },
 };
 // Add 'mapdraw' alias for older version of 'map' function
-Builtins.mapdraw = Builtins.map;
+Builtins.mapdraw = { ...Builtins.map, sig: 'mapdraw( celx, cely, [sx, sy,] [celw, celh,] [layer] )' };
 // Add ? as alias of print function
 Builtins['?'] = Builtins.print;
 
