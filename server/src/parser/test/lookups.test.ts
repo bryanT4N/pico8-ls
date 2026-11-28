@@ -455,6 +455,29 @@ describe('undefined variable warnings', () => {
     deepStrictEqual(warnings(lines('t = {}', 'print(t.k, nope)')), [ 'main_test_file 2:11 undefined variable: nope' ]);
   });
 
+  it('does not warn about the names read where a local, a parameter or a loop variable _ENV is visible', () => {
+    const codes = [
+      lines('ps = {}', 'for _ENV in all(ps) do circ(x, y) end'),
+      'function move(_ENV) x += dx end',
+      lines('function new() return {} end', 'function f()', '  local _ENV = new()', '  hp = max_hp', 'end'),
+      lines('function f(_ENV)', '  return function() x += dx end', 'end'),
+      'function move(_\u{1d626}\u{1d62f}\u{1d637}) x += dx end',
+    ];
+    for (const code of codes) {
+      deepStrictEqual(warnings(code), [], code);
+    }
+  });
+
+  it('reads the initializer of a local _ENV, the header of a for over _ENV and the code after the scope of an _ENV outside it', () => {
+    deepStrictEqual(warnings(lines('function f()', '  local _ENV = { hp = max_hp }', '  print(hp)', 'end', 'for _ENV in all(ps) do x = 1 end', 'print(x)')),
+      [ 'main_test_file 2:22 undefined variable: max_hp', 'main_test_file 5:16 undefined variable: ps', 'main_test_file 6:6 undefined variable: x' ]);
+  });
+
+  it('does not take an assignment where a local _ENV is visible for a definition of the global', () => {
+    deepStrictEqual(warnings(lines('function init(_ENV) score = 0 end', 'print(score)')), [ 'main_test_file 2:6 undefined variable: score' ]);
+    deepStrictEqual(warnings(lines('function init(_ENV) score = 0 end', 'score = 1', 'print(score)')), []);
+  });
+
   it('warns about rawequals and coyield, which PICO-8 does not have', () => {
     deepStrictEqual(warnings(lines('rawequals()', 'coyield()')),
       [ 'main_test_file 1:0 undefined variable: rawequals', 'main_test_file 2:0 undefined variable: coyield' ]);
