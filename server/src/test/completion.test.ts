@@ -255,6 +255,11 @@ describe('completionItems', () => {
       [ true, true, true, false, false, false ]);
   });
 
+  it('offers neither coyield nor, where nothing declares it, self', () => {
+    const offered = itemsAt('x = 1\n', 2, 0).map(i => i.label);
+    deepStrictEqual([ 'coyield', 'self' ].map(name => offered.includes(name)), [ false, false ]);
+  });
+
   it('replaces only the word being typed', () => {
     const items = itemsAt(lines('player = { hp = 1 }', 'function f()', '  player.h', 'end'), 3, 10);
     deepStrictEqual(items.find(i => i.label === 'hp')?.textEdit,

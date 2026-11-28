@@ -455,6 +455,11 @@ describe('undefined variable warnings', () => {
     deepStrictEqual(warnings(lines('t = {}', 'print(t.k, nope)')), [ 'main_test_file 2:11 undefined variable: nope' ]);
   });
 
+  it('warns about rawequals and coyield, which PICO-8 does not have', () => {
+    deepStrictEqual(warnings(lines('rawequals()', 'coyield()')),
+      [ 'main_test_file 1:0 undefined variable: rawequals', 'main_test_file 2:0 undefined variable: coyield' ]);
+  });
+
   it('does not warn about the globals PICO-8 0.2.7 defines for every cart, documented or not', () => {
     deepStrictEqual(warnings(lines('t = {}', 'for i, v in inext, t do print(rawequal(v, t), ls()) end', 'reboot()', 'holdframe()')), []);
   });
@@ -475,6 +480,10 @@ describe('isBuiltinName', () => {
 
   it('does not know rawequals, which PICO-8 does not define', () => {
     strictEqual(isBuiltinName('rawequals'), false);
+  });
+
+  it('does not know coyield or self, which PICO-8 0.2.7 does not define', () => {
+    deepStrictEqual([ 'coyield', 'self' ].map(name => isBuiltinName(name)), [ false, false ]);
   });
 
   it('does not take the properties every object has for builtins', () => {
