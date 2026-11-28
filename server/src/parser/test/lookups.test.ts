@@ -400,6 +400,11 @@ describe('Go to Definition and Find References', () => {
     deepStrictEqual([ builtin.r(1, 0), builtin.r(3, 2) ], [ uses, uses ]);
   });
 
+  it('goes from a global that only an assignment under a parameter _ENV defines to that assignment, not to where a path names it', () => {
+    const { d } = probe(analyzeCode(lines('function init(_ENV) cfg = {} end', 'cfg.speed = 1', 'print(cfg)')));
+    deepStrictEqual(d(3, 6), [ 'main_test_file 1:20-1:23' ]);
+  });
+
   it('follows a path from a name under a local _ENV through the global of that name', () => {
     const read = probe(analyzeCode(lines('cfg = { speed = 1 }', 'function f(_ENV)', '  print(cfg.speed)', 'end')));
     deepStrictEqual([ read.d(3, 12), read.r(1, 8) ], [[ 'main_test_file 1:8-1:13' ], [ 'main_test_file 1:8-1:13', 'main_test_file 3:12-3:17' ]]);
