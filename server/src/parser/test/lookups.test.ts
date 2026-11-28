@@ -441,12 +441,27 @@ describe('undefined variable warnings', () => {
     deepStrictEqual(warnings('print(constructor)\ncls()\nx = toString'),
       [ 'main_test_file 1:6 undefined variable: constructor', 'main_test_file 3:4 undefined variable: toString' ]);
   });
+
+  it('does not warn about the globals PICO-8 0.2.7 defines for every cart, documented or not', () => {
+    deepStrictEqual(warnings(lines('t = {}', 'for i, v in inext, t do print(rawequal(v, t), ls()) end', 'reboot()', 'holdframe()')), []);
+  });
 });
 
 describe('isBuiltinName', () => {
   it('knows the builtin functions and constants', () => {
     strictEqual(isBuiltinName('cls'), true);
     strictEqual(isBuiltinName('█'), true);
+  });
+
+  it('knows the documented globals of PICO-8 0.2.7, its console commands and its internal functions, and documents only the first', () => {
+    deepStrictEqual([ 'inext', 'rawequal', 'ls', 'reboot', 'holdframe', '_pausemenu' ].map(name => isBuiltinName(name)),
+      [ true, true, true, true, true, true ]);
+    ok([ 'inext', 'rawequal', 'ls' ].every(name => builtinInfo(name)?.sig && builtinInfo(name)?.params));
+    deepStrictEqual([ 'reboot', 'holdframe', '_pausemenu' ].map(name => builtinInfo(name)), [ undefined, undefined, undefined ]);
+  });
+
+  it('does not know rawequals, which PICO-8 does not define', () => {
+    strictEqual(isBuiltinName('rawequals'), false);
   });
 
   it('does not take the properties every object has for builtins', () => {

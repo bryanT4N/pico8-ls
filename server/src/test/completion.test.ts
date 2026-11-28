@@ -249,6 +249,12 @@ describe('completionItems', () => {
     deepStrictEqual(dotted.map(i => i.label).sort(), [ 'hop', 'x' ]);
   });
 
+  it('offers the documented globals of PICO-8 and not the others', () => {
+    const offered = itemsAt('x = 1\n', 2, 0).map(i => i.label);
+    deepStrictEqual([ 'inext', 'rawequal', 'ls', 'reboot', 'holdframe', 'rawequals' ].map(name => offered.includes(name)),
+      [ true, true, true, false, false, false ]);
+  });
+
   it('replaces only the word being typed', () => {
     const items = itemsAt(lines('player = { hp = 1 }', 'function f()', '  player.h', 'end'), 3, 10);
     deepStrictEqual(items.find(i => i.label === 'hp')?.textEdit,

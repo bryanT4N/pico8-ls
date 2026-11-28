@@ -215,6 +215,11 @@ describe('signatureHelpAt', () => {
     strictEqual(helpAt(lines('function print(s) end', 'print('))!.signatures[0].label, 'print(s)');
   });
 
+  it('gives the signatures of inext, rawequal and ls', () => {
+    deepStrictEqual([ 'inext(', 'rawequal(', 'ls(' ].map(call => helpAt(lines('x = 1', call))?.signatures[0].label),
+      [ 'inext( tbl, [i] )', 'rawequal( tbl1, tbl2 )', 'ls( [directory] )' ]);
+  });
+
   it('marks no builtin parameter inside a table, and the first inside a string being typed', () => {
     const spr = builtinInfo('spr')!;
     const inTable = helpAt('spr({1, ')!;
