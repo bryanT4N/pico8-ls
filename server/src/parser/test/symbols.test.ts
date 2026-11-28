@@ -544,6 +544,11 @@ describe('outline', () => {
       assert.strictEqual(outlineOf(bare), outlineOf(explicit));
     });
 
+    it('uses the innermost visible _ENV', () => {
+      assert.strictEqual(outlineOf(lines('local _ENV = {}', 'function f(_ENV)', '  x = 1', '  function g() end', 'end')),
+        lines('_ENV [Table]', '  f(_ENV) [Method]', '    _ENV.g() [Method]'));
+    });
+
     it('lists an assignment through a path from a name under a local _ENV under the global of that name, which the path reads', () => {
       assert.strictEqual(outlineOf(lines('player = {}', 'function upd(_ENV)', '  player.skipturn = true', '  function player.go() end', 'end')),
         lines('player [Table]', '  skipturn [Field]', 'upd(_ENV) [Function]', '  player.go() [Method]'));
