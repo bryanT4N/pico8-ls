@@ -15,9 +15,9 @@ This file lists the main changes in each version of PICO-8 Lua Language Server (
 ### Fixed
 
 - Names that PICO-8 0.2.7 defines for every cart, such as `inext`, `rawequal` and `ls`, are not reported as undefined variables.
-- Where `_ENV` is a local variable, a parameter or a loop variable, as in `for _ENV in all(objects)`, a name that no local declares gets no undefined-variable warning, and an assignment to it does not define a global.
+- Where `_ENV` is a local variable, a parameter or a loop variable, as in `for _ENV in all(objects)`, a name that no local declares gets no undefined-variable warning, and an assignment to it does not define a global. The outline lists such an assignment as `_ENV.name`.
 - Completion no longer offers `rawequals` and `coyield`, which PICO-8 does not have, and code that reads them gets an undefined-variable warning.
-- Hover and parameter hints show correct signatures for `music`, `tline`, `chr`, `ipairs`, `map` and `mapdraw`, and parameter hints cover `t`, `time`, `reset` and `info`.
+- Hover and parameter hints show correct signatures for `music`, `tline`, `chr`, `ipairs`, `map` and `mapdraw`, and parameter hints cover `t`, `time`, `reset` and `info`. The descriptions of `t` and `time` follow PICO-8's manual.
 
 ## 0.8.0
 
