@@ -9,7 +9,7 @@
 	],
 	"publisher": "bryanT4N",
 	"license": "MIT",
-	"version": "0.8.0",
+	"version": "0.8.1",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/bryanT4N/pico-8-ls"
