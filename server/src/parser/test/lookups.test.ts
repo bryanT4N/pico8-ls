@@ -449,6 +449,11 @@ describe('Go to Definition and Find References', () => {
     const a = analyzeCode('local a\nb = a');
     deepStrictEqual(referencesAtPos(a, 2, 4, undefined, false), [ 'main_test_file 2:4-2:5' ]);
   });
+
+  it('goes to the path entry of a member, not to its self assignment, outside any local _ENV', () => {
+    deepStrictEqual(probe(analyzeCode(lines('function T:init() self.k = 1 end', 'T.k.z = 1', 'print(T.k)'))).d(3, 8),
+      [ 'main_test_file 2:2-2:3' ]);
+  });
 });
 
 describe('undefined variable warnings', () => {
