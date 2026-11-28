@@ -105,6 +105,12 @@ describe('hoverMarkdown', () => {
     strictEqual(hoverAt('cls()', 1, 0), undefined);
   });
 
+  it('shows a name that no local declares under a local _ENV as the global of that name', () => {
+    strictEqual(hoverAt(lines('function helper(a) end', 'function upd(_ENV)', '  helper(1)', 'end'), 3, 2), block('function helper(a)'));
+    strictEqual(hoverAt(lines('function init(_ENV) x=0 dx=1 end', 'function move(_ENV)', '  x+=dx', 'end'), 3, 5), block('(global) dx = 1'));
+    strictEqual(hoverAt(lines('function upd(_ENV)', '  function hit(n) end', '  hit(1)', 'end'), 3, 2), block('function hit(n)'));
+  });
+
   it('shows the signatures of music and tline from PICO-8\'s manual', () => {
     const signatureOf = (name: string) => builtinMarkdown(name, builtinInfo(name)!).split('\n')[2];
     strictEqual(signatureOf('music'), '`music( n, [fadems,] [channelmask] )`');

@@ -255,6 +255,21 @@ describe('completionItems', () => {
       [ true, true, true, false, false, false ]);
   });
 
+  it('offers under a local _ENV the builtins and the globals as elsewhere', () => {
+    const code = lines('function helper(a) end', 'function move(_ENV)', '  circ(x, y)', '  helper(1)', '  ', 'end');
+    const items = itemsAt(code, 5, 2);
+    deepStrictEqual([ about(items, 'circ'), about(items, 'helper') ], [
+      { kind: CompletionItemKind.Function, detail: undefined, sortText: '2circ' },
+      { kind: CompletionItemKind.Function, detail: '(a)', sortText: '1helper' },
+    ]);
+    const offered: Offered = new Map();
+    const a = analyzeCode(code);
+    const helper = completionItems([ a.analysis ], testFile(), indexAt(a, 5, 2), completionRequestAt('  ', 2), 4, 2, offered)
+      .find(i => i.label === 'helper')!;
+    strictEqual(resolveUserItem(helper, offered), true);
+    strictEqual(helper.detail, 'function helper(a)');
+  });
+
   it('offers neither coyield nor, where nothing declares it, self', () => {
     const offered = itemsAt('x = 1\n', 2, 0).map(i => i.label);
     deepStrictEqual([ 'coyield', 'self' ].map(name => offered.includes(name)), [ false, false ]);

@@ -390,6 +390,34 @@ describe('Go to Definition and Find References', () => {
     deepStrictEqual(w(), []);
   });
 
+  it('takes a name that no local declares under a local _ENV for the global of that name', () => {
+    const call = probe(analyzeCode(lines('function helper(a) end', 'function upd(_ENV)', '  helper(1)', 'end')));
+    deepStrictEqual([ call.d(3, 2), call.r(1, 9) ], [[ 'main_test_file 1:9-1:15' ], [ 'main_test_file 1:9-1:15', 'main_test_file 3:2-3:8' ]]);
+    const shared = probe(analyzeCode(lines('function init(_ENV) x=0 dx=1 end', 'function move(_ENV)', '  x+=dx', 'end')));
+    deepStrictEqual([ shared.d(3, 5), shared.d(3, 2) ], [[ 'main_test_file 1:24-1:26' ], [ 'main_test_file 1:20-1:21' ]]);
+    const builtin = probe(analyzeCode(lines('circ(1, 2)', 'for _ENV in all(ps) do', '  circ(x, y)', 'end')));
+    const uses = [ 'main_test_file 1:0-1:4', 'main_test_file 3:2-3:6' ];
+    deepStrictEqual([ builtin.r(1, 0), builtin.r(3, 2) ], [ uses, uses ]);
+  });
+
+  it('follows a path from a name under a local _ENV through the global of that name', () => {
+    const read = probe(analyzeCode(lines('cfg = { speed = 1 }', 'function f(_ENV)', '  print(cfg.speed)', 'end')));
+    deepStrictEqual([ read.d(3, 12), read.r(1, 8) ], [[ 'main_test_file 1:8-1:13' ], [ 'main_test_file 1:8-1:13', 'main_test_file 3:12-3:17' ]]);
+    const written = probe(analyzeCode(lines('cfg = { speed = 1 }', 'local _ENV = setmetatable({}, { __index = _ENV })', 'cfg.speed = 2',
+      'print(cfg.speed)')));
+    deepStrictEqual([ written.d(4, 6), written.d(4, 10) ], [[ 'main_test_file 1:0-1:3' ], [ 'main_test_file 1:8-1:13' ]]);
+  });
+
+  it('takes self in a method of a table assigned to a name under a local _ENV for that global', () => {
+    const param = probe(analyzeCode(lines('function init(_ENV)', '  obj = { f = function(self) return self.x end }', 'end', 'obj.x = 1')));
+    deepStrictEqual([ param.d(2, 36), param.r(4, 4) ], [[ 'main_test_file 2:2-2:5' ], [ 'main_test_file 2:41-2:42', 'main_test_file 4:4-4:5' ]]);
+    const nested = probe(analyzeCode(lines('function init(_ENV)', '  obj = { inner = { g = function(self) return self.y end } }', 'end',
+      'obj.inner.y = 1')));
+    deepStrictEqual(nested.r(4, 10), [ 'main_test_file 2:51-2:52', 'main_test_file 4:10-4:11' ]);
+    const local = probe(analyzeCode(lines('local _ENV = {}', 'obj = { f = function(self) return self.x end }', 'obj.x = 1')));
+    deepStrictEqual([ local.d(2, 34), local.r(3, 4) ], [[ 'main_test_file 2:0-2:3' ], [ 'main_test_file 2:39-2:40', 'main_test_file 3:4-3:5' ]]);
+  });
+
   it('leaves the declaration out when asked', () => {
     const a = analyzeCode('local a\nb = a');
     deepStrictEqual(referencesAtPos(a, 2, 4, undefined, false), [ 'main_test_file 2:4-2:5' ]);

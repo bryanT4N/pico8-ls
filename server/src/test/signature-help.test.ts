@@ -215,6 +215,13 @@ describe('signatureHelpAt', () => {
     strictEqual(helpAt(lines('function print(s) end', 'print('))!.signatures[0].label, 'print(s)');
   });
 
+  it('takes a call under a local _ENV for a call of the global or the builtin of that name', () => {
+    const label = (code: string) => helpAt(code)?.signatures.map(signature => signature.label);
+    deepStrictEqual(label(lines('function helper(a) end', 'function upd(_ENV)', '  helper(')), [ 'helper(a)' ]);
+    deepStrictEqual(label(lines('function upd(_ENV)', '  function hit(n) end', '  hit(')), [ 'hit(n)' ]);
+    deepStrictEqual(label(lines('for _ENV in all(ps) do', '  circ(')), [ builtinInfo('circ')!.sig ]);
+  });
+
   it('gives the signatures of inext, rawequal and ls', () => {
     deepStrictEqual([ 'inext(', 'rawequal(', 'ls(' ].map(call => helpAt(lines('x = 1', call))?.signatures[0].label),
       [ 'inext( tbl, [i] )', 'rawequal( tbl1, tbl2 )', 'ls( [directory] )' ]);
