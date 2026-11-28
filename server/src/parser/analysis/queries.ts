@@ -56,6 +56,9 @@ export function targetsOf(symbol: LuaSymbol): Bounds[] {
   if (explicit.length > 0) {
     return explicit.map(entry => entry.selectionLoc);
   }
+  if (symbol.entries.length > 0 && !symbol.definitions.some(definition => definition.underLocalEnv)) {
+    return symbol.entries.map(entry => entry.selectionLoc);
+  }
   const firstPerFile = new Map<string, Bounds>();
   for (const definition of symbol.definitions) {
     const file = definition.nameLoc.start.filename.path;
