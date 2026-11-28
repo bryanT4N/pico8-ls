@@ -5,7 +5,7 @@ export type BuiltinFunctionInfo = {
   deprecated?: boolean,
 };
 
-// A list of all the built-in functions of PICO-8
+// The built-in functions of PICO-8 that completion offers, and their docs
 export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
   circ: {
     sig: 'circ( x, y, [r,] [col] )',
@@ -247,6 +247,11 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
     desc: 'A stateless iterator of key-value pairs for all elements in a table.',
     params: [ 'tbl: The table.', 'key: The current key.' ],
   },
+  inext: {
+    sig: 'inext( tbl, [i] )',
+    desc: 'A stateless iterator of index-value pairs for the elements of a sequence, to match next: for i,v in inext,tbl do ... end',
+    params: [ 'tbl: The table.', 'i: The current index.' ],
+  },
   band: {
     sig: 'band( first, second )',
     desc: 'Calculates the bitwise-and of two numbers.',
@@ -479,7 +484,14 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
       'third: The third number.',
     ],
   },
-  rawequals: {},
+  rawequal: {
+    sig: 'rawequal( tbl1, tbl2 )',
+    desc: 'Test whether two tables are equal, as if no metamethods were defined',
+    params: [
+      'tbl1: The first table.',
+      'tbl2: The second table.',
+    ],
+  },
   tline: {
     sig: 'New in PICO-8 0.2.0.',
     desc: 'Draws a textured line between two points, sampling the map for texture data.',
@@ -684,6 +696,14 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
       'filename: Either the name of the cartridge file, a BBS cart ID in the form "#mycartid123", or "@clip" to load a cartridge from the system clipboard copied from the BBS.',
       'breadcrumb: Adds an item to the pause menu to return to the original cart.',
       'param: An arbitrary string value that can be accessed by the loaded cart using stat(6).',
+    ],
+  },
+  ls: {
+    sig: 'ls( [directory] )',
+    desc: 'Lists the .p8 and .p8.png files in a directory, relative to the current directory. Items that are directories end in a slash (e.g. "foo/").',
+    params: [
+      'directory: The directory to list, which resolves only inside PICO-8\'s virtual drive. If omitted, the current directory.',
+      'return-value: When called from a running cartridge, a table of the results. It can only be used locally: from a BBS cart it returns nil.',
     ],
   },
   reload: {
@@ -955,9 +975,27 @@ export const BuiltinConstants: Set<string> = new Set<string>([
   '▥',
 ]);
 
+// The globals in a cart's _ENV when it starts, as PICO-8 0.2.7 lists them.
+const Pico8Globals: Set<string> = new Set<string>([
+  '__flip', '__trace', '__type', '_get_menu_item_selected', '_map_display', '_mark_cpu', '_menuitem', '_pausemenu',
+  '_set_fps', '_set_mainloop_exists', '_startframe', '_update_buttons', '_update_framerate', 'abs', 'add', 'all',
+  'assert', 'atan2', 'backup', 'band', 'bnot', 'bor', 'btn', 'btnp', 'bxor', 'camera', 'cartdata', 'cd', 'ceil', 'chr',
+  'circ', 'circfill', 'clip', 'cls', 'cocreate', 'color', 'coresume', 'cos', 'costatus', 'count', 'cstore', 'cursor',
+  'del', 'deli', 'dget', 'dir', 'dset', 'exit', 'export', 'extcmd', 'fget', 'fillp', 'flip', 'flr', 'folder', 'foreach',
+  'fset', 'getmetatable', 'help', 'holdframe', 'import', 'inext', 'info', 'install_demos', 'install_games', 'ipairs',
+  'keyconfig', 'line', 'load', 'login', 'ls', 'lshr', 'map', 'mapdraw', 'max', 'memcpy', 'memset', 'menuitem', 'mget',
+  'mid', 'min', 'mkdir', 'mset', 'music', 'next', 'ord', 'oval', 'ovalfill', 'pack', 'pairs', 'pal', 'palt', 'peek',
+  'peek2', 'peek4', 'pget', 'poke', 'poke2', 'poke4', 'print', 'printh', 'pset', 'rawequal', 'rawget', 'rawlen',
+  'rawset', 'reboot', 'rect', 'rectfill', 'reload', 'reset', 'rnd', 'rotl', 'rotr', 'rrect', 'rrectfill', 'run', 'save',
+  'scoresub', 'select', 'serial', 'set_draw_slice', 'setmetatable', 'sfx', 'sget', 'sgn', 'shl', 'shr', 'shutdown',
+  'sin', 'split', 'splore', 'spr', 'sqrt', 'srand', 'sset', 'sspr', 'stat', 'stop', 'sub', 't', 'time', 'tline',
+  'tonum', 'tostr', 'tostring', 'trace', 'type', 'unpack', 'yield', 'ˇ', '…', '∧', '⌂', '█', '░', '▒', '▤', '▥', '◆',
+  '●', '★', '☉', '♥', '♪', '✽', '❎', '➡️', '⧗', '⬅️', '⬆️', '⬇️', '웃', '🅾️', '🐱', '😐',
+]);
+
 // Builtins is a plain object, so `in` would also find names like constructor and toString.
 export function isBuiltinName(name: string): boolean {
-  return Object.prototype.hasOwnProperty.call(Builtins, name) || BuiltinConstants.has(name);
+  return Pico8Globals.has(name) || Object.prototype.hasOwnProperty.call(Builtins, name) || BuiltinConstants.has(name);
 }
 
 export function builtinInfo(name: string): BuiltinFunctionInfo | undefined {
