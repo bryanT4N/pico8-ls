@@ -71,7 +71,13 @@ export function referencesOf(symbol: LuaSymbol, includeDeclaration: boolean): Bo
   return uniqueInOrder(symbol.references.map(reference => reference.loc).filter(loc => !declarations.has(placeOf(loc))));
 }
 
+// Through its global table _ENV, code can define globals that no name in it shows, as _ENV[k] = v does, so a cart that
+// refers to that table gets no warnings at all.
 export function warningsOf(analysis: Analysis): Warning[] {
+  const env = analysis.globals.get('_ENV');
+  if (env && env.references.length > 0) {
+    return [];
+  }
   const warnings: Warning[] = [];
   for (const symbol of analysis.globals.values()) {
     if (symbol.definitions.length > 0 || isBuiltinName(symbol.name) || symbol.name === 'self') {
