@@ -37,10 +37,12 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
   reset: {
     sig: 'reset( )',
     desc: 'Reset the values in RAM from 0x5f00..0x5f7f to their default values. This includes the palette, camera position, clipping, and fill pattern.',
+    params: [],
   },
   info: {
     sig: 'info( )',
     desc: 'Print out some information about the cartridge, including code size, tokens, and compressed size.',
+    params: [],
   },
   ovalfill: {
     sig: 'ovalfill( x0, y0, x1, y1, [col] )',
@@ -867,11 +869,13 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
   },
   t: {
     sig: 't( )',
-    desc: 'Returns the amount of time since PICO-8 was last started, as a (fractional) number of seconds.',
+    desc: 'Returns the number of seconds since the cartridge was run. It counts the calls of _update or _update60, not real-world time, so calls in the same frame return the same result.',
+    params: [],
   },
   time: {
     sig: 'time( )',
-    desc: 'Returns the amount of time since PICO-8 was last started, as a (fractional) number of seconds.',
+    desc: 'Returns the number of seconds since the cartridge was run. It counts the calls of _update or _update60, not real-world time, so calls in the same frame return the same result.',
+    params: [],
   },
   extcmd: {
     sig: 'extcmd( cmd )',
