@@ -5,7 +5,7 @@ export type BuiltinFunctionInfo = {
   deprecated?: boolean,
 };
 
-// The built-in functions of PICO-8 that completion offers, and their docs
+// The built-in functions of PICO-8 that completion offers, and the docs of those that have them
 export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
   circ: {
     sig: 'circ( x, y, [r,] [col] )',
@@ -579,7 +579,6 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
       '...: Additional byte values to be written consecutively to memory.',
     ],
   },
-  self: {},
   cartdata: {
     sig: 'cartdata( id )',
     desc: 'Sets up cartridge data for the cart.',
@@ -596,7 +595,6 @@ export const Builtins: { [key: string]: BuiltinFunctionInfo } = {
       'channelmask: A bitfield indicating which of the four sound channels should be reserved for music. The default is 0 (no channels reserved).',
     ],
   },
-  coyield: {},
   costatus: {
     sig: 'costatus( cor )',
     desc: 'Tests a coroutine and returns a string representing its status.',
